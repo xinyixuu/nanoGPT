@@ -15,5 +15,7 @@ python3 extract_data.py "tiny_sherlock_whisper_snac_combined" "input.txt" --dire
 python3 prepare.py -t input.txt --tokens_file tokens.txt --method custom
 
 # running the training
+pushd ../../
 python3 run_experiments.py --config explorations/snac_text.json --output_dir out_test
+popd
 
