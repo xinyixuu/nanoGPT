@@ -19,6 +19,7 @@ for i in $(seq -f "%02g" 1 24); do
   for j in $(seq -f "%02g" 0 3); do
     wget -nc -O "${out_dir}/tiny_sherlock_audio_${i}_part0${j}.json" "${url}/resolve/main/tiny_sherlock_whisper_snac_combined/tiny_sherlock_audio_${i}_part0${j}.json?download=true" || {
       echo "File tiny_sherlock_audio_${i}_part0${j}.json not found, skipping."
+      rm -rf ${out_dir}/tiny_sherlock_audio_${i}_part0${j}.json
       continue
     }
   done
