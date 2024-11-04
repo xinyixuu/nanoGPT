@@ -17,7 +17,7 @@ fi
 
 for i in $(seq -f "%02g" 1 24); do
   for j in $(seq -f "%02g" 0 3); do
-    wget -nc "${url}/resolve/main/tiny_sherlock_whisper_snac_combined/tiny_sherlock_audio_${i}_part0${j}.json?download=true" || {
+    wget -nc -O "${out_dir}/tiny_sherlock_audio_${i}_part0${j}.json" "${url}/resolve/main/tiny_sherlock_whisper_snac_combined/tiny_sherlock_audio_${i}_part0${j}.json?download=true" || {
       echo "File tiny_sherlock_audio_${i}_part0${j}.json not found, skipping."
       continue
     }
@@ -34,4 +34,4 @@ python3 prepare.py -t input.txt --tokens_file tokens.txt --method custom
 pushd ../../
 python3 run_experiments.py --config explorations/snac_text.json --output_dir out_test
 popd
-
+:
