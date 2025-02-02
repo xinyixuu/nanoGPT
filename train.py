@@ -176,6 +176,9 @@ class Trainer:
             self.iter_num = 0 # for starting from scratch
             self.best_val_loss = 1e9 # really big number
 
+            self.optimizer = self.create_optimizer()
+            self.scheduler = self.create_scheduler()
+
         elif self.args.init_from in ['resume', "prev_run"] :
 
             if self.args.init_from == 'resume':
@@ -186,12 +189,6 @@ class Trainer:
                 ckpt_path = os.path.join(self.args.prev_run_ckpt, self.args.init_from_ckpt)
                 checkpoint = torch.load(ckpt_path, map_location=self.device)
                 self.iter_num = 0
-
-            # Load optimizer and scheduler
-            if "optimizer" in checkpoint:
-                self.optimizer.load_state_dict(checkpoint["optimizer"])
-            if "scheduler" in checkpoint:
-                self.scheduler.load_state_dict(checkpoint["scheduler"])
 
             # we should enforce that during resume training, the identical model args are used
             checkpoint_model_args = checkpoint['model_args']
@@ -216,6 +213,21 @@ class Trainer:
             if self.args.lsv_focused_training:
                 self.model.freeze_non_lsv_parameters()
 
+            # Ensure optimizer and scheduler are initialized before loading state
+            self.optimizer = self.create_optimizer()
+            self.scheduler = self.create_scheduler()
+
+            if "optimizer" in checkpoint and checkpoint["optimizer"] is not None:
+                self.optimizer.load_state_dict(checkpoint["optimizer"])
+            else:
+                print("Warning: No optimizer state found in checkpoint. Using newly initialized optimizer.")
+
+            if "scheduler" in checkpoint and checkpoint["scheduler"] is not None and self.scheduler is not None:
+                self.scheduler.load_state_dict(checkpoint["scheduler"])
+            else:
+                print("Warning: No scheduler state found in checkpoint or scheduler is None. Using newly initialized scheduler.")
+
+
         elif self.args.init_from.startswith('gpt2'):
 
             assert self.args.gpt2_type in model_variation_dictionary
@@ -235,9 +247,7 @@ class Trainer:
             if self.args.lsv_focused_training:
                 self.model.freeze_non_lsv_parameters()
 
-        if self.optimizer is None:
             self.optimizer = self.create_optimizer()
-        if self.scheduler is None:
             self.scheduler = self.create_scheduler()
 
         if self.args.block_size < self.model.config.block_size:
