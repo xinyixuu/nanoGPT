@@ -72,6 +72,10 @@ class Trainer:
             self.args.dataset = self.args.dataset_list[0]
             print(self.args.dataset)
 
+        # init optimizer and scheduler
+        self.optimizer = None
+        self.scheduler = None
+
         # Learning Rate Settings
         self.lr = self.args.learning_rate
         ## Make the decay iters equal to max_iters if not specified
@@ -172,10 +176,6 @@ class Trainer:
             self.iter_num = 0 # for starting from scratch
             self.best_val_loss = 1e9 # really big number
 
-            # Set optimizer and scheduler
-            self.optimizer = self.create_optimizer()
-            self.scheduler = self.create_scheduler()
-
         elif self.args.init_from in ['resume', "prev_run"] :
 
             if self.args.init_from == 'resume':
@@ -188,8 +188,9 @@ class Trainer:
                 self.iter_num = 0
 
             # Load optimizer and scheduler
-            self.optimizer.load_state_dict(checkpoint["optimizer"])
-            if "scheduler" in checkpoint and self.scheduler:
+            if "optimizer" in checkpoint:
+                self.optimizer.load_state_dict(checkpoint["optimizer"])
+            if "scheduler" in checkpoint:
                 self.scheduler.load_state_dict(checkpoint["scheduler"])
 
             # we should enforce that during resume training, the identical model args are used
@@ -233,6 +234,9 @@ class Trainer:
 
             if self.args.lsv_focused_training:
                 self.model.freeze_non_lsv_parameters()
+
+        self.optimizer = self.create_optimizer() if self.optimizer is not None
+        self.scheduler = self.create_scheduler() if self.scheduler is not None
 
         if self.args.block_size < self.model.config.block_size:
             self.model.crop_block_size(self.args.block_size)
