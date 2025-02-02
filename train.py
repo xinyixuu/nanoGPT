@@ -839,32 +839,6 @@ class Trainer:
                 "mfu": running_mfu*100,
             })
 
-    # def log_metrics_non_validation(self, loss_training, running_mfu, target_dataset=None):
-    #     if self.args.tensorboard_log:
-    #         if target_dataset:
-    #             self.writer.add_scalars(
-    #                 "loss", {f"{target_dataset}/train": loss_training}, self.iter_num
-    #             )
-    #         else:
-    #             self.writer.add_scalars(
-    #                 "loss", { "train": loss_training }, self.iter_num
-    #             )
-    #         self.writer.add_scalar("mfu_pct", running_mfu * 100, self.iter_num)
-    #         self.writer.add_scalar("lr", self.lr, self.iter_num)
-    #         self.writer.add_scalar("vram", self.vram_allocated, self.iter_num)
-    #         self.writer.add_scalar("batch_size", self.args.batch_size, self.iter_num)
-    #         self.writer.add_scalar("tokens_trained", self.tokens_trained, self.iter_num)
-    #         if self.args.gns_type is not None:
-    #             self.writer.add_scalar("gns", self.gns, self.iter_num)
-    #     if self.args.wandb_log and self.master_process:
-    #         import wandb
-    #         wandb.log({
-    #             "iter": self.iter_num,
-    #             "train/loss": loss_training,
-    #             "mfu": running_mfu*100,
-    #             "vram": self.vram_allocated,
-    #         })
-
     def save_checkpoint(self, filename):
         checkpoint = {
             'model': self.raw_model.state_dict(),
