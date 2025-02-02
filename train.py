@@ -708,6 +708,7 @@ class Trainer:
                         logits, loss = self.model(X, Y, iter_num=self.iter_num)
                     losses[k] = loss.item()
                 out[split] = losses.mean()
+                out[split + "_std"] = losses.std()
 
         self.model.train()
         return out
