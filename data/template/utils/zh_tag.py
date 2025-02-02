@@ -123,10 +123,10 @@ def transcribe_multilingual(data, output_file, json_storage=False, json_input_fi
                     flag_list.append(flags)
                     ipa_list.append(convert_zh_to_ipa(word))
                 
-                phoneics = " ".join(word_list)
+                phonetics = " ".join(word_list)
                 taggings = "_".join(flag_list)
-                ipas = "_".join(ipa_list)
-                f.write("phonetic dataset: " + phoneics + "\n")
+                ipas = " ".join(ipa_list)
+                f.write("phonetic dataset: " + phonetics + "\n")
                 f.write("part of speech: " + taggings + "\n")
                 f.write("ipa dataset: " + ipas + "\n")
                 f.write("sentence with spaces: " + seg_sentence + "\n")
