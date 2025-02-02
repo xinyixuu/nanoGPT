@@ -913,11 +913,11 @@ class Trainer:
                     if self.args.dataset_list is not None:
                         # Print loss for each dataset if multiple datasets are used
                         for dataset, dataset_losses in losses['datasets'].items():
-                            print(f"step {self.iter_num}: {dataset:<20s} train loss {dataset_losses['train']:.4f}, train_std {dataset_losses['train_std']:.4f}, val loss {dataset_losses['val']:.4f}, val_std {dataset_losses['val_std']:.4f}, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr:.4f}, tokens_trained tokens {self.tokens_trained_dict[dataset]:.2e}")
+                            print(f"step {self.iter_num}: {dataset:<20s} train loss {dataset_losses['train']:.4f}, train_stdev {dataset_losses['train_std']:.4f}, val loss {dataset_losses['val']:.4f}, val_stdev {dataset_losses['val_std']:.4f}, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr:.4f}, tokens_trained tokens {self.tokens_trained_dict[dataset]:.2e}")
                             self.log_metrics(dataset_losses, running_mfu, self.epochs_trained_dict[dataset], self.tokens_trained_dict[dataset], dataset)
                     else:
                         # Default behavior for a single dataset
-                        print(f"step {self.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {self.lr:.4f}")
+                        print(f"step {self.iter_num}: train loss {losses['train']:.4f}, train_stdev {losses['train_std']:.4f}, val loss {losses['val']:.4f}, val_stdev {losses['val_std']:.4f}, lr {self.lr:.4f}")
                         self.log_metrics(losses, current_epoch, running_mfu, self.tokens_trained, current_dataset)
 
                     if math.isnan(losses["val"]):
