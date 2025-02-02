@@ -235,8 +235,10 @@ class Trainer:
             if self.args.lsv_focused_training:
                 self.model.freeze_non_lsv_parameters()
 
-        self.optimizer = self.create_optimizer() if self.optimizer is not None
-        self.scheduler = self.create_scheduler() if self.scheduler is not None
+        if self.optimizer is None:
+            self.optimizer = self.create_optimizer()
+        if self.scheduler is None:
+            self.scheduler = self.create_scheduler()
 
         if self.args.block_size < self.model.config.block_size:
             self.model.crop_block_size(self.args.block_size)
@@ -842,7 +844,7 @@ class Trainer:
     def save_checkpoint(self, filename):
         checkpoint = {
             'model': self.raw_model.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
+            'optimizer': self.optimizer.state_dict() if self.optimizer else None,
             'scheduler': self.scheduler.state_dict() if self.scheduler else None,
             'model_args': self.model_args,
             'iter_num': self.iter_num,
