@@ -269,6 +269,17 @@ def parse_args():
     ## LearnedSplineActivation - lsa
     model_group.add_argument("--lsa_num_knots", type=int, default=30)
 
+
+    # Attention Variations
+    model_group.add_argument(
+        "--attention_variant",
+        type=str,
+        default="causal",
+        choices=["causal"],
+        help="Which attention variant to use for the Transformer blocks."
+    )
+
+
     # LINEAR VARIATIONS
     linear_variants = ["linear", "bitlinear", "bitlinear_1p58", "bitlinear_optimized", "kan","quantized_linear"]
     model_group.add_argument("--linear_variant_attn", type=str, default="linear", choices=linear_variants)

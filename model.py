@@ -83,12 +83,6 @@ def create_shared_param_group(layer_type, config):
     shared_group = []
     layer_block = None
 
-    # For demonstration: we might have a config.attention_variants list
-    # that has multiple keys, e.g. ["causal","fancy"] or just ["causal"] repeated.
-    # We'll pick the attention class in a round-robin fashion as an example.
-    # (Adjust to your own logic if you want different mixing.)
-    attn_variants = getattr(config, "attention_variants", ["causal"])  # fallback if not present
-
     for i in range(config.n_layer):
 
         # Create a new layer block every "shared_size"
@@ -101,11 +95,7 @@ def create_shared_param_group(layer_type, config):
                     layer_block = get_mlp_instance(config)
 
             elif layer_type == "attn":
-                # Example: select the i-th attention variant in a round-robin style
-                attn_type_index = i % len(attn_variants)
-                attn_type_name = attn_variants[attn_type_index]
-                # Look up the attention class from a dictionary
-                attn_cls = attention_dictionary[attn_type_name]
+                attn_cls = attention_dictionary[config.attention_variant]
 
                 # Instantiate an attention layer
                 layer_block = attn_cls(config, fire_pos_enc=fire_pos_enc)
@@ -150,7 +140,7 @@ class Block(nn.Module):
 
         # Allow for sharing attn between blocks
         if attn is None:
-            self.attn = CausalSelfAttention(config)
+            self.attn = attention_dictionary[config.attention_variant](config)
         else:
             self.attn = attn
 
