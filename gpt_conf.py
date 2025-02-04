@@ -143,6 +143,7 @@ class GPTConfig:
 
     strongermax_obo: float = 0.0
     strongermax_use_learned_obo: bool = False
+    strongermax_use_learned_obo_per_head: bool = False
 
     strongermax_temperature_factor: float = 1.0
     strongermax_use_learned_temperature_factor: bool = False

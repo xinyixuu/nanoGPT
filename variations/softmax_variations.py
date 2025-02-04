@@ -187,6 +187,7 @@ class Strongermax(nn.Module):
     def __init__(self, config, dim=-1):
         super().__init__()
         self.dim = dim
+        self.n_head = config.n_head
 
         # Strongermax Params
         self.strength = config.strongermax_strength
@@ -208,7 +209,6 @@ class Strongermax(nn.Module):
 
         # Set optional temperature (already divided by sqrt head dimension)
         self.use_learned_temperature_factor = config.strongermax_use_learned_temperature_factor
-
         if self.use_learned_temperature_factor:
             self.temperature_factor = nn.Parameter(torch.Tensor([config.strongermax_temperature_factor]))
         else:
@@ -218,7 +218,7 @@ class Strongermax(nn.Module):
         self.iter_num = 0
 
         if self.overflow_recompute:
-            assert self.xmax_guess is not None, "for overflow recompute, xmax_guess must be set"
+            assert self.xmax_guess is not None, "For overflow recompute, xmax_guess must be set"
 
         # Input and Output Logging
         self.softmax_io_logging = config.softmax_io_logging
@@ -228,10 +228,15 @@ class Strongermax(nn.Module):
 
         # self.obo_offset default is 0.0, https://www.evanmiller.org/attention-is-off-by-one.html
         self.use_learned_obo = config.strongermax_use_learned_obo
-        if self.use_learned_obo:
-            self.obo_offset = nn.Parameter(torch.Tensor([config.strongermax_obo]))
+        self.use_learned_obo_per_head = config.strongermax_use_learned_obo_per_head
+
+        if self.use_learned_obo_per_head:
+            self.obo_offset = nn.Parameter(torch.ones(self.n_head, 1, 1) * config.strongermax_obo)
         else:
-            self.obo_offset = config.strongermax_obo
+            if self.use_learned_obo:
+                self.obo_offset = nn.Parameter(torch.Tensor([config.strongermax_obo]))
+            else:
+                self.obo_offset = config.strongermax_obo
 
     def forward(self, x):
         x_adj = x
@@ -243,7 +248,6 @@ class Strongermax(nn.Module):
             # Guessing correctly instead of subtracting real max can save a pass
             # else we use real xmax
             max_x = x_adj.max(dim=self.dim, keepdim=True).values
-
             if self.overflow_recompute:
                 if (torch.max(x_adj - self.xmax_guess)) > self.overflow_recompute_value:
                     x_adj = x_adj - max_x
