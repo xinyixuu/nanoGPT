@@ -422,6 +422,7 @@ def parse_args():
     ### From https://www.evanmiller.org/attention-is-off-by-one.html
     model_group.add_argument('--strongermax_obo', type=float, default=0.0)
     model_group.add_argument('--strongermax_use_learned_obo', default=False, action=argparse.BooleanOptionalAction)
+    model_group.add_argument('--strongermax_use_learned_obo_per_head', default=False, action=argparse.BooleanOptionalAction)
 
     ### Temperature adjustment factor
     model_group.add_argument('--strongermax_temperature_factor', type=float, default=1.0)
