@@ -27,6 +27,7 @@ from gpt_conf import GPTConfig
 import torch.utils.checkpoint as checkpoint
 
 # Variations
+from variations.attention_variations import attention_dictionary
 from variations.mlp_variations import get_mlp_instance
 from variations.moe_variations import MoELayer
 from variations.lsv_variations import lsv_dictionary
@@ -40,14 +41,31 @@ from quantization.quantize import quantize_dictionary, dequantize, fake_quantize
 from quantization.quant_utils import set_variant, create_activation_buffers
 
 def create_shared_param_group(layer_type, config):
+    """
+    Creates a shared list of layer blocks (either MLP or Attn), optionally reusing blocks
+    every 'shared_size' layers, and optionally reflecting them symmetrically if
+    'shared_sym' is True. Also can handle multiple attention variants in one model.
 
-    # explore MoE layers being reflected symmetrically
+    Args:
+        layer_type (str): "mlp" or "attn"
+        config: a config object containing fields like:
+            - n_layer (int): number of layers total
+            - use_moe (bool): if True, some MLP layers replaced by MoE
+            - moe_layer_freq (int): frequency of MoE layers
+            - shared_mlp_size, shared_attn_size (int)
+            - shared_mlp_sym, shared_attn_sym (bool)
+            - shared_fire_embeddings (bool)
+            - attention_variants (list of str): e.g. ["causal", "fancy"] ...
+              if you want multiple attention types
+            - n_head, ...
+        Returns:
+            list of layer_blocks
+    """
 
-    shared_size = None
-    shared_sym = None # if true, output array is symmetrical
-    layer_block = None
-    shared_group = []
+    # If you use FIRE for position embeddings in the attention layer:
+    from variations.position_encoding_variations import FIRE
 
+    # Determine if we are building MLP or attn blocks
     if layer_type == "mlp":
         shared_size = config.shared_mlp_size
         shared_sym = config.shared_mlp_sym
@@ -57,365 +75,54 @@ def create_shared_param_group(layer_type, config):
     else:
         sys.exit(f"{layer_type} not supported, exiting")
 
-    # if attn layer check if using shared fire embeddings
+    # If attn layer, optionally build a single FIRE module to share
     fire_pos_enc = None
     if layer_type == "attn" and config.shared_fire_embeddings:
         fire_pos_enc = FIRE(config, num_heads=config.n_head)
 
-    for i in range (config.n_layer):
+    shared_group = []
+    layer_block = None
 
-        # Create new layer block every "shared_size"
+    for i in range(config.n_layer):
+
+        # Create a new layer block every "shared_size"
         if i % shared_size == 0:
             if layer_type == "mlp":
+                # Possibly handle MoE
                 if config.use_moe and i % config.moe_layer_freq == 0:
-                    # this iter is an moe layer iter
                     layer_block = MoELayer(config)
                 else:
                     layer_block = get_mlp_instance(config)
+
             elif layer_type == "attn":
-                layer_block = CausalSelfAttention(config, fire_pos_enc=fire_pos_enc)
+                attn_cls = attention_dictionary[config.attention_variant]
+
+                # Instantiate an attention layer
+                layer_block = attn_cls(config, fire_pos_enc=fire_pos_enc)
             else:
                 sys.exit(f"{layer_type} not supported, exiting")
 
-        # Add layer block
+        # Add this (possibly reused) block to the list
         shared_group.append(layer_block)
 
-        # If symmetrical and halfway, then mirror extend and exit
+        # If symmetrical sharing is requested
         if shared_sym:
-            # Even
+            # Even number of layers
             if config.n_layer % 2 == 0:
+                # Once we reach halfway-1, we append the blocks in reverse
                 if i == (config.n_layer // 2 - 1):
-                    # Append going backwards
-                    for j in range(i+1):
+                    for j in range(i + 1):
                         shared_group.append(shared_group[i - j])
                     return shared_group
-            # Odd
             else:
+                # Odd number of layers
                 if i == (config.n_layer // 2):
-                    # Append going backwards
                     for j in range(i):
                         shared_group.append(shared_group[i - j])
                     return shared_group
+
     return shared_group
 
-class CausalSelfAttention(nn.Module):
-    def __init__(self, config, fire_pos_enc=None):
-        super().__init__()
-
-        self.full_quant_iteration = config.full_quant_iteration
-        self.eval_interval = config.eval_interval
-        self.start_quant_level = config.start_quant_level
-        self.quant_scheduler = config.quant_scheduler
-
-        if (config.n_kv_group == None):
-            config.n_kv_group = config.n_head
-        else:
-            assert config.n_embd % config.n_kv_group == 0
-
-        self.quantization_attn_dict = {}
-        self.quantization_attn_dict["activations_quant_method"] = config.activations_quant_method
-        for arg, val in vars(config).items():
-            # Set each attention Activation precision and method
-            if arg.startswith("quantize_") and "attn_act" in arg and arg.endswith("_bits"):
-                self.quantization_attn_dict[arg] = set_variant(val, config.quantize_attn_act_bits)
-            elif arg.startswith("quantize_") and "attn_act" in arg:
-                self.quantization_attn_dict[arg] = set_variant(val, config.quantize_attn_act)
-                if config.store_activations and arg != "quantize_attn_act" and self.quantization_attn_dict[arg]:
-                    create_activation_buffers(self, arg)
-            # Set each attention Linear precision and method
-            elif arg.startswith("quantize_") and "linear_attn" in arg and arg.endswith("_bits"):
-                self.quantization_attn_dict[arg] = set_variant(val, config.quantize_linear_bits)
-            elif arg.startswith("quantize_") and "linear_attn" in arg and arg.endswith("_method"):
-                self.quantization_attn_dict[arg] = set_variant(val, config.quantize_linear_method)
-
-        self.linear_variant_q = linear_dictionary[set_variant(config.linear_variant_q, config.linear_variant_attn)]
-        self.linear_variant_k = linear_dictionary[set_variant(config.linear_variant_k, config.linear_variant_attn)]
-        self.linear_variant_v = linear_dictionary[set_variant(config.linear_variant_v, config.linear_variant_attn)]
-        self.linear_variant_attn_proj = linear_dictionary[set_variant(config.linear_variant_attn_proj, config.linear_variant_attn)]
-
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn_q = self.linear_variant_q(config.n_embd, config.n_embd, config, self.quantization_attn_dict["quantize_linear_attn_q_method"], self.quantization_attn_dict["quantize_linear_attn_q_bits"], bias=config.bias)
-
-        self.n_head = config.n_head
-        if config.n_kv_group == None:
-            self.n_kv_group = config.n_head
-        else:
-            assert config.n_head % config.n_kv_group == 0
-            self.n_kv_group = config.n_kv_group
-
-        self.kv_dim = (config.n_embd // config.n_head) * self.n_kv_group
-        self.c_attn_k = self.linear_variant_k(config.n_embd, self.kv_dim, config, self.quantization_attn_dict["quantize_linear_attn_k_method"], self.quantization_attn_dict["quantize_linear_attn_k_bits"], bias=config.bias)
-        self.c_attn_v = self.linear_variant_v(config.n_embd, self.kv_dim, config, self.quantization_attn_dict["quantize_linear_attn_v_method"], self.quantization_attn_dict["quantize_linear_attn_v_bits"], bias=config.bias)
-        self.c_proj = self.linear_variant_attn_proj(config.n_embd, config.n_embd, config, self.quantization_attn_dict["quantize_linear_attn_proj_method"], self.quantization_attn_dict["quantize_linear_attn_proj_bits"], bias=config.bias)
-
-        # Regularization
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
-        self.dropout = config.dropout
-
-        # Embedding
-        self.n_embd = config.n_embd
-        self.dropout = config.dropout
-        self.n_embd = config.n_embd
-        self.gate = config.gate
-        self.use_fire_embeddings = None
-        self.disable_flash_attention = config.disable_flash_attention
-        if config.use_fire_embeddings:
-            self.use_fire_embeddings = config.use_fire_embeddings
-            if fire_pos_enc is not None:
-                self.fire_pos_enc = fire_pos_enc
-                print("shared fire")
-            else:
-                self.fire_pos_enc = FIRE(config, num_heads=config.n_head)
-                print("indiv fire")
-
-        # Rotary Positional Embeddings
-        self.rotary_emb_q = None
-        self.rotary_emb_k = None
-        if config.use_rotary_embeddings:
-            # Note: size is the size of the head dimension
-            if config.rope_variant == "soap":
-                self.sym_rot_num_angles = config.sym_rot_num_angles
-                self.rotary_emb_q = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
-                self.rotary_emb_k = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
-            elif config.rope_variant == "rope":
-                self.rotary_emb_q = RotaryEmbedding(config, size=config.n_embd // self.n_head)
-                self.rotary_emb_k = RotaryEmbedding(config, size=config.n_embd // self.n_head)
-
-        # Sliding window size
-        self.window_size = config.window_size
-        print(f"sliding window size: {self.window_size}")
-
-        # Using flex attention
-        self.use_flex_attn = config.use_flex_attn
-
-        # Gating
-        self.gate = config.gate
-
-        # Fire Embeddings
-        self.use_fire_embeddings = None
-        if config.use_fire_embeddings:
-            self.use_fire_embeddings = config.use_fire_embeddings
-            if fire_pos_enc is not None:
-                self.fire_pos_enc = fire_pos_enc
-                print("shared fire")
-            else:
-                self.fire_pos_enc = FIRE(config, num_heads=config.n_head)
-                print("indiv fire")
-
-        # Rotary Positional Embeddings
-        self.rotary_emb_q = None
-        self.rotary_emb_k = None
-        if config.use_rotary_embeddings:
-            # Note: size is the size of the head dimension
-            if config.rope_variant == "soap":
-                self.sym_rot_num_angles = config.sym_rot_num_angles
-                self.rotary_emb_q = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
-                self.rotary_emb_k = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
-            elif config.rope_variant == "rope":
-                self.rotary_emb_q = RotaryEmbedding(config, size=config.n_embd // self.n_head)
-                self.rotary_emb_k = RotaryEmbedding(config, size=config.n_embd // self.n_head)
-
-
-        self.flash = True
-        if self.window_size is not None:
-            # TODO: look into supporting sliding window attn for flash attn
-            self.flash = False
-            print("flash attention removed due to windowed attention")
-
-        if self.n_kv_group != self.n_head:
-            self.flash = False
-            print("flash attention removed due to GQA")
-
-        if self.use_fire_embeddings:
-            self.flash = False
-            print("flash attention removed due to FIRE")
-
-        # Can't use flash attention if we want to manually quantize most input/output activations in attn
-        for key, val in self.quantization_attn_dict.items():
-            if key.startswith("quantize_") and val == True:
-                self.flash = False
-                print("flash attention removed due to Quantization")
-                break
-
-        if self.disable_flash_attention:
-            self.flash = False
-
-        # Softmax Variant Selection
-        self.softmax_variant_attn = config.softmax_variant_attn
-        if self.softmax_variant_attn == "softmax":
-            # Enable flash attention, which is compatible with 'softmax'
-            if self.disable_flash_attention or self.flash == False:
-                print("setting non-flash softmax attn")
-            else:
-                self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-                print("setting flash attn")
-        else:
-            # Remove flash attention (only compatible with 'softmax')
-            print("flash attention removed due to softmax alternative")
-            self.flash = False
-            # Set softmax_layer_attn to custom softmax alternative
-            self.softmax_layer_attn = softmax_dictionary[config.softmax_variant_attn](config)
-
-        if (not self.flash) and (not self.use_flex_attn):
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        .view(1, 1, config.block_size, config.block_size))
-
-    # Flex Attention Related
-    def sliding_window_causal(self, b, h, q_idx, kv_idx):
-        causal_mask = q_idx >= kv_idx
-        window_mask = q_idx - kv_idx <= self.window_size
-        return causal_mask & window_mask
-
-    def get_block_mask(self, T, device):
-        if T not in self.block_masks:
-            block_mask = create_block_mask(
-                    self.sliding_window_causal,
-                    B=None,
-                    H=None,
-                    Q_LEN=T,
-                    KV_LEN=T,
-                    device=device
-                    )
-            self.block_masks[T] = block_mask
-        else:
-            block_mask = self.block_masks[T]
-        return block_mask
-    # End Flex Attention Related
-
-    def forward(self, x, iter_num):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
-
-        if self.quantization_attn_dict["quantize_attn_act_input"]:
-            num_bits = self.quantization_attn_dict["quantize_attn_act_input_bits"]
-            quant_method = self.quantization_attn_dict["activations_quant_method"]
-            x = fake_quantize_act(self, "attn_act_input", x, num_bits, quant_method, iter_num)
-
-        q = self.c_attn_q(x)
-        k = self.c_attn_k(x)
-        v = self.c_attn_v(x)
-
-        if self.window_size is not None:
-            if self.use_flex_attn is not None:
-                self.block_masks = {}
-            else:
-                self.window_mask = torch.ones((1, 1, T, T), device=x.device)
-                self.window_mask = torch.triu(self.window_mask, diagonal=-self.window_size)
-                self.window_mask = self.bias[:,:,:T,:T] * self.window_mask
-
-        if self.gate:
-            if self.n_kv_group == self.n_head:
-                Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                gate_ = torch.sigmoid(Gating(x))
-                q = q * gate_
-                k = k * gate_
-                v = v * gate_
-            else:
-                # TODO: Test more methods to merge Attention Gates with GQA
-                # TODO: Evaluate each method's ability to even out parameter sizes
-                Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
-                gate_qx = Gating_q(x)
-                gate_q = torch.sigmoid(gate_qx)
-                gate_kv = torch.sigmoid(Gating_kv(gate_qx))
-                q = q * gate_q
-                k = k * gate_kv
-                v = v * gate_kv
-
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, n_h, T, hs)
-        k = k.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
-        v = v.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
-
-        # rotate q and k before evaluating with the heads
-        if (self.rotary_emb_q is not None) and (self.rotary_emb_k is not None):
-            q = self.rotary_emb_q(q)
-            k = self.rotary_emb_k(k)
-
-        y = None
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
-        elif self.use_flex_attn and self.window_size is not None:
-            block_mask = self.get_block_mask(T, x.device)
-            y = torch.nn.attention.flex_attention.flex_attention(q, k, v, block_mask=block_mask)
-        else:
-            if self.quantization_attn_dict["quantize_attn_act_qk_mult_q_input"]:
-                num_bits = self.quantization_attn_dict["quantize_attn_act_qk_mult_q_input_bits"]
-                quant_method = self.quantization_attn_dict["activations_quant_method"]
-                q = fake_quantize_act(self, "attn_act_qk_mult_q_input", q, num_bits, quant_method, iter_num)
-            if self.quantization_attn_dict["quantize_attn_act_qk_mult_k_input"]:
-                num_bits = self.quantization_attn_dict["quantize_attn_act_qk_mult_k_input_bits"]
-                quant_method = self.quantization_attn_dict["activations_quant_method"]
-                k = fake_quantize_act(self, "attn_act_qk_mult_k_input", k, num_bits, quant_method, iter_num)
-
-            att = None
-            # manual implementation of attention
-            if self.n_head != self.n_kv_group:
-                k_repeated = k.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
-                att = (q @ k_repeated.transpose(-2, -1)) / math.sqrt(k.size(-1))
-            else:
-                att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-
-            # apply masks
-            if self.window_size is not None:
-                # add mask for sliding window attention
-                att = att.masked_fill(self.window_mask == 0, float('-inf'))
-            else:
-                # regular lower triangle attention
-                att = att.masked_fill(self.bias[:,:,:T,:T].to(x.device) == 0, float('-inf'))
-
-            # fire position embeddings
-            if self.use_fire_embeddings is not None:
-                # add learned fire bias
-                att = att + self.fire_pos_enc(x)
-
-            if self.quantization_attn_dict["quantize_attn_act_softmax_input"]:
-                num_bits = self.quantization_attn_dict["quantize_attn_act_softmax_input_bits"]
-                quant_method = self.quantization_attn_dict["activations_quant_method"]
-                att = fake_quantize_act(self, "attn_act_softmax_input", att, num_bits, quant_method, iter_num, causal_mask=True)
-
-            # softmax variation
-            if self.softmax_variant_attn != 'softmax':
-                att = self.softmax_layer_attn(att)
-            else:
-                att = F.softmax(att, dim=-1)
-
-            att = self.attn_dropout(att)
-
-            if self.quantization_attn_dict["quantize_attn_act_pv_mult_p_input"]:
-                num_bits = self.quantization_attn_dict["quantize_attn_act_pv_mult_p_input_bits"]
-                quant_method = self.quantization_attn_dict["activations_quant_method"]
-                att = fake_quantize_act(self, "attn_act_pv_mult_p_input", att, num_bits, quant_method, iter_num)
-            if self.quantization_attn_dict["quantize_attn_act_pv_mult_v_input"]:
-                num_bits = self.quantization_attn_dict["quantize_attn_act_pv_mult_v_input_bits"]
-                quant_method = self.quantization_attn_dict["activations_quant_method"]
-                v = fake_quantize_act(self, "attn_act_pv_mult_v_input", v, num_bits, quant_method, iter_num)
-
-            if self.n_head != self.n_kv_group:
-                v_repeated = v.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
-                y = att @ v_repeated # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-            else:
-                y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-
-        if self.quantization_attn_dict["quantize_attn_act_pv_mult_output"]:
-            num_bits = self.quantization_attn_dict["quantize_attn_act_pv_mult_output_bits"]
-            quant_method = self.quantization_attn_dict["activations_quant_method"]
-            y = fake_quantize_act(self, "attn_act_pv_mult_output", y, num_bits, quant_method, iter_num)
-
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
-
-        # output projection
-        y = self.resid_dropout(self.c_proj(y))
-
-        if self.quantization_attn_dict["quantize_attn_act_output"]:
-            num_bits = self.quantization_attn_dict["quantize_attn_act_output_bits"]
-            quant_method = self.quantization_attn_dict["activations_quant_method"]
-            y = fake_quantize_act(self, "attn_act_output", y, num_bits, quant_method, iter_num)
-
-        return y
 
 class Block(nn.Module):
     def __init__(self, config, mlp=None, attn=None):
@@ -433,7 +140,7 @@ class Block(nn.Module):
 
         # Allow for sharing attn between blocks
         if attn is None:
-            self.attn = CausalSelfAttention(config)
+            self.attn = attention_dictionary[config.attention_variant](config)
         else:
             self.attn = attn
 

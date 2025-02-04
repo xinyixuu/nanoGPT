@@ -70,6 +70,9 @@ class GPTConfig:
     ## Flash attention
     disable_flash_attention: bool = False
 
+    # Attention Options
+    attention_variant: str = "causal"
+
     # MLP Options
     use_parallel_mlp: bool = False
     mlp_variant: str = "mlp"
