@@ -3,6 +3,7 @@ import argparse
 import json
 import sys
 from collections import OrderedDict
+from typing import Tuple, Optional
 
 from tqdm import tqdm
 import pykakasi.kakasi as kakasi
@@ -19,7 +20,6 @@ try:
     SPACY_AVAILABLE = True
 except ImportError:
     SPACY_AVAILABLE = False
-
 
 # ========== Kakasi Converter Setup ==========
 kks = kakasi()
@@ -332,23 +332,22 @@ kana_mapper = OrderedDict([
 nasal_sound = OrderedDict([
     # before m, p, b
     ("ɴm","mm"),
-    ("ɴb", "mb"),
-    ("ɴp", "mp"),
-    
+    ("ɴb","mb"),
+    ("ɴp","mp"),
+
     # before k, g
     ("ɴk","ŋk"),
-    ("ɴg", "ŋg"),
-    
+    ("ɴg","ŋg"),
+
     # before t, d, n, s, z, ɽ
     ("ɴt","nt"),
-    ("ɴd", "nd"),
+    ("ɴd","nd"),
     ("ɴn","nn"),
-    ("ɴs", "ns"),
+    ("ɴs","ns"),
     ("ɴz","nz"),
-    ("ɴɽ", "nɽ"),
-    
-    ("ɴɲ", "ɲɲ"),
-    
+    ("ɴɽ","nɽ"),
+
+    ("ɴɲ","ɲɲ"),
 ])
 
 # ========== Basic Conversions ==========
@@ -366,51 +365,58 @@ def hiragana_to_ipa(text: str) -> str:
 
 
 # ========== 2) MeCab Morphological Tokenization ==========
-def mecab_spaced_reading(text: str) -> str:
+
+def mecab_spaced_reading(text: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Use MeCab for morphological analysis and produce a spaced reading.
-    Special override: if token is particle (助詞) and surface == "は",
-    we treat it as "わ" so final IPA becomes "wa" instead of "ha."
+    Use MeCab for morphological analysis. Return two strings:
+      1) spaced_original: original surface forms joined by spaces (no "は"→"わ" override)
+      2) spaced_hira: same morphological tokenization, but if token is 'は' particle => 'わ',
+         then convert the entire spaced string to hiragana.
+         (We do the "は"→"わ" override *before* converting to hiragana.)
+    If MeCab is not available, return (None, None).
     """
     if not MECAB_AVAILABLE:
-        # If MeCab is not installed, fallback to the raw text
-        return text
+        return None, None
 
     tagger = MeCab.Tagger()
     node = tagger.parseToNode(text)
 
-    tokens = []
+    tokens_original = []
+    tokens_for_hira = []
+
     while node:
         surface = node.surface
         features = node.feature.split(",")
 
-        # Typically: features = [pos, pos_sub1, pos_sub2, pos_sub3, conjugation, base_form, reading, pronunciation]
         if len(features) >= 8:
-            pos = features[0]        # e.g. 名詞, 助詞, 動詞, 形容詞...
-            # base_form = features[6]
-            # reading   = features[7]
-            # If it's "助詞" and surface=="は", override
+            pos = features[0]  # e.g. 助詞, 名詞, 動詞...
+            # For "original spaced" version:
+            tokens_original.append(surface)
+
+            # For "hira spaced" version, override if 助詞 and surface=="は"
             if pos == "助詞" and surface == "は":
-                tokens.append("わ")
+                tokens_for_hira.append("わ")
             else:
-                # Otherwise, just append surface
-                tokens.append(surface)
+                tokens_for_hira.append(surface)
         else:
-            # In rare cases, no features
-            tokens.append(surface)
+            tokens_original.append(surface)
+            tokens_for_hira.append(surface)
 
         node = node.next
 
-    # Join tokens with space
-    spaced_str = " ".join(tokens)
-    # Convert that entire spaced string to Hiragana (for any Kanji, Katakana)
-    spaced_hira = to_hiragana(spaced_str)
-    return spaced_hira
+    spaced_original = " ".join(tokens_original)
+    spaced_for_hira = " ".join(tokens_for_hira)
+
+    # Convert spaced_for_hira to Hiragana
+    spaced_hira_subbed = to_hiragana(spaced_for_hira)
+    spaced_hira_original = to_hiragana(spaced_original)
+
+    return spaced_original, spaced_hira_subbed, spaced_hira_original
 
 
 # ========== 3) spaCy Morphological Tokenization ==========
-_spacy_nlp = None
 
+_spacy_nlp = None
 def load_spacy_japanese():
     """
     Lazy-load the spaCy model. We'll call nlp() on it.
@@ -421,50 +427,57 @@ def load_spacy_japanese():
         _spacy_nlp = spacy.load("ja_core_news_sm")
     return _spacy_nlp
 
-def spacy_spaced_reading(text: str) -> str:
+def spacy_spaced_reading(text: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Use spaCy morphological analysis. If we see a token that is
-    'は' with pos_='ADP' (particle), override to 'わ'.
-    Then convert everything to Hiragana with Kakasi.
-    Join tokens by space.
-
-    (pos_='ADP' is typical for a particle in spaCy's universal POS, 
-     but check your model if it uses a different tag for JP.)
+    Use spaCy morphological analysis. Return two strings:
+      1) spaced_original: original token texts joined by spaces
+      2) spaced_hira: token texts but with "は"→"わ" override if pos_ == 'ADP',
+         then converted to Hiragana.
+    If spaCy is not available, return (None, None).
     """
     if not SPACY_AVAILABLE:
-        return text  # fallback if spaCy is not installed
+        return None, None
 
     nlp = load_spacy_japanese()
     doc = nlp(text)
 
-    tokens = []
-    for token in doc:
-        # If it's the single character "は" and pos_ is ADP (a particle)
-        if token.text == "は" and token.pos_ == "ADP":
-            tokens.append("わ")
-        else:
-            tokens.append(token.text)
+    tokens_original = []
+    tokens_for_hira = []
 
-    # Join, then convert to Hiragana
-    spaced_str = " ".join(tokens)
-    spaced_hira = to_hiragana(spaced_str)
-    return spaced_hira
+    for token in doc:
+        # Original token text
+        tokens_original.append(token.text)
+
+        # For the hiragana version, override "は" if it's a particle (ADP)
+        if token.text == "は" and token.pos_ == "ADP":
+            tokens_for_hira.append("わ")
+        else:
+            tokens_for_hira.append(token.text)
+
+    spaced_original = " ".join(tokens_original)
+    spaced_for_hira = " ".join(tokens_for_hira)
+
+    # Convert to Hiragana
+    spaced_hira_subbed = to_hiragana(spaced_for_hira)
+    spaced_hira_original = to_hiragana(spaced_original)
+
+    return spaced_original, spaced_hira_subbed, spaced_hira_original
 
 
 # ========== 4) Unified "get spaced reading" function ==========
-def get_spaced_reading(text: str, method: str) -> str:
+def get_spaced_reading(text: str, method: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    If method=='mecab', use MeCab morphological approach.
-    If method=='spacy', use spaCy morphological approach.
-    Otherwise, return original text (no spacing).
+    Return (spaced_original, spaced_hira) for the chosen method.
+    If method=='mecab', use MeCab.
+    If method=='spacy', use spaCy.
+    Otherwise (None, None).
     """
     if method == "mecab":
         return mecab_spaced_reading(text)
     elif method == "spacy":
         return spacy_spaced_reading(text)
     else:
-        # no morphological approach
-        return text
+        return None, None
 
 
 # ========== 5) Main Processing Logic ==========
@@ -478,14 +491,16 @@ def process_japanese_text(
     use_spacy: bool = False,
 ):
     """
-    Processes Japanese text to IPA. 
-    - If JSON, each entry gets up to 4 fields:
+    Processes Japanese text to IPA.
+    - If JSON, each entry gets up to 5 fields:
         1) {json_input_field} -> original text
-        2) {json_input_field}_spaced -> morphological spaced text (if use_mecab/use_spacy)
-        3) {json_output_field} -> IPA from unspaced
-        4) {json_output_field}_spaced -> IPA from spaced reading
-    - If plain text, we do similarly but just write out lines in a textual format.
+        2) {json_input_field}_spaced_original -> original text with spaces (NEW FIELD)
+        3) {json_input_field}_spaced -> morphological spaced text in HIRAGANA (with は=>わ override)
+        4) {json_output_field} -> IPA from unspaced
+        5) {json_output_field}_spaced -> IPA from spaced reading
+    - If plain text, we do similarly but just write out lines in textual format.
     """
+
     # Decide morphological method:
     morph_method = None
     if use_mecab and use_spacy:
@@ -506,20 +521,29 @@ def process_japanese_text(
 
             for entry in tqdm(data, desc="Processing JSON entries"):
                 if json_input_field not in entry:
+                    # If the specified input field doesn't exist, skip
                     continue
 
                 original_text = entry[json_input_field]
-                # 1) Unspaced → IPA
+
+                # 1) Convert original_text -> Hiragana -> IPA (unspaced)
                 hira_unspaced = to_hiragana(original_text)
                 ipa_unspaced = hiragana_to_ipa(hira_unspaced)
                 entry[json_output_field] = ipa_unspaced
 
-                # 2) If morphological approach, get spaced reading, then spaced IPA
+                # 2) If morphological approach, get spaced readings
                 if morph_method is not None:
-                    spaced_hira = get_spaced_reading(original_text, morph_method)
-                    entry[f"{json_input_field}_spaced"] = spaced_hira
-                    ipa_spaced = hiragana_to_ipa(spaced_hira)
-                    entry[f"{json_output_field}_spaced"] = ipa_spaced
+                    spaced_original, spaced_hira_subbed, spaced_hira_original = get_spaced_reading(original_text, morph_method)
+                    if spaced_original is not None:
+                        # Add the new field: original text spaced
+                        entry[f"{json_input_field}_spaced_original"] = spaced_original
+
+                    if spaced_hira_original is not None:
+                        entry[f"{json_input_field}_spaced_original"] = spaced_hira_subbed
+                    if spaced_hira_subbed is not None:
+                        entry[f"{json_input_field}_spaced_subbed"] = spaced_hira_subbed
+                        ipa_spaced = hiragana_to_ipa(spaced_hira_subbed)
+                        entry[f"{json_output_field}_spaced"] = ipa_spaced
 
             with open(output_file, "w", encoding="utf-8") as fout:
                 json.dump(data, fout, ensure_ascii=False, indent=4)
@@ -549,15 +573,23 @@ def process_japanese_text(
                     ipa_unspaced = hiragana_to_ipa(hira_unspaced)
 
                     if morph_method is not None:
-                        # B) Spaced reading -> spaced IPA
-                        spaced_hira = get_spaced_reading(line, morph_method)
-                        ipa_spaced = hiragana_to_ipa(spaced_hira)
+                        # B) Spaced reading
+                        spaced_original, spaced_hira_subbed, spaced_hira_original = get_spaced_reading(line, morph_method)
+                        ipa_spaced = ""
+                        if spaced_hira_subbed:
+                            ipa_spaced = hiragana_to_ipa(spaced_hira_subbed)
 
-                        fout.write(f"[Original]    : {line}\n")
-                        fout.write(f"[Unspaced IPA]: {ipa_unspaced}\n")
-                        fout.write(f"[Spaced Hira] : {spaced_hira}\n")
-                        fout.write(f"[Spaced IPA]  : {ipa_spaced}\n\n")
+                        fout.write(f"[Original]            : {line}\n")
+                        fout.write(f"[Unspaced IPA]        : {ipa_unspaced}\n")
+                        if spaced_original is not None:
+                            fout.write(f"[Spaced Original]     : {spaced_original}\n")
+                        if spaced_hira_original is not None:
+                            fout.write(f"[Spaced Hira Original]: {spaced_hira_original}\n")
+                        if spaced_hira_subbed is not None:
+                            fout.write(f"[Spaced Hira Subbed]  : {spaced_hira_subbed}\n")
+                        fout.write(f"[Spaced IPA]          : {ipa_spaced}\n\n")
                     else:
+                        # No morphological approach, just print unspaced IPA
                         fout.write(ipa_unspaced + "\n")
 
         except FileNotFoundError:
