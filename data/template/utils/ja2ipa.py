@@ -387,7 +387,7 @@ def mecab_spaced_reading(text: str) -> Tuple[Optional[str], Optional[str], Optio
     while node:
         surface = node.surface
         features = node.feature.split(",")
-        if len(features) >= 8:
+        if len(features) >= 1:
             pos = features[0]  # e.g. 助詞, 名詞, 動詞...
             tokens_original.append(surface)
             pos_tokens.append(pos)
