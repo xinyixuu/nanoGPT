@@ -275,7 +275,7 @@ def parse_args():
         "--attention_variant",
         type=str,
         default="causal",
-        choices=["causal"],
+        choices=["causal", "linear"],
         help="Which attention variant to use for the Transformer blocks."
     )
 
