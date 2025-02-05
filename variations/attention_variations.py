@@ -330,9 +330,14 @@ class CausalSelfAttention(nn.Module):
         return y
 
 class LinearAttention(nn.Module):
-    """ Implementation of Linear Attention
-    For algorithm description please see:
-    arxiv: https://arxiv.org/abs/2006.16236
+    """ Implements Linear Attention as described in:
+    Katharopoulos, A., et al. (2020). Transformers are RNNs:
+    Fast Autoregressive Transformers with Linear Attention. ICML.
+    https://arxiv.org/abs/2006.16236
+
+    This class replaces the standard softmax attention with a
+    kernel-based linear attention mechanism, enabling linear
+    time and space complexity with respect to sequence length.
     """
     def __init__(self, config, fire_pos_enc=None):
         super().__init__()
