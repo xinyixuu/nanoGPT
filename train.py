@@ -807,6 +807,7 @@ class Trainer:
             self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, tokens_trained)
 
+
             if self.args.gns_type is not None:
                 self.writer.add_scalar(f"{target_dataset}/gns", self.gns, self.iter_num)
                 self.writer.add_scalar(f"{target_dataset}/gns", self.gns, tokens_trained)
@@ -843,6 +844,12 @@ class Trainer:
 
             self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, tokens_trained)
+
+            self.writer.add_scalar(f"{target_dataset}/grad_norm", self.grad_norm, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/grad_norm", self.grad_norm, tokens_trained)
+
+            self.writer.add_scalar(f"{target_dataset}/grad_std", self.grad_std, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/grad_std", self.grad_std, tokens_trained)
 
             if self.args.gns_type is not None:
                 self.writer.add_scalar(f"{target_dataset}/gns", self.gns, self.iter_num)
