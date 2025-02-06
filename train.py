@@ -56,6 +56,8 @@ class Trainer:
 
         # GNS and batch schedule
         self.gns = None
+        self.grad_norm = None
+        self.zgrad = None
         self.tokens_trained = 0
         # If using multiple datasets, track tokens trained per dataset.
         if self.args.dataset_list is not None:
@@ -742,6 +744,34 @@ class Trainer:
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
         return self.args.min_lr + coeff * (self.args.learning_rate - self.args.min_lr)
 
+
+    @torch.no_grad()
+    def get_gradient_stats(self):
+        """
+        Calculates and returns the gradient standard deviation, norm, and mean for a PyTorch model.
+
+        Args:
+            model: The PyTorch model.
+
+        Returns:
+            A dictionary containing the gradient standard deviation, norm, and mean.  Returns None if no gradients are available.
+        """
+
+        gradients = []
+        for param in self.model.parameters():
+            if param.grad is not None:  # Check if gradients exist for the parameter
+                gradients.append(param.grad.view(-1)) # Flatten and append the gradients
+            # Handle cases where some parameters might not have gradients (e.g. frozen layers)
+        if not gradients:
+            return None # No gradients found
+
+        all_gradients = torch.cat(gradients) # Concatenate all gradients into a single tensor
+
+        self.grad_std = torch.std(all_gradients).item()
+        self.grad_norm = torch.norm(all_gradients).item()
+        self.grad_mean = torch.mean(all_gradients).item()
+
+
     def log_metrics(self, losses, running_mfu, epoch, tokens_trained, target_dataset):
 
         if self.args.tensorboard_log:
@@ -765,14 +795,21 @@ class Trainer:
                     tokens_trained
                     )
 
-            self.writer.add_scalar(f"{target_dataset}/lr", self.lr, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/epoch", epoch, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/tokens_trained", tokens_trained, self.iter_num)
-            self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, self.iter_num)
+
             self.writer.add_scalar(f"{target_dataset}/vram", self.vram_allocated, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/mfu_pct", running_mfu * 100, self.iter_num)
+
+            self.writer.add_scalar(f"{target_dataset}/lr", self.lr, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/lr", self.lr, tokens_trained)
+
+            self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, tokens_trained)
+
             if self.args.gns_type is not None:
                 self.writer.add_scalar(f"{target_dataset}/gns", self.gns, self.iter_num)
+                self.writer.add_scalar(f"{target_dataset}/gns", self.gns, tokens_trained)
 
 
         if self.args.csv_log:
@@ -798,13 +835,18 @@ class Trainer:
             self.writer.add_scalar(f"{target_dataset}/mfu_pct", running_mfu * 100, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/vram", self.vram_allocated, self.iter_num)
 
-            self.writer.add_scalar(f"{target_dataset}/lr", self.lr, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/epoch", epoch, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/tokens_trained", tokens_trained, self.iter_num)
+
+            self.writer.add_scalar(f"{target_dataset}/lr", self.lr, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/lr", self.lr, tokens_trained)
+
             self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, tokens_trained)
 
             if self.args.gns_type is not None:
                 self.writer.add_scalar(f"{target_dataset}/gns", self.gns, self.iter_num)
+                self.writer.add_scalar(f"{target_dataset}/gns", self.gns, tokens_trained)
 
     def write_to_csv(self, *args, prefix=""):
         args = list(args)
@@ -849,18 +891,18 @@ class Trainer:
                 "val/loss": losses['val'],
                 "lr": self.lr,
                 "mfu": running_mfu*100,
-            })
+                })
 
     def save_checkpoint(self, filename):
         checkpoint = {
-            'model': self.raw_model.state_dict(),
-            'optimizer': self.optimizer.state_dict() if self.optimizer else None,
-            'scheduler': self.scheduler.state_dict() if self.scheduler else None,
-            'model_args': self.model_args,
-            'iter_num': self.iter_num,
-            'best_val_loss': self.best_val_loss,
-            'config': vars(self.args),
-        }
+                'model': self.raw_model.state_dict(),
+                'optimizer': self.optimizer.state_dict() if self.optimizer else None,
+                'scheduler': self.scheduler.state_dict() if self.scheduler else None,
+                'model_args': self.model_args,
+                'iter_num': self.iter_num,
+                'best_val_loss': self.best_val_loss,
+                'config': vars(self.args),
+                }
         torch.save(checkpoint, os.path.join(self.args.out_dir, filename))
 
     def train(self):
@@ -899,11 +941,12 @@ class Trainer:
                     if self.args.gns_type is not None:
                         self.gns = self.gns_ema.get_gns()
 
+
                     self.vram_allocated = get_gpu_memory_info(info_type='used') if self.args.device != "cpu" else 0
                     if self.args.dataset_list is not None:
                         # Print loss for each dataset if multiple datasets are used
                         for dataset, dataset_losses in losses['datasets'].items():
-                            print(f"step {self.iter_num}: {dataset:<20s} train loss {dataset_losses['train']:.4f}, train_stdev {dataset_losses['train_std']:.4f}, val loss {dataset_losses['val']:.4f}, val_stdev {dataset_losses['val_std']:.4f}, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr:.4f}, tokens_trained tokens {self.tokens_trained_dict[dataset]:.2e}")
+                            print(f"step {self.iter_num}: {dataset:<20s}, train loss {dataset_losses['train']:.4f}, train_stdev {dataset_losses['train_std']:.4f}, val loss {dataset_losses['val']:.4f}, val_stdev {dataset_losses['val_std']:.4f}, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr:.4f}, tokens_trained {self.tokens_trained_dict[dataset]:.2e}")
                             self.log_metrics(dataset_losses, running_mfu, self.epochs_trained_dict[dataset], self.tokens_trained_dict[dataset], dataset)
                     else:
                         # Default behavior for a single dataset
@@ -999,6 +1042,9 @@ class Trainer:
 
                     self.scaler.scale(loss).backward()
 
+                    # measure grad norms
+                    self.get_gradient_stats()
+
                     self.X, self.Y, current_dataset = self.get_batch('train')
 
                     if self.args.gns_type is not None:
@@ -1037,13 +1083,11 @@ class Trainer:
                     if self.args.gns_type is not None:
                         self.gns = self.gns_ema.get_gns()
                         if self.args.dataset_list:
-                            print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, epoch {self.epochs_trained_dict[prior_dataset]:6.2f}, dataset: {prior_dataset}, mfu {running_mfu*100:.2f}%, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr:.4f}, tokens_trained {self.tokens_trained_dict[prior_dataset]:e}")
+                            print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, epoch {self.epochs_trained_dict[prior_dataset]:6.2f}, dataset: {prior_dataset}, mfu {running_mfu*100:.2f}%, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr:.4f}, grad_norm {self.grad_norm:2f}, grad_std {self.grad_std:.2f}, tokens_trained {self.tokens_trained_dict[prior_dataset]:e}")
                         else:
-                            print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, epoch {current_epoch:6.2f}, dataset: {prior_dataset}, mfu {running_mfu*100:.2f}%, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr:.4f}, tokens_trained {self.tokens_trained:e}")
-                        # print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, epoch {current_epoch:6.2f}, prior_dataset: {prior_dataset}, current_dataset: {current_dataset:<20s}, mfu {running_mfu*100:.2f}%, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr:.4f}, tokens_trained {self.tokens_trained:e}")
+                            print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, epoch {current_epoch:6.2f}, dataset: {prior_dataset}, mfu {running_mfu*100:.2f}%, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr:.4f}, grad_norm {self.grad_norm:.2f}, grad_std {self.grad_std:.2f}, tokens_trained {self.tokens_trained:e}")
                     else:
-                        # print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, lr {self.lr}, epoch {current_epoch:6.2f}, tokens_trained {self.tokens_trained:e},prior_dataset: {prior_dataset}, current_dataset: {current_dataset:<20s}, mfu {running_mfu*100:.2f}%")
-                        print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, lr {self.lr}, epoch {current_epoch:6.2f}, tokens_trained {self.tokens_trained:e}, prior_dataset: {prior_dataset}, mfu {running_mfu*100:.2f}%")
+                        print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, lr {self.lr}, epoch {current_epoch:6.2f}, tokens_trained {self.tokens_trained:e}, dataset: {prior_dataset}, {self.grad_norm}, grad_std {self.grad_std}, mfu {running_mfu*100:.2f}%")
 
                     if math.isnan(lossf):
                         # If training loss is nan, then exit.
