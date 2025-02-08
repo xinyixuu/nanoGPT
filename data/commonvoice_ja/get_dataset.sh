@@ -60,7 +60,7 @@ echo "All .tsv files have been processed."
 # # Run program to convert sentences into IPA format.
 output_json_with_ipa="ja_ipa.json"
 echo "Converting sentences to IPA..."
-python3 utils/ja2ipa.py  -j "$output_file" "$output_json_with_ipa"
+python3 utils/ja2ipa.py  -j "$output_file" "$output_json_with_ipa" --use_mecab
 echo "IPA conversion finished."
 
 output_ipa_txt="ja_ipa.txt"
