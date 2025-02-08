@@ -64,7 +64,7 @@ python3 utils/ja2ipa.py  -j "$output_file" "$output_json_with_ipa" --use_mecab
 echo "IPA conversion finished."
 
 output_ipa_txt="ja_ipa.txt"
-python3 utils/extract_json_values.py "$output_json_with_ipa" "sentence_ipa" "$output_ipa_txt" 
+python3 utils/extract_json_values.py "$output_json_with_ipa" "spaced_ipa" "$output_ipa_txt"
 echo "IPA extraction finished."
 
 #TODO(gkielian): see if we can fix the parsing of rows instead of deleting
