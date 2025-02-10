@@ -57,7 +57,7 @@ class Trainer:
         # GNS and batch schedule
         self.gns = None
         self.grad_norm = None
-        self.zgrad = None
+        self.grad_std = None
         self.tokens_trained = 0
         # If using multiple datasets, track tokens trained per dataset.
         if self.args.dataset_list is not None:
