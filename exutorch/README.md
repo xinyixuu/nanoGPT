@@ -55,6 +55,7 @@ To optimize for Android devices with XNNPACK acceleration, the following additio
 ---
 
 ## 🚀 Getting Started
+These steps assume we start in the same directory as this README.md file.
 
 Follow these steps to set up and run your NanoGPT model:
 
@@ -68,7 +69,8 @@ Follow these steps to set up and run your NanoGPT model:
 1. **Run the Basic Mode**
    Execute the NanoGPT runner:
    ```bash
-   ./nanogpt_runner
+   cd et-nanogpt/
+   cmake-out/nanogpt_runner
    ```
    Watch as the model loads and processes your prompt.
 
@@ -81,7 +83,8 @@ Follow these steps to set up and run your NanoGPT model:
 3. **Run the XNNPACK-Optimized Mode**
    Execute the runner again to benefit from XNNPACK acceleration:
    ```bash
-   ./nanogpt_runner
+   cd et-nanogpt/
+   cmake-out/nanogpt_runner
    ```
 
 ---
