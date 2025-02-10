@@ -16,28 +16,19 @@ and specific hardware targets like Android and other mobile platforms.
 ## 📁 Description of Files
 
 ### Setup & Build Files
-- **`setup_exutorch.sh`**
-  🛠️ *Setup Script*: Runs all necessary setup steps (including dependency installation via `install_requirements.sh`) to prepare your environment.
-- **`CMakeLists.txt`**
-  📝 *CMake Configuration*: Defines the build settings for the basic NanoGPT runner.
+- **`setup_exutorch.sh`** - Runs all necessary setup steps (including dependency installation via `install_requirements.sh`) to prepare your environment.
+- **`CMakeLists.txt`** - Defines the build settings for the basic NanoGPT runner.
 
 ### Core Export & Runtime Files
-- **`export_nanogpt.py`**
-  📦 *Model Exporter*: Exports the GPT model to an ExecuTorch‑compatible `.pte` file **without** backend delegation or quantization.
-- **`main.cpp`**
-  🎯 *Model Runner*: Implements a simple loop to load the exported model, tokenize the prompt, generate tokens, and display the output.
-- **`basic_sampler.h`**
-  🎲 *Sampler*: Provides a bare‑bones sampler that selects the next token from model logits (e.g., using greedy sampling).
-- **`basic_tokenizer.h`**
-  🔤 *Tokenizer*: Implements minimal encode/decode methods for converting between text and token IDs using a fixed vocabulary JSON.
-- **`model.py`**
-  🤖 *NanoGPT Model*: Contains Karpathy’s NanoGPT model definition, adapted as a minimal GPT‑2 architecture for demonstration.
-- **`vocab.json`**
-  📚 *Vocabulary File*: Maps subwords (or tokens) to integer token IDs for the tokenizer.
+- **`export_nanogpt.py`** - Exports the GPT model to an ExecuTorch‑compatible `.pte` file **without** backend delegation or quantization.
+- **`main.cpp`** - Implements a simple loop to load the exported model, tokenize the prompt, generate tokens, and display the output.
+- **`basic_sampler.h`** - Provides a bare‑bones sampler that selects the next token from model logits (e.g., using greedy sampling).
+- **`basic_tokenizer.h`** - Implements minimal encode/decode methods for converting between text and token IDs using a fixed vocabulary JSON.
+- **`model.py`** - Contains Karpathy’s NanoGPT model definition, adapted as a minimal GPT‑2 architecture for demonstration.
+- **`vocab.json`** - Maps subwords (or tokens) to integer token IDs for the tokenizer.
 
 ### Generated Artifacts
-- **`nanogpt.pte`**
-  ⚙️ *ExecuTorch Program*: The compiled ExecuTorch program file generated from the PyTorch model, ready to be loaded and executed at runtime.
+- **`nanogpt.pte`** - The compiled ExecuTorch program file generated from the PyTorch model, ready to be loaded and executed at runtime.
 
 ---
 
@@ -45,12 +36,9 @@ and specific hardware targets like Android and other mobile platforms.
 
 To optimize for Android devices with XNNPACK acceleration, the following additional files are provided:
 
-- **`xnnpack_mode.sh`**
-  🔄 *XNNPACK Mode Switcher*: Cleans and rebuilds the `nanogpt_runner` binary for XNNPACK mode.
-- **`CMakeLists_XNNPACK.txt`**
-  🏗️ *XNNPACK CMake Configuration*: The CMake file configured for Android targets using XNNPACK.
-- **`export_nanogpt_xnnpack.py`**
-  🛠️ *XNNPACK Exporter*: Exports the GPT model with PyTorch PT2E quantization steps before delegating to the XNNPACK backend for further optimization.
+- **`xnnpack_mode.sh`** - Cleans and rebuilds the `nanogpt_runner` binary for XNNPACK mode.
+- **`CMakeLists_XNNPACK.txt`** - The CMake file configured for Android targets using XNNPACK.
+- **`export_nanogpt_xnnpack.py`** - Exports the GPT model with PyTorch PT2E quantization steps before delegating to the XNNPACK backend for further optimization.
 
 ---
 
