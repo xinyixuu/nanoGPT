@@ -24,3 +24,12 @@ url="INSERT_URL_WITH_FILES"
 #   --url "${url}" \
 #   --include_keys "instruction" "response" \
 #   --value_prefix $'#U:\n' $'#B:\n'
+#
+
+# uncomment for direct to json
+# python utils/get_parquet_to_json.py \
+#   --url "${url}" \
+#   --range_start 0 \
+#   --range_end 1 \
+#   --include_keys transcription \
+#   --output_json output_json.json

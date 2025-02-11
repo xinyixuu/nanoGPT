@@ -4,7 +4,7 @@ import argparse
 import re
 import json
 
-def transcribe_korean(sentence):
+def transcribe_korean(sentence, wrapper=False):
     """Transcribe a Korean sentence into its phonemes using KoNLPy (Okt)."""
     okt = Okt()
     tokens = okt.morphs(sentence)
@@ -21,21 +21,27 @@ def transcribe_korean(sentence):
         transcription = result.stdout.strip().replace("ㆍ"," ")
         # Check for failed transcription markers
         if "(en)" in transcription or "(ko)" in transcription:
-            return "[[[[[" + sentence + "]]]]]"# Return original sentence on failure
+            if wrapper:
+                return "[[[[[" + sentence + "]]]]]"# Return original sentence on failure
+            else:
+                return sentence
         return transcription
     except Exception as e:
         return f"Error in transcribing Korean: {str(e)}"
 
-def handle_mixed_language(word):
+def handle_mixed_language(word, wrapper=False):
     """Handle a word with potential Korean, Language, or number content."""
     if word.isdigit():  # Detect numbers but just pass through for now (different in each language)
         return word
     elif any('가' <= char <= '힣' for char in word):  # Detect Korean
-        return transcribe_korean(word)
+        return transcribe_korean(word, wrapper=wrapper)
     else:  # Non-Korean Word
-        return "[[[[[" + word + "]]]]]"
+        if wrapper:
+            return "[[[[[" + word + "]]]]]"
+        else:
+            return word
 
-def transcribe_multilingual(sentences, input_json_key=None, output_json_key='ipa'):
+def transcribe_multilingual(sentences, input_json_key=None, output_json_key='ipa', wrapper=False):
     """
     Transcribe multilingual sentences and update JSON data directly.
 
@@ -59,7 +65,7 @@ def transcribe_multilingual(sentences, input_json_key=None, output_json_key='ipa
                 words = re.findall(r'\w+|[^\w\s]', sentence, re.UNICODE)
                 for word in words:
                     if re.match(r'\w+', word):
-                        result.append(handle_mixed_language(word))
+                        result.append(handle_mixed_language(word, wrapper=wrapper))
                     else:
                         result.append(word)
                 transcription_result = " ".join(result)
@@ -79,6 +85,7 @@ def main():
     parser.add_argument('input_file', type=str, help='Path to the input JSON file.')
     parser.add_argument('--input_json_key', type=str, required=True, help='The key of the Korean text to convert to IPA in the JSON file.')
     parser.add_argument('--output_json_key', type=str, default='ipa', help='The key to store the IPA transcription in the JSON file (default: "ipa").')
+    parser.add_argument("--wrapper",  type=bool, default=False, action=argparse.BooleanOptionalAction, help="option to wrap unparseable text with [[[[[square brackets]]]]], for later recovery")
 
     args = parser.parse_args()
 
@@ -90,7 +97,8 @@ def main():
         updated_json_data = transcribe_multilingual(
             input_content,
             args.input_json_key,
-            args.output_json_key
+            args.output_json_key,
+            wrapper=args.wrapper
         )
 
         # Overwrite the original file with the updated JSON
