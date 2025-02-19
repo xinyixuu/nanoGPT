@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 import argparse
 import os
+from tqdm import tqdm  # Import tqdm for progress bars
 
 # Define function for logarithmic fit
 def log_func(x, a, b):
@@ -24,32 +25,30 @@ def process_embedding_dims(min_pow, max_pow, regression_type, num_vectors, mean,
     # Store regression trends for final comparison plot
     regression_trends = {}
 
-    # Process each embedding dimension
-    for dim in embedding_dims:
+    # Outer progress bar for embedding dimensions
+    for dim in tqdm(embedding_dims, desc="Processing Dimensions", unit="dim"):
         data_filename = f"angle_distribution_{dim}d.npy"
 
         if os.path.exists(data_filename):
-            print(f"Loading existing data file: {data_filename}")
+            print(f"\nLoading existing data file: {data_filename}")
             data_dict = np.load(data_filename, allow_pickle=True).item()
         else:
-            print(f"Generating new data file: {data_filename}")
+            print(f"\nGenerating new data file: {data_filename}")
             np.random.seed(42)  # For reproducibility
             vectors = np.random.normal(mean, stddev, size=(1, dim))  # First vector
 
             min_angles = []
 
-            for i in range(1, num_vectors + 1):
+            # Inner progress bar for vector generation
+            for i in tqdm(range(1, num_vectors + 1), desc=f"{dim}D Vectors", unit="vec", leave=False):
                 new_vector = np.random.normal(mean, stddev, size=(dim,))
 
                 # Compute cosine similarity with **all** prior vectors
                 cos_sim = np.dot(vectors, new_vector) / (np.linalg.norm(vectors, axis=1) * np.linalg.norm(new_vector))
-
                 # Convert cosine similarity to angles (radians to degrees)
                 angles = np.degrees(np.arccos(np.clip(cos_sim, -1.0, 1.0)))
-
                 # Store minimum angle
                 min_angles.append(np.min(angles))
-
                 # Append new vector to full history
                 vectors = np.vstack((vectors, new_vector))
 
@@ -108,7 +107,8 @@ def process_embedding_dims(min_pow, max_pow, regression_type, num_vectors, mean,
     plt.figure(figsize=(12, 8))
     for label, (x_vals, min_angles, trend, msei) in regression_trends.items():
         color = next(plt.gca()._get_lines.prop_cycler)["color"]
-        plt.scatter(x_vals, min_angles, color=color, s=1, alpha=0.3, label=label.replace("Log", "Min Angle").replace("Exp", "Min Angle"))
+        plt.scatter(x_vals, min_angles, color=color, s=1, alpha=0.3,
+                    label=label.replace("Log", "Min Angle").replace("Exp", "Min Angle"))
         linestyle = "--" if "Log" in label else "-."
         plt.plot(x_vals, trend, color=color, linestyle=linestyle, linewidth=2,
                  label=f"{label.replace('Min Log', 'Log Fit').replace('Min Exp', 'Exp Fit')} (MSEI={msei:.4f})")
