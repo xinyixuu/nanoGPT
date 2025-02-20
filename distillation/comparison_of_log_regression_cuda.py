@@ -6,6 +6,7 @@ import argparse
 import os
 from tqdm import tqdm
 from itertools import cycle
+import csv
 
 # Define function for logarithmic fit
 def log_func(x, a, b):
@@ -27,6 +28,9 @@ def process_embedding_dims(min_pow, max_pow, regression_type, num_vectors, mean,
     # Generate embedding dimensions
     embedding_dims = [2 ** i for i in range(min_pow, max_pow + 1)]
     regression_trends = {}
+
+    # Prepare a list to store all regression parameters for CSV output
+    all_regression_params = []
 
     for dim in tqdm(embedding_dims, desc="Processing Dimensions", unit="dim"):
         data_filename = f"angle_distribution_{dim}d.npy"
@@ -65,11 +69,22 @@ def process_embedding_dims(min_pow, max_pow, regression_type, num_vectors, mean,
 
         # Fit selected regression models
         fit_results = {}
+
         if regression_type in ["log", "both"]:
             popt_log, _ = curve_fit(log_func, x_vals, min_angles)
             trend_min_log = log_func(x_vals, *popt_log)
             msei_log = mse_inverse(np.array(min_angles), trend_min_log)
             fit_results["log"] = (trend_min_log, msei_log)
+
+            # Store parameters and print them
+            all_regression_params.append({
+                "dimension": dim,
+                "regression_type": "log",
+                "params": popt_log,
+                "MSEI": msei_log
+            })
+            print(f"Dimension {dim}, Log Fit: a={popt_log[0]:.6f}, b={popt_log[1]:.6f}, MSEI={msei_log:.6f}")
+
             regression_trends[f"{dim}D Log"] = (x_vals, min_angles, trend_min_log, msei_log)
 
         if regression_type in ["exp", "both"]:
@@ -77,6 +92,17 @@ def process_embedding_dims(min_pow, max_pow, regression_type, num_vectors, mean,
             trend_min_exp = exp_decay_func(x_vals, *popt_exp)
             msei_exp = mse_inverse(np.array(min_angles), trend_min_exp)
             fit_results["exp"] = (trend_min_exp, msei_exp)
+
+            # Store parameters and print them
+            all_regression_params.append({
+                "dimension": dim,
+                "regression_type": "exp",
+                "params": popt_exp,
+                "MSEI": msei_exp
+            })
+            if len(popt_exp) == 3:
+                print(f"Dimension {dim}, Exp Fit: a={popt_exp[0]:.6f}, b={popt_exp[1]:.6f}, c={popt_exp[2]:.6f}, MSEI={msei_exp:.6f}")
+
             regression_trends[f"{dim}D Exp"] = (x_vals, min_angles, trend_min_exp, msei_exp)
 
         # Save individual plots
@@ -113,7 +139,7 @@ def process_embedding_dims(min_pow, max_pow, regression_type, num_vectors, mean,
     # Generate final comparison chart
     plt.figure(figsize=(12, 8))
     for label, (x_vals, min_angles, trend, msei) in regression_trends.items():
-        color = next(color_cycle)  # FIXED: Uses the correct color cycle method
+        color = next(color_cycle)
         plt.scatter(x_vals, min_angles, color=color, s=1, alpha=0.3,
                     label=label.replace("Log", "Min Angle").replace("Exp", "Min Angle"))
         linestyle = "--" if "Log" in label else "-."
@@ -128,6 +154,23 @@ def process_embedding_dims(min_pow, max_pow, regression_type, num_vectors, mean,
     plt.close()
 
     print(f"Saved: angle_distribution_{regression_type}_comparison.png")
+
+    # Write all regression parameters to a CSV file
+    with open("regression_constants.csv", "w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Dimension", "Regression Type", "a", "b", "c", "MSEI"])
+        for row in all_regression_params:
+            dimension = row["dimension"]
+            regtype = row["regression_type"]
+            p = row["params"]
+            msei = row["MSEI"]
+            # For the log fit, we only have [a, b]; for the exp fit, we have [a, b, c].
+            if len(p) == 2:
+                a, b = p
+                c = ""
+            else:
+                a, b, c = p
+            writer.writerow([dimension, regtype, a, b, c, msei])
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process embedding dimensions for CUDA-accelerated regression analysis.")
