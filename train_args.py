@@ -275,10 +275,16 @@ def parse_args():
         "--attention_variant",
         type=str,
         default="causal",
-        choices=["causal", "linear"],
+        choices=["causal", "linear", "ssm"],
         help="Which attention variant to use for the Transformer blocks."
     )
 
+    ## SSM - Attention Varient (same as Hymba)
+    model_group.add_argument("--ssm_mamba_expand",   type=int,  default=2)
+    model_group.add_argument("--ssm_conv_kernel_size",   type=int,  default=3)
+    model_group.add_argument("--ssm_dt_rank",   type=int,  default=8)
+    model_group.add_argument("--ssm_d_state",   type=int,  default=16)
+    model_group.add_argument("--ssm_io_bias",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="adds biases for nn.linear() of both in_proj and out_proj")
 
     # LINEAR VARIATIONS
     linear_variants = ["linear", "bitlinear", "bitlinear_1p58", "bitlinear_optimized", "kan","quantized_linear"]

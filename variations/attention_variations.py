@@ -411,11 +411,11 @@ class MambaBlock(nn.Module):
     by the NVIDIA team, licensed under the [NVIDIA Open Model License Agreement]
     (https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/).
     """  
-    def __init__(self, config):
+    def __init__(self, config, fire_pos_enc=None):
         super().__init__()
 
         self.d_model = config.n_embd
-        self.d_inner = self.d_model * config.ssm_mamba_expand
+        self.d_inner = int(self.d_model * config.ssm_mamba_expand)
         self.conv_kernel_size = config.ssm_conv_kernel_size
         self.dt_rank = config.ssm_dt_rank
         self.d_state = config.ssm_d_state
@@ -431,10 +431,10 @@ class MambaBlock(nn.Module):
         )       
 
         num_ssm_param = 1
-        self.in_proj = nn.ModuleList([nn.Linear(self.d_model, self.d_inner * 2, bias=self.iobias)])
+        self.in_proj = nn.ModuleList([nn.Linear(self.d_model, self.d_inner * 2, bias=self.io_bias)])
         self.x_proj = nn.ModuleList([nn.Linear(self.d_inner, self.dt_rank + self.d_state * 2, bias=False) for _ in range(num_ssm_param)])
         self.dt_proj = nn.ModuleList([nn.Linear(self.dt_rank, self.d_inner, bias=True) for _ in range(num_ssm_param)])
-        self.out_proj = nn.ModuleList([nn.Linear(self.d_inner, self.d_model, bias=self.iobias)])
+        self.out_proj = nn.ModuleList([nn.Linear(self.d_inner, self.d_model, bias=self.io_bias)])
 
         A = torch.arange(1, self.d_state + 1, dtype=torch.float32)[None, :]
         A = A.expand(self.d_inner, -1).contiguous()
