@@ -88,6 +88,8 @@ def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
     from rich.text import Text
     text = Text()
 
+    norm_values = None
+
     if colorize_mode == 'softmax':
         # raw_logits is shape (T, vocab_size) per step
         # gather the chosen token’s probability each step
@@ -95,16 +97,21 @@ def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
         dist_tensor = torch.stack(raw_logits, dim=0)  # shape (T, vocab_size)
         chosen_probs = []
         for i, dist_row in enumerate(dist_tensor):
+            # print(dist_row)
             prob_dist = F.softmax(dist_row, dim=-1)
+            # print(prob_dist)
+            # input()
             chosen_probs.append(prob_dist[tokens[i]])
         values = torch.stack(chosen_probs)
+
+        norm_values = values
 
     if colorize_mode == 'minmax':
         # raw_logits is shape (T,) with each chosen-token logit
         values = torch.tensor(raw_logits, dtype=torch.float32)
 
-    # Normalize the chosen values (probabilities or logits) to [0..1]
-    norm_values = (values - values.min()) / (values.max() - values.min() + 1e-6)
+        # Normalize the chosen values (probabilities or logits) to [0..1]
+        norm_values = (values - values.min()) / (values.max() - values.min() + 1e-6)
 
     for i, token_id in enumerate(tokens):
         token_str = decode([token_id])
@@ -456,7 +463,9 @@ def main():
                     output_line = decode(x[0].tolist()).replace(separator_token, " ") if separator_token else decode(x[0].tolist())
                     if args.apply_vector_file1:
                         print(f"Scaling factor: {args.steering_vector_scaling_factor}")
-                    print('---------------')
+                    print('[bold blue]---------------')
+                    print(f"[bold orange] Sample [bold orange]{k+1}")
+                    print('[bold blue]---------------')
                     # Perform colorized printing if requested
                     if args.colorize_output:
                         console = Console()
@@ -467,7 +476,6 @@ def main():
                             colorize_mode=args.colorize_mode
                         )
                         console.print(colored_text)
-                        print('---------------')
                     else:
                         print("[bold green]" + output_line)
 
