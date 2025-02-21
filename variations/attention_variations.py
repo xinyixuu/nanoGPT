@@ -505,8 +505,8 @@ class MambaBlock(nn.Module):
             hidden_states,                          # (batch_size, d_inner, seqlen)
             discrete_delta,
             A,
-            B.transpose(1, 2),
-            C.transpose(1, 2),
+            B.transpose(1, 2).to(torch.float16),    # torch.float32 -> torch.float16 for selective_scan_fn
+            C.transpose(1, 2).to(torch.float16),    # torch.float32 -> torch.float16 for selective_scan_fn
             self.D[index].float(),
             z=gate,
             delta_bias=dt_proj_bias,
