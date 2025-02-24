@@ -30,13 +30,10 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Decide if image_path is a URL or local file
+    # Load image (URL or local)
     if args.image_path.startswith("http://") or args.image_path.startswith("https://"):
-        # Download from URL
-        import requests
         image = Image.open(requests.get(args.image_path, stream=True).raw).convert("RGB")
     else:
-        # Load from local path
         image = Image.open(args.image_path).convert("RGB")
 
     # Prepare device
@@ -45,57 +42,47 @@ def main():
     # Load model and processor
     model = PaliGemmaForConditionalGeneration.from_pretrained(
         args.model_id,
-        token=args.hf_token  # or use_auth_token if older Transformers version
+        token=args.hf_token
     ).to(device).eval()
     processor = AutoProcessor.from_pretrained(args.model_id)
 
-    # We'll hook onto the final linear projection for multi-modal features
+    # Identify the target layer
     chosen_submodule = model.multi_modal_projector.linear
-
-    # We'll have global storage for captured embeddings
     captured_embeddings = []
 
     def capture_hook(mod, module_in, module_out):
         """
-        If user wants to save embeddings, we capture them here.
-        We assume shape [B, D] or [B, N, D].
+        Capture the INPUT to the linear layer, instead of the output.
         """
-        # Move to CPU numpy for saving
-        emb = module_out.detach().cpu().numpy()
+        emb = module_in[0].detach().cpu().numpy()  # Capture first input tensor
         captured_embeddings.append(emb)
-        return module_out  # pass through unmodified
+        return module_out  # Pass through unmodified
 
-    def load_hook(mod, module_in, module_out):
+    def load_hook(mod, module_in):
         """
-        If user wants to load embeddings, we replace the output entirely.
-        We must ensure shape matches our loaded .npy data.
+        Inject saved embeddings into the input of the linear layer.
         """
-        # loaded_embeddings is a numpy array or a torch tensor
-        # We'll do a direct replacement with the loaded data.
-        # Return a torch tensor that matches module_out dtype/device/shape
-        new_emb = torch.from_numpy(loaded_embeddings).to(module_out.device)
-        # If the model processes a batch, we assume it's the same batch shape.
-        # If shape is [B, D], we just return [B, D]. If [B, N, D], likewise.
-        # So we check if we must broadcast or if the shapes match exactly.
-        if new_emb.shape != module_out.shape:
+        new_emb = torch.from_numpy(loaded_embeddings).to(module_in[0].device)
+        if new_emb.shape != module_in[0].shape:
             raise ValueError(
-                f"Shape mismatch! new_emb {new_emb.shape} vs module_out {module_out.shape}"
+                f"Shape mismatch! new_emb {new_emb.shape} vs expected {module_in[0].shape}"
             )
-        return new_emb
+        return (new_emb,)  # Must return a tuple to correctly replace input
+
 
     # Decide which hooks to apply
     capture_handle = None
     load_handle = None
 
-    # If saving, register a capture hook
+    # If saving, register a capture hook on the INPUT of the linear layer
     if args.save_npy is not None:
         capture_handle = chosen_submodule.register_forward_hook(capture_hook)
 
-    # If loading, load .npy file and register a load hook
+    # If loading, load .npy file and register a load hook to replace input
     if args.load_npy is not None:
         global loaded_embeddings
         loaded_embeddings = np.load(args.load_npy)
-        load_handle = chosen_submodule.register_forward_hook(load_hook)
+        load_handle = chosen_submodule.register_forward_pre_hook(load_hook)
 
     # Prepare inputs
     inputs = processor(
@@ -117,16 +104,9 @@ def main():
 
     # If saving, write out the embeddings
     if args.save_npy is not None:
-        # We might have multiple captures if the model chunked the image internally,
-        # typically you'll see just 1 forward pass for 1 image. We'll combine them:
-        # We'll just assume it's the last item (or the only item).
-        # Or you can store them all if you suspect more than one chunk.
         if len(captured_embeddings) == 0:
             print("Warning: no embeddings were captured. Possibly the hook wasn't triggered.")
         else:
-            # For single image, typically captured_embeddings has length=1
-            # But if the model does something fancy, it could be multiple.
-            # We'll pick the final one (or merge them). 
             final_array = captured_embeddings[-1]
             np.save(args.save_npy, final_array)
             print(f"Saved embeddings to {args.save_npy} with shape {final_array.shape}.")
