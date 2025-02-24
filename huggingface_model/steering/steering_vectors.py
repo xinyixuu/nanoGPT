@@ -3,6 +3,7 @@ import numpy as np
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from rich import print
 from rich.console import Console
+from prompts import *
 
 # Initialize console for rich formatting
 console = Console()
@@ -29,20 +30,8 @@ def capture_residual_hook(module, module_input, module_output, storage_list):
     return module_output
 
 # Define longer sentiment-steering prompts
-positive_prompt = (
-    "Hoy ha sido un día productivo. Me levanté temprano y comencé mi día organizando la casa. "
-    "Barrí el suelo, lavé los platos y ordené la sala. Después, preparé una comida deliciosa y saludable. "
-    "Finalmente, dediqué tiempo a planificar la semana, asegurándome de que todo estuviera en orden."
-    "Terminé mi jornada sintiéndome satisfecho con todo lo que logré. Nada se compara con la sensación de tener un hogar limpio y organizado. "
-    "Ahora puedo relajarme sabiendo que todo está bajo control."
-)
-negative_prompt = (
-    "Today has been exhausting. I woke up feeling tired and unmotivated, but the chores needed to be done. "
-    "Dishes piled up in the sink, the floor was covered in dust, and everything felt like an endless mess. "
-    "No matter how much I cleaned, there was always something else demanding my attention."
-    "By the end of the day, I was too drained to enjoy the results. The house still felt chaotic, and I barely made a dent in my to-do list. "
-    "It’s frustrating to spend so much energy and still feel like nothing is truly finished."
-)
+positive_prompt = prompt_es
+negative_prompt = prompt_en
 
 # Storage for residuals
 residuals_pos, residuals_neg = [], []
