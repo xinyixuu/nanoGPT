@@ -31,7 +31,9 @@ def capture_residual_hook(module, input, output, storage_list):
     return output
 
 positive_prompt = prompt_ko
+positive_prompt_label = "Korean"
 negative_prompt = prompt_ja
+negative_prompt_label = "Japanese"
 
 # --- Character Counting Functions ---
 def count_korean_characters(text):
@@ -45,7 +47,7 @@ def count_japanese_characters(text):
 # --- Residual Capture ---
 residuals_pos, residuals_neg = [], []
 
-console.print("[bold green]Capturing positive (Korean) sentiment residuals...[/bold green]")
+console.print(f"[bold green]Capturing {positive_prompt_label} residuals...[/bold green]")
 hook_handle_pos = model.transformer.h[block_index].register_forward_hook(
     lambda m, i, o: capture_residual_hook(m, i, o, residuals_pos)
 )
@@ -54,7 +56,7 @@ with torch.no_grad():
     model(**inputs_pos)
 hook_handle_pos.remove()
 
-console.print("[bold red]Capturing negative (Japanese) sentiment residuals...[/bold red]")
+console.print(f"[bold red]Capturing {negative_prompt_label} residuals...[/bold red]")
 torch.cuda.empty_cache()
 hook_handle_neg = model.transformer.h[block_index].register_forward_hook(
     lambda m, i, o: capture_residual_hook(m, i, o, residuals_neg)
@@ -82,12 +84,12 @@ def modify_residual_hook(module, input, output, steering_vector):
     return (modified_hidden,) + output[1:]
 
 # --- Text Generation and Analysis ---
-slerp_values = np.linspace(-20, 20, 81)  # More values for smoother plot
+slerp_values = np.linspace(-16, 16, 33)
 console.print("[bold cyan]Generating text with language steering using SLERP...[/bold cyan]")
 
 angle_rad = torch.acos((vector_pos * vector_neg).sum() / (torch.norm(vector_pos) * torch.norm(vector_neg))).item()
 angle_deg = np.degrees(angle_rad)
-console.print(f"[bold green]Angle between positive and negative vectors: {angle_rad:.4f} radians ({angle_deg:.2f} degrees)[/bold green]")
+console.print(f"[bold green]Angle between {positive_prompt_label} and {negative_prompt_label} vectors: {angle_rad:.4f} radians ({angle_deg:.2f} degrees)[/bold green]")
 
 results = []
 for val in slerp_values:
@@ -136,6 +138,7 @@ for val in slerp_values:
         'slerp_value': val,
         'korean_count': korean_count,
         'japanese_count': japanese_count,
+        'rotation_angle_rad': rotation_angle_rad, #use radians for polar
         'rotation_angle_deg': rotation_angle_deg,
         'magnitude': magnitude
     })
@@ -143,36 +146,51 @@ for val in slerp_values:
     hook_handle.remove()
 
 
-# --- Seaborn Scatter Plot ---
-console.print("\n[bold cyan]Generating Seaborn Scatter Plot...[/bold cyan]")
+# --- Seaborn Scatter Plot (Cartesian) ---
+console.print("\n[bold cyan]Generating Seaborn Scatter Plot (Cartesian)...[/bold cyan]")
 df = pd.DataFrame(results)
 
-# Create the scatter plot
-plt.figure(figsize=(10, 6))  # Adjust figure size for better visualization
+plt.figure(figsize=(10, 6))
 sns.scatterplot(x='rotation_angle_deg', y='korean_count', data=df, label='Korean', color='green', s=50)
 sns.scatterplot(x='rotation_angle_deg', y='japanese_count', data=df, label='Japanese', color='red', s=50)
-
-# Add labels and title
 plt.xlabel("Rotation Angle (degrees)", fontsize=12)
 plt.ylabel("Character Count", fontsize=12)
 plt.title("Language Steering: Character Counts vs. Rotation Angle", fontsize=14, fontweight='bold')
-
-# Add legend
 plt.legend(fontsize=10)
-
-# Add grid
 plt.grid(True)
+plt.xlim(df['rotation_angle_deg'].min() - 5, df['rotation_angle_deg'].max() + 5)
+plt.ylim(-5, max(df['korean_count'].max(), df['japanese_count'].max()) + 10)
+plt.tight_layout()
+plt.savefig("language_steering_plot_cartesian.png")
+console.print("[bold green]Cartesian scatter plot saved to language_steering_plot_cartesian.png[/bold green]")
 
-# Customize appearance
-plt.xlim(df['rotation_angle_deg'].min() - 5, df['rotation_angle_deg'].max() + 5)  # Add padding to x-axis
-plt.ylim(-5, max(df['korean_count'].max(), df['japanese_count'].max()) + 10)      # Add padding to y-axis
-plt.tight_layout()  # Adjust layout to prevent labels from overlapping
+# --- Seaborn Polar Plot ---
+console.print("\n[bold cyan]Generating Seaborn Polar Plot...[/bold cyan]")
 
-# Save the plot to a file
-plt.savefig("language_steering_plot.png")
-console.print("[bold green]Scatter plot saved to language_steering_plot.png[/bold green]")
+# Set up the polar plot
+plt.figure(figsize=(8, 8))
+ax = plt.subplot(111, projection='polar')
+
+# Plot Korean data
+sns.scatterplot(x='rotation_angle_rad', y='korean_count', data=df, label='Korean', color='green', s=50, ax=ax)
+# Plot Japanese Data
+sns.scatterplot(x='rotation_angle_rad', y='japanese_count', data=df, label='Japanese', color='red', s=50, ax=ax)
+
+# Customize the plot
+ax.set_theta_zero_location("N")  # Set 0 degrees to North
+ax.set_theta_direction(-1)  # Clockwise direction
+ax.set_rlabel_position(90) # Place radial labels nicely
+ax.set_xlabel("Rotation Angle (radians)", labelpad=20, fontsize=12) #labelpad moves label away from plot
+ax.set_ylabel("Character Count", labelpad=30, fontsize=12) #y label is radial
+ax.set_title("Language Steering: Character Counts vs. Rotation Angle (Polar)", fontsize=14, fontweight='bold', pad=20)
+ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))  # Adjust legend position
+
+plt.tight_layout()
+plt.savefig("language_steering_plot_polar.png")
+console.print("[bold green]Polar scatter plot saved to language_steering_plot_polar.png[/bold green]")
+
 
 # Convert results to DataFrame and export to CSV
-df = pd.DataFrame(results)
-df.to_csv("language_steering_results.csv", index=False)
+df_csv = pd.DataFrame(results)
+df_csv.to_csv("language_steering_results.csv", index=False)
 console.print("[bold green]Language steering results saved to language_steering_results.csv[/bold green]")
