@@ -46,10 +46,10 @@ def parse_args():
     parser.add_argument('--print_model_info', default=True, action=argparse.BooleanOptionalAction, help="print info about model before infernece")
 
     # Output Confidence
-    parser.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax'],
-                        help="Mode to colorize text: 'minmax' (default) or 'softmax'. "
+    parser.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k'],
+                        help="Mode to colorize text: 'minmax' (default), 'softmax', or 'softmax_top_k' for softmax only over the top k vals. "
                         "Requires --colorize_output (enabled by default).")
-    parser.add_argument('--colorize_output', default=True, action=argparse.BooleanOptionalAction,
+    parser.add_argument('--colorize_output', default=False, action=argparse.BooleanOptionalAction,
                     help="Colorize tokens based on their predicted probabilities. Default = True. "
                     "Disable with --no-colorize-output.")
 
@@ -90,7 +90,7 @@ def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
 
     norm_values = None
 
-    if colorize_mode == 'softmax':
+    if colorize_mode == 'softmax' or colorize_mode == 'softmax_top_k':
         # raw_logits is shape (T, vocab_size) per step
         # gather the chosen token’s probability each step
         # then apply min–max to those probabilities
@@ -399,6 +399,7 @@ def main():
     tokens_for_color = []
     logits_for_color = []
     all_logits_for_softmax = []
+    saved_logits = None
 
     x = torch.tensor(start_ids, dtype=torch.long, device=args.device)[None, ...]
     # Obtain vector from the specified layer and save it to a file if required
@@ -439,6 +440,8 @@ def main():
                         idx_cond = x if x.size(1) <= block_size else x[:, -block_size:]
                         logits, _ = model(idx_cond)
                         logits = logits[:, -1, :] / args.temperature
+                        if args.colorize_mode == 'softmax':
+                            saved_logits = logits.clone()
                         if args.top_k is not None:
                             v, _ = torch.topk(logits, min(args.top_k, logits.size(-1)))
                             logits[logits < v[:, [-1]]] = -float('Inf')
@@ -453,9 +456,14 @@ def main():
                         # Collect data for colorization:
                         if args.colorize_output:
                             if args.colorize_mode == 'softmax':
+                                # softmax over entire vocab
                                 tokens_for_color.append(idx_next.item())
-                                logits_for_color.append(logits[0].clone())  # shape = [vocab_size]
-                            else:
+                                logits_for_color.append(saved_logits[0].clone())
+                            elif args.colorize_mode == 'softmax_top_k':
+                                # softmax over only top k vocab
+                                tokens_for_color.append(idx_next.item())
+                                logits_for_color.append(logits[0].clone())
+                            elif args.colorize_mode == 'minmax':
                                 # We'll do min-max normalization over chosen-token logits
                                 tokens_for_color.append(idx_next.item())
                                 logits_for_color.append(logits[0, idx_next.item()])
@@ -478,7 +486,6 @@ def main():
                         console.print(colored_text)
                     else:
                         print("[bold green]" + output_line)
-
 
                     if args.sample_file:
                         with open(args.sample_file, "w") as file:
