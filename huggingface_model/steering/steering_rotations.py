@@ -161,7 +161,7 @@ def modify_residual_hook(module, input, output, steering_vector):
     return (modified_hidden,) + output[1:]
 
 # --- Text Generation, Scoring, and CSV Export ---
-slerp_values = np.linspace(-30, 30, 31)
+slerp_values = np.linspace(-20, 20, 41)
 console.print("[bold cyan]Generating text with sentiment steering using SLERP...[/bold cyan]")
 
 # Calculate the angle between the vectors
@@ -197,7 +197,7 @@ for val in slerp_values:
 
     # Calculate spelling scores
     score_fr, score_es = calculate_spelling_scores(generated_text)
-    console.print(f"[bold magenta]French Spelling Score: {score_fr:.4f}[/bold magenta]")
+    console.print(f"[bold yellow]French Spelling Score: {score_fr:.4f}[/bold yellow]")
     console.print(f"[bold cyan]Spanish Spelling Score: {score_es:.4f}[/bold cyan]")
 
     # Store results
