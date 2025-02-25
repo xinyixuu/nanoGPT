@@ -30,10 +30,10 @@ def format_percentage(value):
 
 def format_ratio(value):
     """Format ratio with color."""
+    eps = 0.0001
     if value == "NaN":
         return value
     value = float(value)
-    eps = 0.001
     if value > 1 + eps:
         return f"[green]{value:.2f}[/green]"  # Green if scaled magnitude is greater
     elif value < 1 - eps:
@@ -52,6 +52,12 @@ def magnitude_change_ratio(x, y):
     x_mag = np.linalg.norm(x)
     y_mag = np.linalg.norm(y)
     return y_mag / (x_mag + 1e-16) if x_mag !=0 else "NaN"
+
+def sum_ratio(x, y):
+    """Calculate the ratio of the sums of two vectors."""
+    x_sum = np.sum(x)
+    y_sum = np.sum(y)
+    return x_sum / (y_sum) if y_sum != 0 else "NaN"
 
 
 def main():
@@ -141,13 +147,30 @@ def main():
     combined_table = Table(title="Vector Similarity and Magnitude Change", style=Style(color="blue"))
     combined_table.add_column("Metric")
     combined_table.add_column("Dot Product", justify="right")
-    combined_table.add_column("Ratio", justify="right")
+    combined_table.add_column("Magnitude Ratio (Scaled/Unscaled)", justify="right")
+    combined_table.add_column("Sum Ratio (Scaled/Unscaled)", justify="right")  # New column
 
-    combined_table.add_row("Softmax", f"{vector_similarity(normalized, scaled_normalized):.4f}", format_ratio(magnitude_change_ratio(normalized, scaled_normalized)))
-    combined_table.add_row("Non-normalized Softmax", f"{vector_similarity(non_normalized, scaled_non_normalized):.4f}", format_ratio(magnitude_change_ratio(non_normalized, scaled_non_normalized)))
-    combined_table.add_row("OBO Softmax", f"{vector_similarity(obo, scaled_obo):.4f}", format_ratio(magnitude_change_ratio(obo, scaled_obo)))
-    combined_table.add_row("ReLU", f"{vector_similarity(relu_result, scaled_relu_result):.4f}", format_ratio(magnitude_change_ratio(relu_result, scaled_relu_result)))
-    combined_table.add_row("Normalized ReLU", f"{vector_similarity(normalized_relu, scaled_normalized_relu):.4f}", format_ratio(magnitude_change_ratio(normalized_relu, scaled_normalized_relu)))
+
+    combined_table.add_row("Softmax",
+                           f"{vector_similarity(normalized, scaled_normalized):.4f}",
+                           format_ratio(magnitude_change_ratio(normalized, scaled_normalized)),
+                           format_ratio(sum_ratio(scaled_normalized, normalized))) # Calculate and add sum ratio
+    combined_table.add_row("Non-normalized Softmax",
+                           f"{vector_similarity(non_normalized, scaled_non_normalized):.4f}",
+                           format_ratio(magnitude_change_ratio(non_normalized, scaled_non_normalized)),
+                           format_ratio(sum_ratio(scaled_non_normalized, non_normalized)))  # Calculate and add sum ratio
+    combined_table.add_row("OBO Softmax",
+                            f"{vector_similarity(obo, scaled_obo):.4f}",
+                            format_ratio(magnitude_change_ratio(obo, scaled_obo)),
+                            format_ratio(sum_ratio(scaled_obo, obo))) # Calculate and add sum ratio
+    combined_table.add_row("ReLU",
+                            f"{vector_similarity(relu_result, scaled_relu_result):.4f}",
+                            format_ratio(magnitude_change_ratio(relu_result, scaled_relu_result)),
+                            format_ratio(sum_ratio(scaled_relu_result, relu_result))) # Calculate and add sum ratio
+    combined_table.add_row("Normalized ReLU",
+                            f"{vector_similarity(normalized_relu, scaled_normalized_relu):.4f}",
+                            format_ratio(magnitude_change_ratio(normalized_relu, scaled_normalized_relu)),
+                            format_ratio(sum_ratio(scaled_normalized_relu, normalized_relu))) # Calculate and add sum ratio
 
     console.print(combined_table)
 
