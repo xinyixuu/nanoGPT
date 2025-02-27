@@ -1,0 +1,8 @@
+[
+  {
+    "use_rotary_embeddings": [false, true],
+    "init_variant": ["onehot", "hypercube", "gaussian"],
+    "use_abs_pos_embeddings": [true, false],
+    "tensorboard_run_name": ["init_sweep"]
+  }
+]

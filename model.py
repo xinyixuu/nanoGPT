@@ -40,6 +40,8 @@ from variations.router_variations import router_dictionary
 from quantization.quantize import quantize_dictionary, dequantize, fake_quantize_act
 from quantization.quant_utils import set_variant, create_activation_buffers
 
+from initializations.initialization_variations import init_dictionary
+
 def create_shared_param_group(layer_type, config):
     """
     Creates a shared list of layer blocks (either MLP or Attn), optionally reusing blocks
@@ -308,12 +310,39 @@ class GPT(nn.Module):
                     block.attn.bias = torch.tril(torch.ones(new_block_size, new_block_size)).view(1, 1, new_block_size, new_block_size)
 
     def _init_weights(self, module):
+        """
+        Custom weight initialization logic for GPT model.
+        """
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=self.config.linear_mean_init, std=self.config.linear_std_init)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=self.config.embedding_mean_init, std=self.config.embedding_std_init)
+            print(self.config.init_variant)
+            if self.config.init_variant == "gaussian":
+                torch.nn.init.normal_(
+                    module.weight,
+                    mean=self.config.embedding_mean_init,
+                    std=self.config.embedding_std_init
+                )
+            else:
+                init_fn = init_dictionary[self.config.init_variant]
+
+                # Generate custom init matrix
+                weight_data = init_fn(
+                    vocab_size=module.num_embeddings,
+                    n_embd=module.embedding_dim
+                )
+
+                # Copy into the module's weight
+                with torch.no_grad():
+                    if weight_data.shape != module.weight.shape:
+                        raise ValueError(
+                            f"Init shape {weight_data.shape} does not match embedding shape {module.weight.shape} "
+                            f"for init_variant='{init_variant}'"
+                        )
+                    module.weight.copy_(weight_data)
+
 
     def update_num_angles(self, num_angles):
         """Update the number of angles for rotary embeddings in all attention layers."""
