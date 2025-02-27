@@ -698,7 +698,7 @@ class Trainer:
 
         self.model.eval()
         # If multi-dataset sampling is enabled, we calculate loss per dataset
-        if self.args.dataset_list and len(self.args.dataset_list) > 1:
+        if self.args.dataset_list:
             for dataset in self.args.dataset_list:
                 print(f"Calculating loss for dataset: {dataset}")
                 dataset_losses = {'train': torch.zeros(self.args.eval_iters), 'val': torch.zeros(self.args.eval_iters)}
@@ -830,16 +830,16 @@ class Trainer:
             self.writer.add_scalar(f"{target_dataset}/vram", self.vram_allocated, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/mfu_pct", running_mfu * 100, self.iter_num)
 
-            self.writer.add_scalar(f"{target_dataset}/lr", self.lr, self.iter_num)
-            self.writer.add_scalar(f"{target_dataset}/lr", self.lr, tokens_trained)
+            self.writer.add_scalar(f"{target_dataset}/lr_iters", self.lr, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/lr_tokens", self.lr, tokens_trained)
 
-            self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, self.iter_num)
-            self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, tokens_trained)
+            self.writer.add_scalar(f"{target_dataset}/batch_size_iters", self.args.batch_size, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/batch_size_tokens", self.args.batch_size, tokens_trained)
 
 
             if self.args.gns_type is not None:
-                self.writer.add_scalar(f"{target_dataset}/gns", self.gns, self.iter_num)
-                self.writer.add_scalar(f"{target_dataset}/gns", self.gns, tokens_trained)
+                self.writer.add_scalar(f"{target_dataset}/gns_iters", self.gns, self.iter_num)
+                self.writer.add_scalar(f"{target_dataset}/gns_tokens", self.gns, tokens_trained)
 
 
         if self.args.csv_log:
@@ -868,21 +868,21 @@ class Trainer:
             self.writer.add_scalar(f"{target_dataset}/epoch", epoch, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/tokens_trained", tokens_trained, self.iter_num)
 
-            self.writer.add_scalar(f"{target_dataset}/lr", self.lr, self.iter_num)
-            self.writer.add_scalar(f"{target_dataset}/lr", self.lr, tokens_trained)
+            self.writer.add_scalar(f"{target_dataset}/lr_iters", self.lr, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/lr_tokens", self.lr, tokens_trained)
 
-            self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, self.iter_num)
-            self.writer.add_scalar(f"{target_dataset}/batch_size", self.args.batch_size, tokens_trained)
+            self.writer.add_scalar(f"{target_dataset}/batch_size_iter", self.args.batch_size, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/batch_size_tokens", self.args.batch_size, tokens_trained)
 
-            self.writer.add_scalar(f"{target_dataset}/grad_norm", self.grad_norm, self.iter_num)
-            self.writer.add_scalar(f"{target_dataset}/grad_norm", self.grad_norm, tokens_trained)
+            self.writer.add_scalar(f"{target_dataset}/grad_norm_iters", self.grad_norm, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/grad_norm_tokens", self.grad_norm, tokens_trained)
 
-            self.writer.add_scalar(f"{target_dataset}/grad_std", self.grad_std, self.iter_num)
-            self.writer.add_scalar(f"{target_dataset}/grad_std", self.grad_std, tokens_trained)
+            self.writer.add_scalar(f"{target_dataset}/grad_std_iters", self.grad_std, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/grad_std_tokens", self.grad_std, tokens_trained)
 
             if self.args.gns_type is not None:
-                self.writer.add_scalar(f"{target_dataset}/gns", self.gns, self.iter_num)
-                self.writer.add_scalar(f"{target_dataset}/gns", self.gns, tokens_trained)
+                self.writer.add_scalar(f"{target_dataset}/gns_iters", self.gns, self.iter_num)
+                self.writer.add_scalar(f"{target_dataset}/gns_tokens", self.gns, tokens_trained)
 
     def write_to_csv(self, *args, prefix=""):
         args = list(args)
@@ -987,7 +987,7 @@ class Trainer:
                     else:
                         # Default behavior for a single dataset
                         print(f"step {self.iter_num}: train loss {losses['train']:.4f}, train_stdev {losses['train_std']:.4f}, val loss {losses['val']:.4f}, val_stdev {losses['val_std']:.4f}, lr {self.lr:.4f}")
-                        self.log_metrics(losses, current_epoch, running_mfu, self.tokens_trained, current_dataset)
+                        self.log_metrics(losses, running_mfu, current_epoch, self.tokens_trained, current_dataset)
 
                     if math.isnan(losses["val"]):
                         # If val loss is nan, then exit.
