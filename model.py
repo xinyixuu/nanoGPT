@@ -243,11 +243,6 @@ class GPT(nn.Module):
             self.lm_head = nn.Linear(config.n_embd_wte, config.vocab_size, bias=False)
         else:
             self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
         # Initialize and possibly import scale_up and scale_down matrices, if factorization is set
         if self.n_embd_wte:
@@ -265,6 +260,12 @@ class GPT(nn.Module):
 
         # init all weights
         self.apply(self._init_weights)
+
+        # with weight tying when using torch.compile() some warnings get generated:
+        # "UserWarning: functional_call was passed multiple values for tied weights.
+        # This behavior is deprecated and will be an error in future versions"
+        # not 100% sure what this is, so far seems to be harmless. TODO investigate
+        self.lm_head.weight = self.transformer.wte.weight # https://paperswithcode.com/method/weight-tying
 
         # import wte
         if self.config.import_wte_npy:
@@ -318,8 +319,7 @@ class GPT(nn.Module):
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            print(self.config.init_variant)
-            if self.config.init_variant == "gaussian":
+            if self.config.init_variant == "gaussian" or module is self.transformer['wpe']:
                 torch.nn.init.normal_(
                     module.weight,
                     mean=self.config.embedding_mean_init,
@@ -330,8 +330,8 @@ class GPT(nn.Module):
 
                 # Generate custom init matrix
                 weight_data = init_fn(
-                    vocab_size=module.num_embeddings,
-                    n_embd=module.embedding_dim
+                    vocab_size=self.config.vocab_size,
+                    n_embd=self.config.n_embd
                 )
 
                 # Copy into the module's weight
@@ -339,7 +339,7 @@ class GPT(nn.Module):
                     if weight_data.shape != module.weight.shape:
                         raise ValueError(
                             f"Init shape {weight_data.shape} does not match embedding shape {module.weight.shape} "
-                            f"for init_variant='{init_variant}'"
+                            f"for init_variant='{self.config.init_variant}'"
                         )
                     module.weight.copy_(weight_data)
 

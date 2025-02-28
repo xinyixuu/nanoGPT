@@ -9,6 +9,8 @@ def direct_init(vocab_size: int, n_embd: int):
     and then pick the first `vocab_size`.
     """
     n_corners = 2 ** n_embd
+    n_corners = min(n_corners, vocab_size)
+
     if vocab_size > n_corners:
         raise ValueError(
             f"Not enough corners (2^{n_embd}={n_corners}) for vocab_size={vocab_size} in 'direct' mode."
