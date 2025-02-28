@@ -10,6 +10,11 @@ from quantization.quant_utils import set_variant, create_activation_buffers
 from variations.softmax_variations import softmax_dictionary
 from variations.position_encoding_variations import QuantizedEmbedding, RotaryEmbedding, SymmetricalOverlapAngularPositions, FIRE
 
+# Mamba related imports
+if torch.cuda.is_available():
+    from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, config, fire_pos_enc=None):
         super().__init__()
@@ -387,7 +392,144 @@ class LinearAttention(nn.Module):
 
         return y
 
+class HymbaRMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        HymbaRMSNorm is equivalent to T5LayerNorm
+        """
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        return self.weight * hidden_states.to(input_dtype)
+
+class MambaBlock(nn.Module):
+    """ This function contains code adapted from [Hymba](https://github.com/NVlabs/hymba/) 
+    by the NVIDIA team, licensed under the [NVIDIA Open Model License Agreement]
+    (https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/).
+    """  
+    def __init__(self, config, fire_pos_enc=None):
+        super().__init__()
+
+        self.d_model = config.n_embd
+        self.d_inner = int(self.d_model * config.ssm_mamba_expand)
+        self.conv_kernel_size = config.ssm_conv_kernel_size
+        self.dt_rank = config.ssm_dt_rank
+        self.d_state = config.ssm_d_state
+        self.io_bias = config.ssm_io_bias
+
+        self.conv1d = nn.Conv1d(
+            in_channels=self.d_inner,
+            out_channels=self.d_inner,
+            bias=True,
+            kernel_size=self.conv_kernel_size,
+            groups=self.d_inner,
+            padding=self.conv_kernel_size - 1
+        )       
+
+        num_ssm_param = 1
+        self.in_proj = nn.ModuleList([nn.Linear(self.d_model, self.d_inner * 2, bias=self.io_bias)])
+        self.x_proj = nn.ModuleList([nn.Linear(self.d_inner, self.dt_rank + self.d_state * 2, bias=False) for _ in range(num_ssm_param)])
+        self.dt_proj = nn.ModuleList([nn.Linear(self.dt_rank, self.d_inner, bias=True) for _ in range(num_ssm_param)])
+        self.out_proj = nn.ModuleList([nn.Linear(self.d_inner, self.d_model, bias=self.io_bias)])
+
+        A = torch.arange(1, self.d_state + 1, dtype=torch.float32)[None, :]
+        A = A.expand(self.d_inner, -1).contiguous()
+        self.A_log = nn.ParameterList([nn.Parameter(torch.log(A)) for _ in range(num_ssm_param)])
+
+        self.D = nn.ParameterList([nn.Parameter(torch.ones(self.d_inner)) for _ in range(num_ssm_param)])
+
+        self.dt_layernorm = HymbaRMSNorm(self.dt_rank, eps=1e-06)
+        self.B_layernorm = HymbaRMSNorm(self.d_state, eps=1e-06)
+        self.C_layernorm = HymbaRMSNorm(self.d_state, eps=1e-06)
+        self.scan_outputs_layernorm = HymbaRMSNorm(self.d_inner)
+    
+    def _apply_layernorms(self, dt, B, C):
+        if self.dt_layernorm is not None:
+            dt = self.dt_layernorm(dt)
+        if self.B_layernorm is not None:
+            B = self.B_layernorm(B)
+        if self.C_layernorm is not None:
+            C = self.C_layernorm(C)
+        return dt, B, C
+
+    def forward(self, x, gate):
+        '''
+        Parameters:
+            x: (batch_size, seqlen, d_model)
+        Return:
+            scan_outputs: (batch_size, seqlen, d_model)
+
+        # d_model == n_embd (in attention)
+        # d_inner == d_model * mamba_expand
+
+        # conv1d.weight: (d_inner, 1, conv_kernel_size)
+        # conv_weights: (d_inner, conv_kernel_size)
+        # hidden_states: (batch_size, d_inner, seqlen)
+        # gate: (batch_size, d_inner, seqlen)
+        # delta: (batch_size, seqlen, dt_rank)
+        # discrete_delta: (batch, d_inner, seqlen)
+        # A: (d_inner, d_state)
+        # B: (batch_size, seqlen, d_state) before transpose(1,2)
+        # C: (batch_size, seqlen, d_state) before transpose(1,2)
+        '''
+        # we only have a single mamba head at this point
+        index = 0
+
+        projected_states = self.in_proj[index](x).transpose(1,2)
+
+        hidden_states, gate = projected_states.tensor_split((self.d_inner,), dim=1)
+
+        conv_weights = self.conv1d.weight.view(self.conv1d.weight.size(0), self.conv1d.weight.size(2))
+        hidden_states = causal_conv1d_fn(
+            hidden_states, conv_weights, self.conv1d.bias, activation="silu"
+        )
+        
+        ssm_parameters = self.x_proj[index](hidden_states.transpose(1, 2))
+        delta, B, C = torch.split(ssm_parameters, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        delta, B, C = self._apply_layernorms(delta, B, C)
+        dt_proj_bias = self.dt_proj[index].bias
+        self.dt_proj[index].bias = None
+        discrete_delta = self.dt_proj[index](delta).transpose(1, 2)  # (batch_size, d_inner, seqlen)
+        self.dt_proj[index].bias = dt_proj_bias
+
+        A = -torch.exp(self.A_log[index].float())
+
+        dt_proj_bias = dt_proj_bias.float() if dt_proj_bias is not None else None
+
+        # mammba kernel from mamba_ssm
+        outputs = selective_scan_fn(
+            hidden_states,                          # (batch_size, d_inner, seqlen)
+            discrete_delta,
+            A,
+            B.transpose(1, 2).to(torch.float16),    # torch.float32 -> torch.float16 for selective_scan_fn
+            C.transpose(1, 2).to(torch.float16),    # torch.float32 -> torch.float16 for selective_scan_fn
+            self.D[index].float(),
+            z=gate,
+            delta_bias=dt_proj_bias,
+            delta_softplus=True,
+            return_last_state=True,
+        )                                           # (batch_size, d_inner, seqlen)
+        
+        if len(outputs) == 3:
+            scan_outputs, _, _ = outputs            # scan_outputs, ssm_state, last_state
+                                                    # ssm_state are updated inplace
+        else:
+            scan_outputs, _ = outputs
+
+        scan_outputs = scan_outputs.transpose(1, 2)  # (batch_size, seqlen, d_inner)
+        scan_outputs = self.scan_outputs_layernorm(scan_outputs)
+
+        output = self.out_proj[index](scan_outputs)
+        return output
+
 attention_dictionary = {
     "causal": CausalSelfAttention,
     "linear": LinearAttention,
+    "ssm": MambaBlock,
 }

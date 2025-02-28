@@ -73,6 +73,13 @@ class GPTConfig:
     # Attention Options
     attention_variant: str = "causal"
 
+    ## SSM - Attention Varient (same as Hymba)
+    ssm_mamba_expand: int = 2
+    ssm_conv_kernel_size: int = 3
+    ssm_dt_rank: int = 8
+    ssm_d_state: int = 16
+    ssm_io_bias: bool = True
+
     # MLP Options
     use_parallel_mlp: bool = False
     mlp_variant: str = "mlp"
