@@ -1,3 +1,4 @@
+# model.py
 """
 Full definition of a GPT Language Model, all of it in this single file.
 References:
