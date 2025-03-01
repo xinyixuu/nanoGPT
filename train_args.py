@@ -581,6 +581,9 @@ def parse_args():
     logging_group.add_argument('--tensorboard_run_name', type=str, default='logs-test')
     logging_group.add_argument('--tensorboard_graph', default=True, action=argparse.BooleanOptionalAction)
 
+    ## Export Model graph
+    logging_group.add_argument('--export_model_graph', default=False, action=argparse.BooleanOptionalAction, help="exports tensorboard model of graph")
+
     # Onnx args
     logging_group.add_argument('--onnx_output', default=False, action=argparse.BooleanOptionalAction)
 
