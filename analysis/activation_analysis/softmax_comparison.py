@@ -1,178 +1,144 @@
 import argparse
 import numpy as np
+import torch
 from rich.console import Console
 from rich.table import Table
 from rich.style import Style
 
-def softmax(x):
-    """Compute softmax values for each set of scores in x."""
-    e_x = np.exp(x - np.max(x))  # Subtract max for numerical stability
-    return e_x / e_x.sum(), e_x, e_x / (1 + e_x.sum())
+console = Console()
 
-def relu(x):
-    """Compute ReLU values."""
-    relu_values = np.maximum(0, x)
-    relu_sum = relu_values.sum()
-    normalized_relu = relu_values / relu_sum if relu_sum != 0 else np.zeros_like(relu_values)
-    return relu_values, normalized_relu
+def numpy_softmax(x):
+    e_x = np.exp(x - np.max(x))
+    values = e_x
+    normalized = e_x / e_x.sum()
+    return values, normalized
 
 def format_percentage(value):
-    """Format percentage with color."""
-    if value == "NaN":
-        return value
+    if value == "NaN": return value
     value = float(value)
-    if value > 0:
-        return f"[green]+{value:.2f}%[/green]"
-    elif value < 0:
-        return f"[red]{value:.2f}%[/red]"
-    else:
-        return f"{value:.2f}%"
+    return f"[green]+{value:.2f}%[/green]" if value > 0 else f"[red]{value:.2f}%[/red]" if value < 0 else f"{value:.2f}%"
 
 def format_ratio(value):
-    """Format ratio with color."""
-    eps = 0.0001
-    if value == "NaN":
-        return value
+    if value == "NaN": return value
     value = float(value)
-    if value > 1 + eps:
-        return f"[green]{value:.2f}[/green]"  # Green if scaled magnitude is greater
-    elif value < 1 - eps:
-        return f"[red]{value:.2f}[/red]"  # Red if scaled magnitude is smaller
-    else:
-        return f"{value:.2f}"
+    return f"[green]{value:.2f}[/green]" if value > 1.0001 else f"[red]{value:.2f}[/red]" if value < 0.9999 else f"{value:.2f}"
 
 def vector_similarity(x, y):
-    """Calculate the dot product of two vectors after normalizing by their magnitudes."""
-    x_norm = x / (np.linalg.norm(x) + 1e-16)  # Adding a small constant to avoid division by zero
+    x_norm = x / (np.linalg.norm(x) + 1e-16)
     y_norm = y / (np.linalg.norm(y) + 1e-16)
     return np.dot(x_norm, y_norm)
 
 def magnitude_change_ratio(x, y):
-    """Calculate the ratio of the magnitudes of two vectors."""
-    x_mag = np.linalg.norm(x)
-    y_mag = np.linalg.norm(y)
-    return y_mag / (x_mag + 1e-16) if x_mag !=0 else "NaN"
+    x_mag, y_mag = np.linalg.norm(x), np.linalg.norm(y)
+    return y_mag / (x_mag + 1e-16) if x_mag else "NaN"
 
 def sum_ratio(x, y):
-    """Calculate the ratio of the sums of two vectors."""
-    x_sum = np.sum(x)
-    y_sum = np.sum(y)
-    return x_sum / (y_sum) if y_sum != 0 else "NaN"
+    return np.sum(x) / np.sum(y) if np.sum(y) else "NaN"
 
+def create_table(title, color, columns, rows):
+    table = Table(title=title, style=Style(color=color))
+    for col, justify in columns:
+        table.add_column(col, justify=justify)
+    for row in rows:
+        table.add_row(*row)
+    console.print(table)
+
+def compute_changes(base, scaled):
+    changes = []
+    for b, s in zip(base, scaled):
+        if b == 0:
+            changes.append("NaN")
+        else:
+            changes.append(f"{(s - b) / b * 100:.2f}")
+    return [format_percentage(c) for c in changes]
+
+def apply_torch_fn(fn, x):
+    values = fn(torch.tensor(x, dtype=torch.float32)).numpy()
+    total = values.sum()
+    normalized = values / total if total else np.zeros_like(values)
+    return values, normalized
 
 def main():
-    parser = argparse.ArgumentParser(description="Compare softmax and ReLU results.")
-    parser.add_argument("numbers", nargs="+", type=float, help="List of numbers to process.")
-    parser.add_argument("--scale", type=float, default=10.0, help="Constant to multiply input numbers by.")
-
+    parser = argparse.ArgumentParser(description="Compare activation function results.")
+    parser.add_argument("numbers", nargs="+", type=float)
+    parser.add_argument("--scale", type=float, default=10.0)
     args = parser.parse_args()
+
     numbers = np.array(args.numbers)
     scaled_numbers = numbers * args.scale
 
-    console = Console()
+    pytorch_fns = [
+        ("ReLU", torch.nn.ReLU()),
+        ("Softplus", torch.nn.Softplus()),
+        ("Sigmoid", torch.nn.Sigmoid()),
+    ]
 
-    # Calculations
-    normalized, non_normalized, obo = softmax(numbers)
-    scaled_normalized, scaled_non_normalized, scaled_obo = softmax(scaled_numbers)
-    relu_result, normalized_relu = relu(numbers)
-    scaled_relu_result, scaled_normalized_relu = relu(scaled_numbers)
+    methods = {"Softmax": numpy_softmax}
+    for name, module in pytorch_fns:
+        methods[name] = lambda x, m=module: apply_torch_fn(m, x)
 
-    # --- Unscaled Results Table ---
-    unscaled_table = Table(title="Unscaled Results", style=Style(color="cyan"))
-    unscaled_table.add_column("Input")
-    unscaled_table.add_column("Normalized", justify="right")
-    unscaled_table.add_column("Non-normalized", justify="right")
-    unscaled_table.add_column("OBO", justify="right")
-    unscaled_table.add_column("ReLU", justify="right")
-    unscaled_table.add_column("Normalized ReLU", justify="right")
+    results = {}
+    for name, func in methods.items():
+        results[name] = {
+            'base': func(numbers),
+            'scaled': func(scaled_numbers)
+        }
 
+    # Unscaled and Scaled Results Tables
+    for scale_label, data, color in [("Unscaled Results", numbers, "cyan"), ("Scaled Results", scaled_numbers, "magenta")]:
+        result_type = 'base' if scale_label == 'Unscaled Results' else 'scaled'
+        rows = []
+        for i, num in enumerate(data):
+            row = [f"{num:.2f}"]
+            for name in methods:
+                values, normalized = results[name][result_type]
+                row.extend([f"{values[i]:.2f}", f"{normalized[i]:.2f}"])
+            rows.append(row)
+
+        columns = [("Input", "left")]
+        for name in methods:
+            columns.extend([(name, "right"), (f"Normalized {name}", "right")])
+
+        create_table(scale_label, color, columns, rows)
+
+    # Percentage Changes Table
+    pct_rows = []
     for i in range(len(numbers)):
-        unscaled_table.add_row(
-            f"{numbers[i]:.2f}",
-            f"{normalized[i]:.2f}",
-            f"{non_normalized[i]:.2f}",
-            f"{obo[i]:.2f}",
-            f"{relu_result[i]:.2f}",
-            f"{normalized_relu[i]:.2f}",
-        )
-    console.print(unscaled_table)
+        row = [f"{numbers[i]:.2f}"]
+        for name in methods:
+            base_values, base_norm = results[name]['base']
+            scaled_values, scaled_norm = results[name]['scaled']
+            row.extend(compute_changes(base_values[i:i+1], scaled_values[i:i+1]))
+            row.extend(compute_changes(base_norm[i:i+1], scaled_norm[i:i+1]))
+        pct_rows.append(row)
 
-    # --- Scaled Results Table ---
-    scaled_table = Table(title="Scaled Results", style=Style(color="magenta"))
-    scaled_table.add_column("Input")
-    scaled_table.add_column("Scaled Normalized", justify="right")
-    scaled_table.add_column("Scaled Non-normalized", justify="right")
-    scaled_table.add_column("Scaled OBO", justify="right")
-    scaled_table.add_column("Scaled ReLU", justify="right")
-    scaled_table.add_column("Scaled Normalized ReLU", justify="right")
+    pct_columns = [("Input", "left")]
+    for name in methods:
+        pct_columns.extend([(f"{name}", "right"), (f"Normalized {name}", "right")])
 
-    for i in range(len(numbers)):
-        scaled_table.add_row(
-            f"{scaled_numbers[i]:.2f}",
-            f"{scaled_normalized[i]:.2f}",
-            f"{scaled_non_normalized[i]:.2f}",
-            f"{scaled_obo[i]:.2f}",
-            f"{scaled_relu_result[i]:.2f}",
-            f"{scaled_normalized_relu[i]:.2f}",
-        )
-    console.print(scaled_table)
+    create_table("Percentage Changes", "green", pct_columns, pct_rows)
 
-    # --- Percentage Change Table ---
-    change_table = Table(title="Percentage Changes", style=Style(color="green"))
-    change_table.add_column("Input")
-    change_table.add_column("Normalized % Change", justify="right")
-    change_table.add_column("Non-normalized % Change", justify="right")
-    change_table.add_column("OBO % Change", justify="right")
-    change_table.add_column("ReLU % Change", justify="right")
-    change_table.add_column("Normalized ReLU % Change", justify="right")
+    # Vector Similarity and Magnitude Change Table
+    sim_rows = []
+    for name in methods:
+        base_values, base_norm = results[name]['base']
+        scaled_values, scaled_norm = results[name]['scaled']
+        sim_rows.append([
+            name,
+            f"{vector_similarity(base_values, scaled_values):.4f}",
+            format_ratio(magnitude_change_ratio(base_values, scaled_values)),
+            format_ratio(sum_ratio(scaled_values, base_values))
+        ])
+        sim_rows.append([
+            f"Normalized {name}",
+            f"{vector_similarity(base_norm, scaled_norm):.4f}",
+            format_ratio(magnitude_change_ratio(base_norm, scaled_norm)),
+            format_ratio(sum_ratio(scaled_norm, base_norm))
+        ])
 
-    for i in range(len(numbers)):
-        norm_change = "NaN" if normalized[i] == 0 else f"{((scaled_normalized[i] - normalized[i]) / normalized[i]) * 100:.2f}"
-        non_norm_change = "NaN" if non_normalized[i] == 0 else f"{((scaled_non_normalized[i] - non_normalized[i]) / non_normalized[i]) * 100:.2f}"
-        obo_change = "NaN" if obo[i] == 0 else f"{((scaled_obo[i] - obo[i]) / obo[i]) * 100:.2f}"
-        relu_change = "NaN" if relu_result[i] == 0 else f"{((scaled_relu_result[i] - relu_result[i]) / relu_result[i]) * 100:.2f}"
-        norm_relu_change = "NaN" if normalized_relu[i] == 0 else f"{((scaled_normalized_relu[i] - normalized_relu[i]) / normalized_relu[i]) * 100:.2f}"
-
-        change_table.add_row(
-            f"{numbers[i]:.2f}",
-            format_percentage(norm_change),
-            format_percentage(non_norm_change),
-            format_percentage(obo_change),
-            format_percentage(relu_change),
-            format_percentage(norm_relu_change),
-        )
-    console.print(change_table)
-
-     # --- Combined Similarity and Magnitude Table ---
-    combined_table = Table(title="Vector Similarity and Magnitude Change", style=Style(color="blue"))
-    combined_table.add_column("Metric")
-    combined_table.add_column("Dot Product", justify="right")
-    combined_table.add_column("Magnitude Ratio (Scaled/Unscaled)", justify="right")
-    combined_table.add_column("Sum Ratio (Scaled/Unscaled)", justify="right")  # New column
-
-
-    combined_table.add_row("Softmax",
-                           f"{vector_similarity(normalized, scaled_normalized):.4f}",
-                           format_ratio(magnitude_change_ratio(normalized, scaled_normalized)),
-                           format_ratio(sum_ratio(scaled_normalized, normalized))) # Calculate and add sum ratio
-    combined_table.add_row("Non-normalized Softmax",
-                           f"{vector_similarity(non_normalized, scaled_non_normalized):.4f}",
-                           format_ratio(magnitude_change_ratio(non_normalized, scaled_non_normalized)),
-                           format_ratio(sum_ratio(scaled_non_normalized, non_normalized)))  # Calculate and add sum ratio
-    combined_table.add_row("OBO Softmax",
-                            f"{vector_similarity(obo, scaled_obo):.4f}",
-                            format_ratio(magnitude_change_ratio(obo, scaled_obo)),
-                            format_ratio(sum_ratio(scaled_obo, obo))) # Calculate and add sum ratio
-    combined_table.add_row("ReLU",
-                            f"{vector_similarity(relu_result, scaled_relu_result):.4f}",
-                            format_ratio(magnitude_change_ratio(relu_result, scaled_relu_result)),
-                            format_ratio(sum_ratio(scaled_relu_result, relu_result))) # Calculate and add sum ratio
-    combined_table.add_row("Normalized ReLU",
-                            f"{vector_similarity(normalized_relu, scaled_normalized_relu):.4f}",
-                            format_ratio(magnitude_change_ratio(normalized_relu, scaled_normalized_relu)),
-                            format_ratio(sum_ratio(scaled_normalized_relu, normalized_relu))) # Calculate and add sum ratio
-
-    console.print(combined_table)
+    create_table("Vector Similarity and Magnitude Change", "blue",
+                 [("Metric", "left"), ("Dot Product", "right"), ("Magnitude Ratio", "right"), ("Sum Ratio", "right")],
+                 sim_rows)
 
 if __name__ == "__main__":
     main()
