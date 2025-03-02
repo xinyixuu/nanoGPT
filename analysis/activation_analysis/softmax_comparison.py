@@ -13,6 +13,12 @@ def numpy_softmax(x):
     normalized = e_x / e_x.sum()
     return values, normalized
 
+def obo(x):
+    e_x = np.exp(x - np.max(x))
+    obo_1 = e_x / (1 + e_x.sum())
+    obo_10 = e_x / (10 + e_x.sum())
+    return obo_1, obo_10
+
 def format_percentage(value):
     if value == "NaN": return value
     value = float(value)
@@ -73,7 +79,7 @@ def main():
         ("Sigmoid", torch.nn.Sigmoid()),
     ]
 
-    methods = {"Softmax": numpy_softmax}
+    methods = {"Softmax": numpy_softmax, "Obo": obo}
     for name, module in pytorch_fns:
         methods[name] = lambda x, m=module: apply_torch_fn(m, x)
 
