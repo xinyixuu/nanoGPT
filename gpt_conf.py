@@ -12,6 +12,9 @@ class GPTConfig:
     n_kv_group: int = 12
     n_embd: int = 768
 
+    # Attention Variation Spedcific
+    n_head_dim: int = None # For Infinite Attention variation
+
     # Steering Vectors
     ## Where to intercept
     apply_vector_at_layer_idx: int = None
