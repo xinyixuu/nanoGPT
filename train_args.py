@@ -275,9 +275,12 @@ def parse_args():
         "--attention_variant",
         type=str,
         default="causal",
-        choices=["causal", "linear", "ssm"],
+        choices=["causal", "linear", "ssm", "infinite"],
         help="Which attention variant to use for the Transformer blocks."
     )
+
+    # Inifinite Attention variation
+    model_group.add_argument('--n_head_dim', default=None, type=int)
 
     ## SSM - Attention Varient (same as Hymba)
     model_group.add_argument("--ssm_mamba_expand",   type=int,  default=2)
