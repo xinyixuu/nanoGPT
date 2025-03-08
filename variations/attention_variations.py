@@ -528,6 +528,7 @@ class MambaBlock(nn.Module):
         output = self.out_proj[index](scan_outputs)
         return output
 
+
 class Identity(nn.Module):
     def __init__(self, config, fire_pos_enc=None):
         super(Identity, self).__init__()
@@ -535,9 +536,103 @@ class Identity(nn.Module):
     def forward(self, x, iter_num=None):
         return x
 
+class InfiniteHeadAttention(nn.Module):
+    """Instead of concatenating heads, utilizing higher capacity, we assume the
+    vector features are independent of each other, and simply add the values.
+
+    This removes the constraint of having number_of_heads % embed_dim = 0, resulting in:
+      * a) removes the limit on the number of heads (before increasing heads too much leads to reduced emb_dim per head, and head utility)
+      * b) from a), this means we can keep adding heads until the model saturates the vector.
+      * c) while all heads need to be the same size, we have new param exploration, number of heads and the dimension per head.
+      * d) we can potentially even try removing the c_proj, if the embedding dimension chosen is the same as that of the model
+      * e) since the MLP/MoE has the majority of parameters, this may benefit
+             parameter efficiency by allowing more relations to be encoded into the
+             residual per attention layer.
+      * f) for smaller models, we can increase the embedding dim per head, to
+             match that of high quality 1024 and higher embedding heads, which has
+             been noted to be a bottleneck when digesting large trees of information
+             in a single layer e.g. multidigit addition.
+    """
+    def __init__(self, config, fire_pos_enc=None):
+        super().__init__()
+
+        self.n_head = config.n_head
+        self.n_head_dim = config.n_head_dim
+        self.n_embd = config.n_embd
+
+        self.linear_variant_q = linear_dictionary[config.linear_variant_attn]
+        self.linear_variant_k = linear_dictionary[config.linear_variant_attn]
+        self.linear_variant_v = linear_dictionary[config.linear_variant_attn]
+        self.linear_variant_attn_proj = linear_dictionary[config.linear_variant_attn]
+
+        # TODO: no reason for qk and v to have same dimension
+        self.c_attn_q = self.linear_variant_q(self.n_embd, self.n_head * self.n_head_dim, config, bias=config.bias)
+        self.c_attn_k = self.linear_variant_k(self.n_embd, self.n_head * self.n_head_dim, config, bias=config.bias)
+        self.c_attn_v = self.linear_variant_v(self.n_embd, self.n_head * self.n_head_dim, config, bias=config.bias)
+        self.c_proj = self.linear_variant_attn_proj(self.n_head_dim, self.n_embd, config, bias=config.bias)
+
+        # Regularization
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+        self.dropout = config.dropout
+
+        # Embedding
+        self.n_embd = config.n_embd
+        self.dropout = config.dropout
+
+        # Rotary Positional Embeddings
+        self.rotary_emb_q = None
+        self.rotary_emb_k = None
+
+        # Softmax Variant Selection
+        self.softmax_variant_attn = config.softmax_variant_attn
+        if self.softmax_variant_attn != 'softmax':
+            self.softmax_layer_attn = softmax_dictionary[config.softmax_variant_attn](config)
+
+        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                             .view(1, 1, config.block_size, config.block_size))
+
+    def forward(self, x, iter_num):
+        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+
+        q = self.c_attn_q(x)
+        k = self.c_attn_k(x)
+        v = self.c_attn_v(x)
+
+        q = q.view(B, T, self.n_head, self.n_head_dim).transpose(1, 2) # (B, n_h, T, hs)
+        k = k.view(B, T, self.n_head, self.n_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
+        v = v.view(B, T, self.n_head, self.n_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
+
+        y = None
+        att = None
+        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        # manual implementation of attention
+        att = (q @ k.transpose(-2, -1)) * (1.0 / torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device)))
+
+        # apply lower triangle attention mask
+        att = att.masked_fill(self.bias[:,:,:T,:T].to(x.device) == 0, float('-inf'))
+
+        # softmax variation
+        if self.softmax_variant_attn != 'softmax':
+            att = self.softmax_layer_attn(att)
+        else:
+            att = F.softmax(att, dim=-1)
+
+        att = self.attn_dropout(att)
+
+        y = (att @ v).sum(dim=1)  # Sum over all heads instead of concatenation
+
+        # output projection
+        y = self.resid_dropout(self.c_proj(y))
+
+        return y
+
+
+
 attention_dictionary = {
     "causal": CausalSelfAttention,
     "linear": LinearAttention,
     "ssm": MambaBlock,
     "identity": Identity,
+    "infinite": InfiniteHeadAttention,
 }
