@@ -11,7 +11,7 @@ perform a one-hot initialization.
 
 This initializes based on the corners of a hypercube:
 
-```python
+```sh
 python3 hypercube.py direct --dim 384 --max_vectors 50304
 ```
 
