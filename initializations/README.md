@@ -25,7 +25,7 @@ The following will show before and after with a gradient improvement.
 
 However, the present algorithm is O(n^2) and may require a lot of time to complete.
 
-```python
+```sh
 python3 gradient_optimization.py \
     --dimensions 6 \
     --num_vectors 32 \
