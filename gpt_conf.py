@@ -1,3 +1,4 @@
+# gpt_conf.py
 from dataclasses import dataclass, field, asdict, fields
 from typing import List
 import json
@@ -5,12 +6,16 @@ import math
 
 @dataclass
 class GPTConfig:
+    attention_list: List[str] = field(default_factory=lambda: [])
     block_size: int = 1024
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
     n_head: int = 12
     n_kv_group: int = 12
     n_embd: int = 768
+
+    # Attention Variation Spedcific
+    n_head_dim: int = None # For Infinite Attention variation
 
     # Steering Vectors
     ## Where to intercept
@@ -72,6 +77,13 @@ class GPTConfig:
 
     # Attention Options
     attention_variant: str = "causal"
+
+    ## SSM - Attention Varient (same as Hymba)
+    ssm_mamba_expand: int = 2
+    ssm_conv_kernel_size: int = 3
+    ssm_dt_rank: int = 8
+    ssm_d_state: int = 16
+    ssm_io_bias: bool = True
 
     # MLP Options
     use_parallel_mlp: bool = False
