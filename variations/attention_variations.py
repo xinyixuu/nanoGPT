@@ -458,7 +458,7 @@ class MambaBlock(nn.Module):
             C = self.C_layernorm(C)
         return dt, B, C
 
-    def forward(self, x, gate):
+    def forward(self, x, gate, iter_num=None):
         '''
         Parameters:
             x: (batch_size, seqlen, d_model)
@@ -527,6 +527,14 @@ class MambaBlock(nn.Module):
 
         output = self.out_proj[index](scan_outputs)
         return output
+
+
+class Identity(nn.Module):
+    def __init__(self, config, fire_pos_enc=None):
+        super(Identity, self).__init__()
+
+    def forward(self, x, iter_num=None):
+        return x
 
 class InfiniteHeadAttention(nn.Module):
     """Instead of concatenating heads, utilizing higher capacity, we assume the
@@ -620,9 +628,11 @@ class InfiniteHeadAttention(nn.Module):
         return y
 
 
+
 attention_dictionary = {
     "causal": CausalSelfAttention,
     "linear": LinearAttention,
     "ssm": MambaBlock,
+    "identity": Identity,
     "infinite": InfiniteHeadAttention,
 }
