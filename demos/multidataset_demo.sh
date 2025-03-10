@@ -16,5 +16,5 @@ bash data/commonvoice_ko/get_dataset.sh
 bash data/commonvoice_ja/get_dataset.sh
 
 # running the training
-python3 optimization_and_search/run_experiments.py --config explorations/multidataset.json --output_dir out_muti_zh
+python3 optimization_and_search/run_experiments.py --config explorations/multidataset.json --output_dir out_multi_zh
 popd
