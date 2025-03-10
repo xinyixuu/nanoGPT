@@ -2,7 +2,7 @@
   {
     "max_iters": ["2500"],
     "dataset": ["commonvoice_zh"],
-    "dataset_list": ["commonvoice_ja commonvoice_ko commonvoice_zh"],
+    "dataset_list": ["commonvoice_zh commonvoice_ja commonvoice_ko"],
     "dataset_sampling_probs": ["1 1 1"],
     "use_lsv": [true],
     "max_sample_tokens": ["100"],
