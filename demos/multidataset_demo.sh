@@ -6,10 +6,10 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 # get into main directory
 pushd "$script_dir/../" > /dev/null
 
-# tokenize on commonvocie_zh
+# tokenize on commonvoice_zh
 bash data/commonvoice_zh/get_dataset.sh
 
-# tokenize on commonvocie_ko
+# tokenize on commonvoice_ko
 bash data/commonvoice_ko/get_dataset.sh
 
 # tokenize on commonvoice_ja
