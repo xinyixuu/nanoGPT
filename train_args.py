@@ -212,6 +212,7 @@ def parse_args():
             "rmsnorm",
             "layernorm",
             "hyperspherenorm",
+            "dact",
             ]
 
     model_group.add_argument("--norm_variant_attn", type=str, default="rmsnorm", choices=norm_variations)
@@ -259,6 +260,10 @@ def parse_args():
             "squared_relu",
             "tanh",
         ]
+
+    ## DynamicActivations
+    model_group.add_argument("--dact_alpha_init", default=1.0, type=float)
+    model_group.add_argument("--dact_activation", type=str, default="tanh", choices=activation_variations)
 
     # ACTIVATION VARIATIONS
     model_group.add_argument( "--activation_variant", type=str, default="gelu", choices=activation_variations)
