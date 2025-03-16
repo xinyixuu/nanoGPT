@@ -1,11 +1,12 @@
 [
   {
-    "max_iters": ["5000"],
+    "max_iters": ["10000"],
     "device": ["cuda"],
     "dtype": ["float16"],
-    "norm_variant_output": ["dact"],
+    "norm_variant_attn": ["dact"],
+    "dataset": ["shakespeare_char","xsum"],
     "dact_activation": ["tanh","softsign","softplus","silu","sigmoid","selu","relu6","relu","gelu","leaky_relu","celu","elu"],
-    "norm_variant_output": ["rmsnorm","layernorm","tanh"],
+    "norm_variant_output": ["rmsnorm","layernorm","dact"],
     "tensorboard_run_name": ["dynamic_actiation_sweep"]
   }
 ]
