@@ -27,9 +27,23 @@ class DynamicActivation(nn.Module):
     def __init__(self, config):
         super().__init__()
         ndim = config.n_embd
-        self.alpha = nn.Parameter(torch.ones(1) * config.dact_alpha_init)
-        self.gamma = nn.Parameter(torch.ones(ndim))
-        self.beta = nn.Parameter(torch.zeros(ndim))
+
+        if config.dact_use_alpha:
+            self.alpha = nn.Parameter(torch.ones(1) * config.dact_alpha_init)
+        else:
+            self.alpha = 1.0
+
+        if config.dact_use_beta:
+            self.beta = nn.Parameter(torch.zeros(ndim))
+        else:
+            self.beta = 0.0
+
+        if config.dact_use_gamma:
+            self.gamma = nn.Parameter(torch.ones(ndim))
+        else:
+            self.gamma = 1.0
+
+
         self.activation = activation_dictionary[config.dact_activation](config)
 
     def forward(self, x):

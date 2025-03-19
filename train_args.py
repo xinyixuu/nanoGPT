@@ -259,11 +259,18 @@ def parse_args():
             "softsign",
             "squared_relu",
             "tanh",
+            "identity",
         ]
 
     ## DynamicActivations
-    model_group.add_argument("--dact_alpha_init", default=1.0, type=float)
     model_group.add_argument("--dact_activation", type=str, default="tanh", choices=activation_variations)
+    model_group.add_argument("--dact_use_gamma",  type=bool, default=True, action=argparse.BooleanOptionalAction)
+    model_group.add_argument("--dact_use_beta",  type=bool, default=True, action=argparse.BooleanOptionalAction)
+
+    model_group.add_argument("--dact_alpha_init", default=1.0, type=float)
+    model_group.add_argument("--dact_use_alpha",  type=bool, default=True, action=argparse.BooleanOptionalAction)
+
+    model_group.add_argument("--use_embedding_scale", type=bool, default=False, action=argparse.BooleanOptionalAction)
 
     # ACTIVATION VARIATIONS
     model_group.add_argument( "--activation_variant", type=str, default="gelu", choices=activation_variations)

@@ -222,6 +222,10 @@ class GPTConfig:
 
     dact_alpha_init: float = 1.0
     dact_activation: str = 'tanh'
+    dact_use_gamma: bool = True
+    dact_use_beta: bool = True
+    dact_use_alpha: bool = True
+    use_embedding_scale: bool = False
 
     # Activation Alternatives
 
