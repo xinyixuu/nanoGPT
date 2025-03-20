@@ -146,7 +146,7 @@ def parse_args():
     model_group.add_argument('--n_embd', default=384, type=int, help="Size of embeddings in decoder layer and wte unless n_embd_wte is set." )
     model_group.add_argument('--n_embd_wte', default=None, type=int, help="If different from n_embd, an adapter table will be automatically created")
     model_group.add_argument('--n_embd_wte_scale_tying', default=True, action=argparse.BooleanOptionalAction, help="Enable weight tying for scale up and scale down matrices, only has effects if n_embd_wte is not 'None'.")
-    model_group.add_argument('--dropout', default=0.2, type=float)
+    model_group.add_argument('--dropout', default=0.0, type=float)
     model_group.add_argument('--use_post_ln', default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument('--window_size', default=None, type=int, help="Sliding window size, note this cannot be greater than block size")
     model_group.add_argument('--gate', default=False, action=argparse.BooleanOptionalAction, help="option for gated attention see https://arxiv.org/abs/2306.12929")
@@ -212,6 +212,7 @@ def parse_args():
             "rmsnorm",
             "layernorm",
             "hyperspherenorm",
+            "dact",
             ]
 
     model_group.add_argument("--norm_variant_attn", type=str, default="rmsnorm", choices=norm_variations)
@@ -258,7 +259,18 @@ def parse_args():
             "softsign",
             "squared_relu",
             "tanh",
+            "identity",
         ]
+
+    ## DynamicActivations
+    model_group.add_argument("--dact_activation", type=str, default="tanh", choices=activation_variations)
+    model_group.add_argument("--dact_use_gamma",  type=bool, default=True, action=argparse.BooleanOptionalAction)
+    model_group.add_argument("--dact_use_beta",  type=bool, default=True, action=argparse.BooleanOptionalAction)
+
+    model_group.add_argument("--dact_alpha_init", default=1.0, type=float)
+    model_group.add_argument("--dact_use_alpha",  type=bool, default=True, action=argparse.BooleanOptionalAction)
+
+    model_group.add_argument("--use_embedding_scale", type=bool, default=False, action=argparse.BooleanOptionalAction)
 
     # ACTIVATION VARIATIONS
     model_group.add_argument( "--activation_variant", type=str, default="gelu", choices=activation_variations)

@@ -111,6 +111,10 @@ class GPT(nn.Module):
         self.n_embd_wte = config.n_embd_wte
         self.n_embd_wte_scale_tying = config.n_embd_wte_scale_tying
 
+        # Embedding scale
+        if config.use_embedding_scale:
+            self.embedding_scale = nn.Parameter(torch.sqrt(torch.tensor(config.n_embd)))
+
         # Learned Steering Vectors
         self.use_lsv = config.use_lsv
         self.lsv_index = config.lsv_index
@@ -333,8 +337,12 @@ class GPT(nn.Module):
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         x = None
 
+        if self.config.use_embedding_scale:
+            tok_emb = tok_emb * self.embedding_scale
+
         if self.n_embd_wte:
             tok_emb = self.transformer.scale_up(tok_emb)
+
         if self.config.use_abs_pos_embeddings:
             pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
             pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
