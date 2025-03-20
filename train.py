@@ -271,6 +271,9 @@ class Trainer:
 
         self.model.to(self.device)
 
+        # Get Model Size
+        self.model.num_param = self.model.get_num_params(non_embedding=False)
+
         # Print the model summary
         if self.args.print_model_info:
             print_summary(self.model)
@@ -827,6 +830,8 @@ class Trainer:
                         },
                     tokens_trained
                     )
+
+            # vocab agnostic, cross tokenizer comparison
             self.writer.add_scalars(
                     f"{target_dataset}/chance_tokens",
                     {f"val_chance": val_better_than_chance},
@@ -835,6 +840,18 @@ class Trainer:
             self.writer.add_scalars(
                     f"{target_dataset}/chance_iters",
                     {f"val_chance": val_better_than_chance},
+                    tokens_trained
+                    )
+
+            # vocab agnostic, cross parameter size comparison
+            self.writer.add_scalars(
+                    f"{target_dataset}/chance_tokens_per_param",
+                    {f"val_chance": val_better_than_chance/self.model.num_param},
+                    self.iter_num
+                    )
+            self.writer.add_scalars(
+                    f"{target_dataset}/chance_iters_per_param",
+                    {f"val_chance": val_better_than_chance/self.model.num_param},
                     tokens_trained
                     )
 
@@ -877,6 +894,8 @@ class Trainer:
                     {f"train": loss_training},
                     tokens_trained
                     )
+
+            # vocab agnostic, cross tokenizer comparison
             self.writer.add_scalars(
                     f"{target_dataset}/chance_tokens",
                     {f"train_chance": train_better_than_chance},
@@ -885,6 +904,18 @@ class Trainer:
             self.writer.add_scalars(
                     f"{target_dataset}/chance_iters",
                     {f"train_chance": train_better_than_chance},
+                    tokens_trained
+                    )
+
+            # vocab agnostic, cross parameter size comparison
+            self.writer.add_scalars(
+                    f"{target_dataset}/chance_tokens_per_param",
+                    {f"val_chance": train_better_than_chance/self.model.num_param},
+                    self.iter_num
+                    )
+            self.writer.add_scalars(
+                    f"{target_dataset}/chance_iters_per_param",
+                    {f"val_chance": train_better_than_chance/self.model.num_param},
                     tokens_trained
                     )
 
@@ -1005,9 +1036,11 @@ class Trainer:
                             better_than_chance = self.model_args['vocab_size'] / math.exp(dataset_losses['val'].item())
                             log_message=f"step {self.iter_num}: "
                             log_message+=f"{dataset:<20s}"
+                            log_message+=f", {self.model.num_param}"
                             log_message+=f", train loss {dataset_losses['train']:.4f}"
                             log_message+=f", train_stdev {dataset_losses['train_std']:.4f}"
                             log_message+=f", chance_val_set {better_than_chance:.2e}"
+                            log_message+=f", chance_val_per_param {(better_than_chance/self.model.num_param):.2e}"
                             log_message+=f", val loss {dataset_losses['val']:.4f}"
                             log_message+=f", val_stdev {dataset_losses['val_std']:.4f}"
                             if self.args.gns_type is not None:
@@ -1020,9 +1053,11 @@ class Trainer:
                         # Default behavior for a single dataset
                         better_than_chance = self.model_args['vocab_size'] / math.exp(losses['val'].item())
                         log_message=f"step {self.iter_num}:"
+                        log_message+=f", {self.model.num_param}"
                         log_message+=f", train loss {losses['train']:.4f}"
                         log_message+=f", train_stdev {losses['train_std']:.4f}"
                         log_message+=f", chance_val_set {better_than_chance:.2e}"
+                        log_message+=f", chance_val_per_param {(better_than_chance/self.model.num_param):.2e}"
                         log_message+=f", val loss {losses['val']:.4f}"
                         log_message+=f", val_stdev {losses['val_std']:.4f}"
                         if self.args.gns_type is not None:
@@ -1165,6 +1200,7 @@ class Trainer:
                     better_than_chance = self.model_args['vocab_size'] / math.exp(lossf)
                     log_message= f"iter {self.iter_num}"
                     log_message+= f", {dt*1000:.2f} ms"
+                    log_message+= f", {self.model.num_param}"
 
                     if self.args.dataset_list:
                         log_message+= f", epoch {self.epochs_trained_dict[prior_dataset]:2.2f}"
@@ -1175,6 +1211,7 @@ class Trainer:
                         log_message+= f", tokens_trained {self.tokens_trained:.2e}"
                     log_message+= f", loss {lossf:.4f}"
                     log_message+=f", chance_train_set {better_than_chance:.2e}"
+                    log_message+=f", chance_train_per_param {(better_than_chance/self.model.num_param):.2e}"
                     log_message+= f", mfu {running_mfu*100:.2f}%"
                     if self.args.gns_type is not None:
                         self.gns = self.gns_ema.get_gns()
