@@ -51,4 +51,5 @@ python3 "$script_dir"/utils/extract_json_snactext.py "$out_dir" "ipa" "$output_s
 echo "snac-ipa extraction finished."
 
 # Tokenization step to create train.bin and val.bin files.
-python3 "$script_dir"/prepare.py -t "$output_snac_txt" --method tiktoken
+python3 "$script_dir"/prepare.py -t "$output_snac_ipa" --method custom_char_byte_fallback --custom_chars_file "$script_dir"/utils/phoneme_snac.txt
+# python3 "$script_dir"/prepare.py -t "$output_snac_txt" --method tiktoken
