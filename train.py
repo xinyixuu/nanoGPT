@@ -1091,7 +1091,7 @@ class Trainer:
                             self.best_val_loss = losses['val']
                             # Save best validation loss
                             with open(os.path.join(self.args.out_dir, 'best_val_loss_and_iter.txt'), "w") as best_loss_file:
-                                best_loss_file.write(str(self.best_val_loss.item())+","+str(self.iter_num))
+                                best_loss_file.write(f"{self.best_val_loss.item()}, {self.iter_num}, {self.parameters}")
                             # Reset early exit counter
                             num_steps_with_worse_loss = 0
                         if self.iter_num > 0:
