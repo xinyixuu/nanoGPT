@@ -217,8 +217,15 @@ class GPTConfig:
     krmsnorm_selection_type: str = 'last'
     krmsnorm_recompute_percentage: float = 0.05
     hsnorm_gain: bool = False
-    hsnorm_radius: float = None
-    hsnorm_radius_learning: float = None
+    hsnorm_radius: float = 1.0
+    hsnorm_radius_learning: bool = False
+
+    dact_alpha_init: float = 1.0
+    dact_activation: str = 'tanh'
+    dact_use_gamma: bool = True
+    dact_use_beta: bool = True
+    dact_use_alpha: bool = True
+    use_embedding_scale: bool = False
 
     # Activation Alternatives
 
