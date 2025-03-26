@@ -319,7 +319,8 @@ def parse_args():
     )
 
     # Inifinite Attention variation
-    model_group.add_argument('--n_head_dim', default=None, type=int)
+    model_group.add_argument('--n_qk_head_dim', default=None, type=int)
+    model_group.add_argument('--n_v_head_dim', default=None, type=int)
 
     ## SSM - Attention Varient (same as Hymba)
     model_group.add_argument("--ssm_mamba_expand",   type=int,  default=2)
