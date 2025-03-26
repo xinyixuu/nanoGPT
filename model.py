@@ -361,18 +361,13 @@ class GPT(nn.Module):
             x = self.lsv_matrix(x)
 
         layer = 1
-        mlp_res_list = []
         mlp_res = None
         for block in self.transformer.h:
             # Propagate tokens through layers
             if self.config.use_gradient_checkpointing:
                 x = checkpoint.checkpoint(block, x, iter_num, use_reentrant=self.config.recompute_backward_pass)
             else:
-                if layer <=3:
-                    x, mlp_res = block(x, iter_num, mlp_res=mlp_res)
-                    mlp_res_list.append(mlp_res)
-                if layer > 3:
-                    x, _ = block(x, iter_num, mlp_res=mlp_res_list.pop())
+                x, mlp_res = block(x, iter_num, mlp_res=mlp_res)
 
             # Intercept for Learned Steering Vectors
             if self.use_lsv and layer == self.config.apply_lsv_at_layer_idx:
