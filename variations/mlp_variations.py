@@ -69,10 +69,7 @@ class OriginalMLP(nn.Module):
             quant_method = self.quantization_mlp_dict["activations_quant_method"]
             x = fake_quantize_act(self, "mlp_act_input", x, num_bits, quant_method, iter_num)
 
-        if self.mlp_variant == "kan":
-            x = self.kan(x)
-
-        elif self.mlp_variant == "mlp":
+        if self.mlp_variant == "mlp":
             x = self.c_fc(x)
 
             if self.quantization_mlp_dict["quantize_mlp_act_activation_input"]:

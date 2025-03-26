@@ -56,7 +56,6 @@ class Trainer:
         self.model_group = model_group
         self.training_group = training_group
         self.logging_group = logging_group
-        self.parameters = None
 
         # GNS and batch schedule
         self.gns = None
@@ -302,7 +301,7 @@ class Trainer:
 
         # Tensorboard
         if self.args.tensorboard_log:
-            timestamped_run_name = f"{self.parameters:.2e}_" + timestamp_prefix + "_" + self.args.tensorboard_run_name
+            timestamped_run_name = f"{self.model.num_param:.2e}_{timestamp_prefix}_{self.args.tensorboard_run_name}"
             if self.args.csv_log:
                 self.args.csv_name = timestamped_run_name
             log_subpath = os.path.join(self.args.tensorboard_log_dir, timestamped_run_name)
@@ -925,7 +924,7 @@ class Trainer:
 
             self.writer.add_scalar(f"{target_dataset}/mfu_pct", running_mfu * 100, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/vram", self.vram_allocated, self.iter_num)
-            self.writer.add_scalar(f"{target_dataset}/param", self.parameters, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/param", self.model.num_param, self.iter_num)
 
             self.writer.add_scalar(f"{target_dataset}/epoch", epoch, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/tokens_trained", tokens_trained, self.iter_num)
@@ -1091,7 +1090,7 @@ class Trainer:
                             self.best_val_loss = losses['val']
                             # Save best validation loss
                             with open(os.path.join(self.args.out_dir, 'best_val_loss_and_iter.txt'), "w") as best_loss_file:
-                                best_loss_file.write(f"{self.best_val_loss.item()}, {self.iter_num}, {self.parameters}")
+                                best_loss_file.write(f"{self.best_val_loss.item()}, {self.iter_num}, {self.model.num_param}")
                             # Reset early exit counter
                             num_steps_with_worse_loss = 0
                         if self.iter_num > 0:
