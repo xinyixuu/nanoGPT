@@ -1,5 +1,6 @@
 # meta_util.py
 
+import tiktoken
 import pickle
 import argparse
 from rich.console import Console
@@ -20,10 +21,13 @@ def view_tokens(meta_path):
     for k, v in list(meta["itos"].items())[:]:
         print(f"{k}: {v}")
 
+
 def visualize_histogram(meta_path, top_n=20):
     """
-    Visualizes token frequencies (if present) in a meta.pkl as a bar chart.
-    Requires 'token_counts' to exist in the meta dictionary.
+    Visualizes token frequencies in a meta.pkl file as a bar chart.
+    If this file was created by the TiktokenTokenizer, we rebuild
+    'itos' on the fly so we see the real Byte Pair tokens
+    instead of <UNK:ID>.
     """
     meta = load_meta(meta_path)
     token_counts = meta.get("token_counts")
@@ -31,21 +35,37 @@ def visualize_histogram(meta_path, top_n=20):
         print("No 'token_counts' found in the meta. Cannot visualize histogram.")
         return
 
+    # Detect if we're dealing with Tiktoken
+    tokenizer_name = meta.get("tokenizer")
+    if tokenizer_name == "tiktoken":
+        # We'll build an itos from the Tiktoken library.
+        tiktoken_encoding = meta.get("tiktoken_encoding", "gpt2")
+        enc = tiktoken.get_encoding(tiktoken_encoding)
+        # Tiktoken's valid IDs range from 0 to enc.n_vocab-1
+        # We'll decode each ID into a string
+        itos = {}
+        for i in range(enc.n_vocab):
+            # decode each ID in isolation
+            itos[i] = enc.decode([i])
+    else:
+        # Fallback to meta["itos"] if it exists
+        itos = meta.get("itos", {})
+
     console = Console(theme=Theme({"info": "bold blue"}))
-    console.print("[info]Histogram of Token Counts:[/info]")
+    console.print("[info]Token Count Histogram (All Tokens):[/info]")
     table = Table("Token ID", "Token String", "Count", "Bar", title="Token Count Histogram")
 
-    # Sort tokens by descending frequency
+    # Sort by descending frequency
     sorted_counts = sorted(token_counts.items(), key=lambda x: x[1], reverse=True)
     max_count = max(token_counts.values())
 
-    # If we have 'itos', we can display the actual token strings
-    itos = meta.get("itos", {})
-
-    # Print the top_n tokens (or all if you prefer)
+    # Show either top_n or all tokens (your choice)
     for token_id, count in sorted_counts[:top_n]:
+        # Use the Tiktoken-based itos if available;
+        # otherwise fall back to <UNK:ID>
         token_str = itos.get(token_id, f"<UNK:{token_id}>")
-        # Build a simple bar
+
+        # Build a bar
         bar_len = 20
         filled = int((count / max_count) * bar_len)
         bar_str = "█" * filled
@@ -53,6 +73,7 @@ def visualize_histogram(meta_path, top_n=20):
         table.add_row(str(token_id), repr(token_str), str(count), bar_str)
 
     console.print(table)
+    console.print()
 
 def merge_metas(meta_path1, meta_path2, output_path):
     meta1 = load_meta(meta_path1)
