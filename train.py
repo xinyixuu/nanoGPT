@@ -56,12 +56,14 @@ class Trainer:
         self.model_group = model_group
         self.training_group = training_group
         self.logging_group = logging_group
+        self.parameters = None
 
         # GNS and batch schedule
         self.gns = None
         self.grad_norm = None
         self.grad_std = None
         self.tokens_trained = 0
+
         # If using multiple datasets, track tokens trained per dataset.
         if self.args.dataset_list is not None:
             # Flatten each element (which may contain multiple dataset names) into a single list of tokens
@@ -300,7 +302,7 @@ class Trainer:
 
         # Tensorboard
         if self.args.tensorboard_log:
-            timestamped_run_name = timestamp_prefix + "_" + self.args.tensorboard_run_name
+            timestamped_run_name = f"{self.parameters:.2e}_" + timestamp_prefix + "_" + self.args.tensorboard_run_name
             if self.args.csv_log:
                 self.args.csv_name = timestamped_run_name
             log_subpath = os.path.join(self.args.tensorboard_log_dir, timestamped_run_name)
@@ -861,6 +863,8 @@ class Trainer:
             self.writer.add_scalar(f"{target_dataset}/vram", self.vram_allocated, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/mfu_pct", running_mfu * 100, self.iter_num)
 
+            self.writer.add_scalar(f"{target_dataset}/loss_vocab", self.model_args['vocab_size'] / torch.exp(losses['val']).item(), self.iter_num)
+
             self.writer.add_scalar(f"{target_dataset}/lr_iters", self.lr, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/lr_tokens", self.lr, tokens_trained)
 
@@ -921,6 +925,7 @@ class Trainer:
 
             self.writer.add_scalar(f"{target_dataset}/mfu_pct", running_mfu * 100, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/vram", self.vram_allocated, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/param", self.parameters, self.iter_num)
 
             self.writer.add_scalar(f"{target_dataset}/epoch", epoch, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/tokens_trained", tokens_trained, self.iter_num)
