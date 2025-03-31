@@ -557,8 +557,9 @@ class InfiniteHeadAttention(nn.Module):
         super().__init__()
 
         self.n_head = config.n_head
-        self.n_head_dim = config.n_head_dim
         self.n_embd = config.n_embd
+        self.n_qk_head_dim = config.n_qk_head_dim
+        self.n_v_head_dim = config.n_v_head_dim
 
         self.linear_variant_q = linear_dictionary[config.linear_variant_attn]
         self.linear_variant_k = linear_dictionary[config.linear_variant_attn]
@@ -566,10 +567,10 @@ class InfiniteHeadAttention(nn.Module):
         self.linear_variant_attn_proj = linear_dictionary[config.linear_variant_attn]
 
         # TODO: no reason for qk and v to have same dimension
-        self.c_attn_q = self.linear_variant_q(self.n_embd, self.n_head * self.n_head_dim, config, bias=config.bias)
-        self.c_attn_k = self.linear_variant_k(self.n_embd, self.n_head * self.n_head_dim, config, bias=config.bias)
-        self.c_attn_v = self.linear_variant_v(self.n_embd, self.n_head * self.n_head_dim, config, bias=config.bias)
-        self.c_proj = self.linear_variant_attn_proj(self.n_head_dim, self.n_embd, config, bias=config.bias)
+        self.c_attn_q = self.linear_variant_q(self.n_embd, self.n_head * self.n_qk_head_dim, config, bias=config.bias)
+        self.c_attn_k = self.linear_variant_k(self.n_embd, self.n_head * self.n_qk_head_dim, config, bias=config.bias)
+        self.c_attn_v = self.linear_variant_v(self.n_embd, self.n_head * self.n_v_head_dim, config, bias=config.bias)
+        self.c_proj = self.linear_variant_attn_proj(self.n_v_head_dim, self.n_embd, config, bias=config.bias)
 
         # Regularization
         self.attn_dropout = nn.Dropout(config.dropout)
@@ -599,9 +600,9 @@ class InfiniteHeadAttention(nn.Module):
         k = self.c_attn_k(x)
         v = self.c_attn_v(x)
 
-        q = q.view(B, T, self.n_head, self.n_head_dim).transpose(1, 2) # (B, n_h, T, hs)
-        k = k.view(B, T, self.n_head, self.n_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
-        v = v.view(B, T, self.n_head, self.n_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
+        q = q.view(B, T, self.n_head, self.n_qk_head_dim).transpose(1, 2) # (B, n_h, T, hs)
+        k = k.view(B, T, self.n_head, self.n_qk_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
+        v = v.view(B, T, self.n_head, self.n_v_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
 
         y = None
         att = None
