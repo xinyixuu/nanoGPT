@@ -1,3 +1,4 @@
+# model.py
 """
 Full definition of a GPT Language Model, all of it in this single file.
 References:
@@ -9,10 +10,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
-import sys
-import re
 from rich import print
-from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 
 import numpy as np
 
@@ -40,89 +38,9 @@ from variations.router_variations import router_dictionary
 from quantization.quantize import quantize_dictionary, dequantize, fake_quantize_act
 from quantization.quant_utils import set_variant, create_activation_buffers
 
-def create_shared_param_group(layer_type, config):
-    """
-    Creates a shared list of layer blocks (either MLP or Attn), optionally reusing blocks
-    every 'shared_size' layers, and optionally reflecting them symmetrically if
-    'shared_sym' is True. Also can handle multiple attention variants in one model.
+from initializations.initialization_variations import init_dictionary
 
-    Args:
-        layer_type (str): "mlp" or "attn"
-        config: a config object containing fields like:
-            - n_layer (int): number of layers total
-            - use_moe (bool): if True, some MLP layers replaced by MoE
-            - moe_layer_freq (int): frequency of MoE layers
-            - shared_mlp_size, shared_attn_size (int)
-            - shared_mlp_sym, shared_attn_sym (bool)
-            - shared_fire_embeddings (bool)
-            - attention_variants (list of str): e.g. ["causal", "fancy"] ...
-              if you want multiple attention types
-            - n_head, ...
-        Returns:
-            list of layer_blocks
-    """
-
-    # If you use FIRE for position embeddings in the attention layer:
-    from variations.position_encoding_variations import FIRE
-
-    # Determine if we are building MLP or attn blocks
-    if layer_type == "mlp":
-        shared_size = config.shared_mlp_size
-        shared_sym = config.shared_mlp_sym
-    elif layer_type == "attn":
-        shared_size = config.shared_attn_size
-        shared_sym = config.shared_attn_sym
-    else:
-        sys.exit(f"{layer_type} not supported, exiting")
-
-    # If attn layer, optionally build a single FIRE module to share
-    fire_pos_enc = None
-    if layer_type == "attn" and config.shared_fire_embeddings:
-        fire_pos_enc = FIRE(config, num_heads=config.n_head)
-
-    shared_group = []
-    layer_block = None
-
-    for i in range(config.n_layer):
-
-        # Create a new layer block every "shared_size"
-        if i % shared_size == 0:
-            if layer_type == "mlp":
-                # Possibly handle MoE
-                if config.use_moe and i % config.moe_layer_freq == 0:
-                    layer_block = MoELayer(config)
-                else:
-                    layer_block = get_mlp_instance(config)
-
-            elif layer_type == "attn":
-                attn_cls = attention_dictionary[config.attention_variant]
-
-                # Instantiate an attention layer
-                layer_block = attn_cls(config, fire_pos_enc=fire_pos_enc)
-            else:
-                sys.exit(f"{layer_type} not supported, exiting")
-
-        # Add this (possibly reused) block to the list
-        shared_group.append(layer_block)
-
-        # If symmetrical sharing is requested
-        if shared_sym:
-            # Even number of layers
-            if config.n_layer % 2 == 0:
-                # Once we reach halfway-1, we append the blocks in reverse
-                if i == (config.n_layer // 2 - 1):
-                    for j in range(i + 1):
-                        shared_group.append(shared_group[i - j])
-                    return shared_group
-            else:
-                # Odd number of layers
-                if i == (config.n_layer // 2):
-                    for j in range(i):
-                        shared_group.append(shared_group[i - j])
-                    return shared_group
-
-    return shared_group
-
+from shared_param_utils import SharedParamGroupCreator
 
 class Block(nn.Module):
     def __init__(self, config, mlp=None, attn=None):
@@ -150,28 +68,35 @@ class Block(nn.Module):
         else:
             self.mlp = mlp
 
-    def forward(self, x, iter_num):
+    def forward(self, x, iter_num, mlp_res=None):
         def custom_forward(*inputs):
             x = inputs[0]
+            iter_num = inputs[1]
+            mlp_res = inputs[2]
+
             if self.use_post_ln:
                 if self.use_parallel_mlp:
                     x = self.ln_1(x + self.attn(x, iter_num) + self.mlp(x, iter_num))
                 else:
                     x = self.ln_1(x + self.attn(x, iter_num))
                     x = self.ln_2(x + self.mlp(x, iter_num))
+                return x, mlp_res
             else:
                 if self.use_parallel_mlp:
                     ln_1 = self.ln_1(x)
-                    x = x + self.attn(ln_1, iter_num) + self.mlp(ln_1, iter_num)
+                    mlp, mlp_res = self.mlp(ln_1, iter_num)
+                    x = x + self.attn(ln_1, iter_num) + mlp
+                    return x, mlp_res
                 else:
                     x = x + self.attn(self.ln_1(x), iter_num)
-                    x = x + self.mlp(self.ln_2(x), iter_num)
-            return x
+                    mlp, mlp_res = self.mlp(self.ln_2(x), iter_num, mlp_res)
+                    x = x + mlp
+                    return x, mlp_res
 
         if self.use_gradient_checkpointing and x.requires_grad:
             return checkpoint.checkpoint(custom_forward, x, use_reentrant=False)
         else:
-            return custom_forward(x)
+            return custom_forward(x, iter_num, mlp_res)
 
 class GPT(nn.Module):
 
@@ -182,14 +107,18 @@ class GPT(nn.Module):
 
         self.config = config
 
-        # Shared Parameters MLP
-        shared_mlp_array = create_shared_param_group("mlp", config)
-        # Shared Parameters Attention
-        shared_attn_array = create_shared_param_group("attn", config)
+        # Use the new SharedParamGroupCreator for MLP and Attn layers
+        spg_creator = SharedParamGroupCreator(config)
+        shared_mlp_array = spg_creator.create_shared_param_group("mlp")
+        shared_attn_array = spg_creator.create_shared_param_group("attn")
 
         # Factorization Parameters
         self.n_embd_wte = config.n_embd_wte
         self.n_embd_wte_scale_tying = config.n_embd_wte_scale_tying
+
+        # Embedding scale
+        if config.use_embedding_scale:
+            self.embedding_scale = nn.Parameter(torch.sqrt(torch.tensor(config.n_embd)))
 
         # Learned Steering Vectors
         self.use_lsv = config.use_lsv
@@ -241,11 +170,6 @@ class GPT(nn.Module):
             self.lm_head = nn.Linear(config.n_embd_wte, config.vocab_size, bias=False)
         else:
             self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
         # Initialize and possibly import scale_up and scale_down matrices, if factorization is set
         if self.n_embd_wte:
@@ -263,6 +187,12 @@ class GPT(nn.Module):
 
         # init all weights
         self.apply(self._init_weights)
+
+        # with weight tying when using torch.compile() some warnings get generated:
+        # "UserWarning: functional_call was passed multiple values for tied weights.
+        # This behavior is deprecated and will be an error in future versions"
+        # not 100% sure what this is, so far seems to be harmless. TODO investigate
+        self.lm_head.weight = self.transformer.wte.weight # https://paperswithcode.com/method/weight-tying
 
         # import wte
         if self.config.import_wte_npy:
@@ -308,12 +238,38 @@ class GPT(nn.Module):
                     block.attn.bias = torch.tril(torch.ones(new_block_size, new_block_size)).view(1, 1, new_block_size, new_block_size)
 
     def _init_weights(self, module):
+        """
+        Custom weight initialization logic for GPT model.
+        """
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=self.config.linear_mean_init, std=self.config.linear_std_init)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=self.config.embedding_mean_init, std=self.config.embedding_std_init)
+            if self.config.init_variant == "gaussian" or module is self.transformer['wpe']:
+                torch.nn.init.normal_(
+                    module.weight,
+                    mean=self.config.embedding_mean_init,
+                    std=self.config.embedding_std_init
+                )
+            else:
+                init_fn = init_dictionary[self.config.init_variant]
+
+                # Generate custom init matrix
+                weight_data = init_fn(
+                    vocab_size=self.config.vocab_size,
+                    n_embd=self.config.n_embd
+                )
+
+                # Copy into the module's weight
+                with torch.no_grad():
+                    if weight_data.shape != module.weight.shape:
+                        raise ValueError(
+                            f"Init shape {weight_data.shape} does not match embedding shape {module.weight.shape} "
+                            f"for init_variant='{self.config.init_variant}'"
+                        )
+                    module.weight.copy_(weight_data)
+
 
     def update_num_angles(self, num_angles):
         """Update the number of angles for rotary embeddings in all attention layers."""
@@ -386,8 +342,12 @@ class GPT(nn.Module):
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         x = None
 
+        if self.config.use_embedding_scale:
+            tok_emb = tok_emb * self.embedding_scale
+
         if self.n_embd_wte:
             tok_emb = self.transformer.scale_up(tok_emb)
+
         if self.config.use_abs_pos_embeddings:
             pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
             pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
@@ -401,12 +361,13 @@ class GPT(nn.Module):
             x = self.lsv_matrix(x)
 
         layer = 1
+        mlp_res = None
         for block in self.transformer.h:
             # Propagate tokens through layers
             if self.config.use_gradient_checkpointing:
                 x = checkpoint.checkpoint(block, x, iter_num, use_reentrant=self.config.recompute_backward_pass)
             else:
-                x = block(x, iter_num)
+                x, mlp_res = block(x, iter_num, mlp_res=mlp_res)
 
             # Intercept for Learned Steering Vectors
             if self.use_lsv and layer == self.config.apply_lsv_at_layer_idx:

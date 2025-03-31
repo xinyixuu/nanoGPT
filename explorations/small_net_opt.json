@@ -1,0 +1,18 @@
+[
+  {
+    "max_iters": ["10000"],
+    "compile" : [true],
+    "n_layer": ["2","3","4"],
+    "n_embd": ["64","128", "256"],
+    "n_head": ["4","8","16"],
+    "n_qk_head_dim":["32","64","128"],
+    "n_v_head_dim":["32","64","128"],
+    "attention_variant": ["infinite"],
+    "device": ["cuda"],
+    "mlp_res": [true, false],
+    "mlp_expansion_factor": ["3", "4", "5", "6"],
+    "dropout" : [0.2, 0.0],
+    "dataset": ["shakespeare_char", "cosmopedia_100k"],
+    "tensorboard_run_name": ["efficient_network"]
+  }
+]

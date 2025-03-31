@@ -122,6 +122,22 @@ def parse_args():
     training_group.add_argument("--plateau_patience", type=int, default=10, help="Number of epochs with no improvement for ReduceLROnPlateau.")
 
 
+    # Training sample *args
+    training_group.add_argument('--interactive', default=False, action=argparse.BooleanOptionalAction, help="Enable interactive generation at the end of training (similar to sample.py --interactive).")
+    training_group.add_argument('--stop_string', type=str, default='~W', help="String to stop generation and allow user input (used when --interactive).")
+    training_group.add_argument('--colorize_output', default=True, action=argparse.BooleanOptionalAction, help="Colorize tokens based on predicted probabilities.")
+    training_group.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k'], help="Colorization mode for tokens (see sample.py).")
+    training_group.add_argument('--show_heatmaps', default=False, action=argparse.BooleanOptionalAction, help="Show heatmaps (or bar charts) of top-k token probabilities.")
+    training_group.add_argument('--chart_type', type=str, default='heatmap', choices=['heatmap', 'barchart'], help="Type of chart to display if --show_heatmaps is set.")
+    training_group.add_argument('--last_k_tokens', type=int, default=10, help="Number of last tokens to display in heatmaps or bar charts.")
+    training_group.add_argument('--sample_file', type=str, default=None, help="Output file for inference samples (if you want to save them).")
+    training_group.add_argument('--token_boundary', type=str, default=None, help="Optional separator string between emitted tokens (for decode).")
+    training_group.add_argument('--num_samples', type=int, default=1, help="Number of generated samples during sampling.")
+    training_group.add_argument('--temperature', type=float, default=0.8, help="Temperature for predictions (1.0 = normal, < 1.0 = less random).")
+    training_group.add_argument('--top_k', type=int, default=200, help="Retain only the top_k most likely tokens (used in sample.py).")
+    training_group.add_argument('--eval_dataset', type=str, default=None, help="Optional dataset name for custom evaluation splits.")
+    training_group.add_argument('--quantization_data_file', type=str, default=None, help="If set, export quantized weights/activations to a specified file (pkl).")
+
     # Model args
     model_group.add_argument('--block_size', default=256, type=int)
     model_group.add_argument('--n_layer', default=6, type=int)
@@ -130,7 +146,7 @@ def parse_args():
     model_group.add_argument('--n_embd', default=384, type=int, help="Size of embeddings in decoder layer and wte unless n_embd_wte is set." )
     model_group.add_argument('--n_embd_wte', default=None, type=int, help="If different from n_embd, an adapter table will be automatically created")
     model_group.add_argument('--n_embd_wte_scale_tying', default=True, action=argparse.BooleanOptionalAction, help="Enable weight tying for scale up and scale down matrices, only has effects if n_embd_wte is not 'None'.")
-    model_group.add_argument('--dropout', default=0.2, type=float)
+    model_group.add_argument('--dropout', default=0.0, type=float)
     model_group.add_argument('--use_post_ln', default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument('--window_size', default=None, type=int, help="Sliding window size, note this cannot be greater than block size")
     model_group.add_argument('--gate', default=False, action=argparse.BooleanOptionalAction, help="option for gated attention see https://arxiv.org/abs/2306.12929")
@@ -177,6 +193,7 @@ def parse_args():
     model_group.add_argument('--use_parallel_mlp', default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument("--mlp_variant", type=str, default="mlp", choices=["mlp", "kan", "swiglu"], help="MLP variation type")
     model_group.add_argument("--mlp_expansion_factor", type=int, default=4, help="If MLP like variant is used, set the expansion factor for the linear transformations, default is 4.")
+    model_group.add_argument('--mlp_res', default=False, action=argparse.BooleanOptionalAction)
 
     ## KAN Options
     model_group.add_argument("--kan_poly_order", type=int, default=3, help="Order of KAN non-linearity")
@@ -196,6 +213,7 @@ def parse_args():
             "rmsnorm",
             "layernorm",
             "hyperspherenorm",
+            "dact",
             ]
 
     model_group.add_argument("--norm_variant_attn", type=str, default="rmsnorm", choices=norm_variations)
@@ -242,7 +260,18 @@ def parse_args():
             "softsign",
             "squared_relu",
             "tanh",
+            "identity",
         ]
+
+    ## DynamicActivations
+    model_group.add_argument("--dact_activation", type=str, default="tanh", choices=activation_variations)
+    model_group.add_argument("--dact_use_gamma",  type=bool, default=True, action=argparse.BooleanOptionalAction)
+    model_group.add_argument("--dact_use_beta",  type=bool, default=True, action=argparse.BooleanOptionalAction)
+
+    model_group.add_argument("--dact_alpha_init", default=1.0, type=float)
+    model_group.add_argument("--dact_use_alpha",  type=bool, default=True, action=argparse.BooleanOptionalAction)
+
+    model_group.add_argument("--use_embedding_scale", type=bool, default=False, action=argparse.BooleanOptionalAction)
 
     # ACTIVATION VARIATIONS
     model_group.add_argument( "--activation_variant", type=str, default="gelu", choices=activation_variations)
@@ -271,13 +300,27 @@ def parse_args():
 
 
     # Attention Variations
+    attention_variants = ["causal", "linear", "ssm", "identity", "infinite"]
+
+    model_group.add_argument(
+        "--attention_list",
+        nargs='+',
+        type=str,
+        default=None,
+        help="List of attention variants to cycle through, e.g. 'causal linear ssm'."
+    )
+
     model_group.add_argument(
         "--attention_variant",
         type=str,
         default="causal",
-        choices=["causal", "linear", "ssm"],
+        choices=attention_variants,
         help="Which attention variant to use for the Transformer blocks."
     )
+
+    # Inifinite Attention variation
+    model_group.add_argument('--n_qk_head_dim', default=None, type=int)
+    model_group.add_argument('--n_v_head_dim', default=None, type=int)
 
     ## SSM - Attention Varient (same as Hymba)
     model_group.add_argument("--ssm_mamba_expand",   type=int,  default=2)
@@ -299,6 +342,10 @@ def parse_args():
     ## Linear Weight Initialization Options
     model_group.add_argument( "--linear_mean_init", type=float, default=0.0)
     model_group.add_argument( "--linear_std_init", type=float, default=0.02)
+
+    ## Embedding Weight Initialization Options
+    embedding_init_variations = ["gaussian", "onehot", "hypercube"]
+    model_group.add_argument( "--init_variant", choices=embedding_init_variations, default="gaussian", help="options for embedding initializations")
 
     # Quantization
     model_group.add_argument("--full_quant_iteration", type=int, default=None,
@@ -570,6 +617,9 @@ def parse_args():
     logging_group.add_argument('--tensorboard_log_dir', type=str, default='logs')
     logging_group.add_argument('--tensorboard_run_name', type=str, default='logs-test')
     logging_group.add_argument('--tensorboard_graph', default=True, action=argparse.BooleanOptionalAction)
+
+    ## Export Model graph
+    logging_group.add_argument('--export_model_graph', default=False, action=argparse.BooleanOptionalAction, help="exports tensorboard model of graph")
 
     # Onnx args
     logging_group.add_argument('--onnx_output', default=False, action=argparse.BooleanOptionalAction)

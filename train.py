@@ -1,5 +1,4 @@
 # train.py
-import argparse
 from contextlib import nullcontext
 import csv
 import json
@@ -25,6 +24,8 @@ from utils.statistic_plots import (
     plot_statistics,
     create_statistics,
 )
+
+from sample import sample_with_existing_model
 
 from rich.progress import Progress
 
@@ -61,6 +62,7 @@ class Trainer:
         self.grad_norm = None
         self.grad_std = None
         self.tokens_trained = 0
+
         # If using multiple datasets, track tokens trained per dataset.
         if self.args.dataset_list is not None:
             # Flatten each element (which may contain multiple dataset names) into a single list of tokens
@@ -89,7 +91,7 @@ class Trainer:
         self.setup()
 
         if self.args.sample_only:
-            self.sample_and_print(self.args.max_sample_tokens, start_tokens=self.args.sample_start_tokens)
+            self.sample_and_print()
 
         if self.args.create_statistics:
             self.stats = initialize_statistics(self.args.n_layer, self.args.n_head)
@@ -270,6 +272,9 @@ class Trainer:
 
         self.model.to(self.device)
 
+        # Get Model Size
+        self.model.num_param = self.model.get_num_params(non_embedding=False)
+
         # Print the model summary
         if self.args.print_model_info:
             print_summary(self.model)
@@ -296,7 +301,7 @@ class Trainer:
 
         # Tensorboard
         if self.args.tensorboard_log:
-            timestamped_run_name = timestamp_prefix + "_" + self.args.tensorboard_run_name
+            timestamped_run_name = f"{self.model.num_param:.2e}_{timestamp_prefix}_{self.args.tensorboard_run_name}"
             if self.args.csv_log:
                 self.args.csv_name = timestamped_run_name
             log_subpath = os.path.join(self.args.tensorboard_log_dir, timestamped_run_name)
@@ -416,9 +421,11 @@ class Trainer:
         return ''.join(chars)
 
     @torch.no_grad()
-    def sample_and_print(self, max_sample_tokens, start_tokens="\n"):
+    def sample_and_print(self):
         # Do one iteration per lsv, default to one with no lsv
         sample_iterations = 1
+
+        self.model.eval()
 
         if self.args.dataset_list is not None:
             sample_iterations = len(self.args.dataset_list)
@@ -428,21 +435,29 @@ class Trainer:
                 self.model.set_lsv_index(i)
                 print(f"lsv index {i}")
 
-            start_ids = torch.tensor(self.encode(start_tokens), dtype=torch.long, device=self.device)[None, ...]
-            x = start_ids
+            start_ids = torch.tensor(self.encode(self.args.sample_start_tokens), dtype=torch.long, device=self.device)[None, ...]
 
             with torch.no_grad():
-                for _ in range(max_sample_tokens):
-                    x_cond = x if x.size(1) <= self.args.block_size else x[:, -self.args.block_size:]
-                    logits, _ = self.model(x_cond, iter_num=self.iter_num)
-                    logits = logits[:, -1, :]
-                    probs = torch.softmax(logits, dim=-1)
-                    next_id = torch.multinomial(probs, num_samples=1)
-                    x = torch.cat((x, next_id), dim=1)
+                sample_with_existing_model(
+                    model=self.model,
+                    start_ids=start_ids,
+                    start_tokens=self.args.sample_start_tokens,
+                    decode=self.decode,
+                    device=self.device,
+                    out_dir=self.args.out_dir,
+                    max_new_tokens=self.args.max_sample_tokens,
+                    temperature=self.args.temperature,
+                    top_k=self.args.top_k,
+                    colorize_output=self.args.colorize_output,
+                    colorize_mode=self.args.colorize_mode,
+                    token_boundary=(self.args.token_boundary or None),
+                    show_heatmaps=self.args.show_heatmaps,
+                    sample_file=self.args.sample_file,
+                    iter_num=self.iter_num,
+                    num_samples=self.args.num_samples
+                )
 
-            sampled_text = self.decode(x[0].tolist())
-            print(f"Start tokens:\n{start_tokens}\n")
-            print(f"Sampled text:\n{sampled_text}\n")
+        self.model.train()
 
     def get_vocab_size_from_meta(self):
         # Data loader
@@ -797,30 +812,47 @@ class Trainer:
                               dynamic_axes={'input': {0: 'batch_size', 1: 'sequence_length'},
                                             'output': {0: 'batch_size', 1: 'sequence_length'}})
 
-    def log_metrics(self, losses, running_mfu, epoch, tokens_trained, target_dataset):
+    def log_metrics(self, losses, running_mfu, epoch, tokens_trained, target_dataset, val_better_than_chance):
 
-        if self.iter_num == 0 and self.args.tensorboard_log:
+        if self.iter_num == 0 and self.args.tensorboard_log and self.args.export_model_graph == True  and self.args.compile == False:
             self.export_model_graph()
-
 
         if self.args.tensorboard_log:
             # Log metrics for each dataset separately
             self.writer.add_scalars(
                     f"{target_dataset}/loss_iters", {
-                        f"train": losses['train'].item(),
-                        f"train_std": losses['train_std'].item(),
                         f"val": losses['val'].item(),
-                        f"val_std": losses['val_std'].item(),
                         },
                     self.iter_num
                     )
             self.writer.add_scalars(
                     f"{target_dataset}/loss_tokens", {
-                        f"train": losses['train'].item(),
-                        f"train_std": losses['train_std'].item(),
                         f"val": losses['val'].item(),
-                        f"val_std": losses['val_std'].item(),
                         },
+                    tokens_trained
+                    )
+
+            # vocab agnostic, cross tokenizer comparison
+            self.writer.add_scalars(
+                    f"{target_dataset}/chance_tokens",
+                    {f"val_chance": val_better_than_chance},
+                    self.iter_num
+                    )
+            self.writer.add_scalars(
+                    f"{target_dataset}/chance_iters",
+                    {f"val_chance": val_better_than_chance},
+                    tokens_trained
+                    )
+
+            # vocab agnostic, cross parameter size comparison
+            self.writer.add_scalars(
+                    f"{target_dataset}/chance_tokens_per_param",
+                    {f"val_chance": val_better_than_chance/self.model.num_param},
+                    self.iter_num
+                    )
+            self.writer.add_scalars(
+                    f"{target_dataset}/chance_iters_per_param",
+                    {f"val_chance": val_better_than_chance/self.model.num_param},
                     tokens_trained
                     )
 
@@ -830,12 +862,16 @@ class Trainer:
             self.writer.add_scalar(f"{target_dataset}/vram", self.vram_allocated, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/mfu_pct", running_mfu * 100, self.iter_num)
 
+            self.writer.add_scalar(f"{target_dataset}/loss_vocab", self.model_args['vocab_size'] / torch.exp(losses['val']).item(), self.iter_num)
+
             self.writer.add_scalar(f"{target_dataset}/lr_iters", self.lr, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/lr_tokens", self.lr, tokens_trained)
 
             self.writer.add_scalar(f"{target_dataset}/batch_size_iters", self.args.batch_size, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/batch_size_tokens", self.args.batch_size, tokens_trained)
 
+            self.writer.add_scalar(f"{target_dataset}/std_val_iters", losses['val_std'].item(), self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/std_val_tokens", losses['val_std'].item(), tokens_trained)
 
             if self.args.gns_type is not None:
                 self.writer.add_scalar(f"{target_dataset}/gns_iters", self.gns, self.iter_num)
@@ -849,7 +885,7 @@ class Trainer:
             # bulk metrics
             self.write_to_csv(target_dataset, losses['train'].item(), losses['val'].item(), running_mfu, prefix="bulk_")
 
-    def log_metrics_non_validation(self, loss_training, running_mfu, epoch, tokens_trained, target_dataset):
+    def log_metrics_non_validation(self, loss_training, running_mfu, epoch, tokens_trained, target_dataset, train_better_than_chance):
         if self.args.tensorboard_log:
             self.writer.add_scalars(
                     f"{target_dataset}/loss_iters",
@@ -862,8 +898,33 @@ class Trainer:
                     tokens_trained
                     )
 
+            # vocab agnostic, cross tokenizer comparison
+            self.writer.add_scalars(
+                    f"{target_dataset}/chance_tokens",
+                    {f"train_chance": train_better_than_chance},
+                    self.iter_num
+                    )
+            self.writer.add_scalars(
+                    f"{target_dataset}/chance_iters",
+                    {f"train_chance": train_better_than_chance},
+                    tokens_trained
+                    )
+
+            # vocab agnostic, cross parameter size comparison
+            self.writer.add_scalars(
+                    f"{target_dataset}/chance_tokens_per_param",
+                    {f"val_chance": train_better_than_chance/self.model.num_param},
+                    self.iter_num
+                    )
+            self.writer.add_scalars(
+                    f"{target_dataset}/chance_iters_per_param",
+                    {f"val_chance": train_better_than_chance/self.model.num_param},
+                    tokens_trained
+                    )
+
             self.writer.add_scalar(f"{target_dataset}/mfu_pct", running_mfu * 100, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/vram", self.vram_allocated, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/param", self.model.num_param, self.iter_num)
 
             self.writer.add_scalar(f"{target_dataset}/epoch", epoch, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/tokens_trained", tokens_trained, self.iter_num)
@@ -966,13 +1027,7 @@ class Trainer:
 
                 if self.iter_num % self.args.eval_interval == 0 and self.master_process:
 
-                    # Save current RNG states
-                    torch_rng_state = torch.get_rng_state()
-                    np_rng_state = np.random.get_state()
                     losses = self.estimate_loss()
-                    # Restore RNG states so training sampling isn’t affected
-                    torch.set_rng_state(torch_rng_state)
-                    np.random.set_state(np_rng_state)
 
                     if self.args.gns_type is not None:
                         self.gns = self.gns_ema.get_gns()
@@ -982,12 +1037,39 @@ class Trainer:
                     if self.args.dataset_list is not None:
                         # Print loss for each dataset if multiple datasets are used
                         for dataset, dataset_losses in losses['datasets'].items():
-                            print(f"step {self.iter_num}: {dataset:<20s}, train loss {dataset_losses['train']:.4f}, train_stdev {dataset_losses['train_std']:.4f}, val loss {dataset_losses['val']:.4f}, val_stdev {dataset_losses['val_std']:.4f}, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr:.4f}, tokens_trained {self.tokens_trained_dict[dataset]:.2e}")
-                            self.log_metrics(dataset_losses, running_mfu, self.epochs_trained_dict[dataset], self.tokens_trained_dict[dataset], dataset)
+                            better_than_chance = self.model_args['vocab_size'] / math.exp(dataset_losses['val'].item())
+                            log_message=f"step {self.iter_num}: "
+                            log_message+=f"{dataset:<20s}"
+                            log_message+=f", {self.model.num_param}"
+                            log_message+=f", train loss {dataset_losses['train']:.4f}"
+                            log_message+=f", train_stdev {dataset_losses['train_std']:.4f}"
+                            log_message+=f", chance_val_set {better_than_chance:.2e}"
+                            log_message+=f", chance_val_per_param {(better_than_chance/self.model.num_param):.2e}"
+                            log_message+=f", val loss {dataset_losses['val']:.4f}"
+                            log_message+=f", val_stdev {dataset_losses['val_std']:.4f}"
+                            if self.args.gns_type is not None:
+                                log_message+=f", gns {self.gns:.2f}"
+                            log_message+=f", lr {self.lr:.4f}"
+                            log_message+=f", tokens_trained {self.tokens_trained_dict[dataset]:.2e}"
+                            print(log_message)
+                            self.log_metrics(dataset_losses, running_mfu, self.epochs_trained_dict[dataset], self.tokens_trained_dict[dataset], dataset, better_than_chance)
                     else:
                         # Default behavior for a single dataset
-                        print(f"step {self.iter_num}: train loss {losses['train']:.4f}, train_stdev {losses['train_std']:.4f}, val loss {losses['val']:.4f}, val_stdev {losses['val_std']:.4f}, lr {self.lr:.4f}")
-                        self.log_metrics(losses, running_mfu, current_epoch, self.tokens_trained, current_dataset)
+                        better_than_chance = self.model_args['vocab_size'] / math.exp(losses['val'].item())
+                        log_message=f"step {self.iter_num}:"
+                        log_message+=f", {self.model.num_param}"
+                        log_message+=f", train loss {losses['train']:.4f}"
+                        log_message+=f", train_stdev {losses['train_std']:.4f}"
+                        log_message+=f", chance_val_set {better_than_chance:.2e}"
+                        log_message+=f", chance_val_per_param {(better_than_chance/self.model.num_param):.2e}"
+                        log_message+=f", val loss {losses['val']:.4f}"
+                        log_message+=f", val_stdev {losses['val_std']:.4f}"
+                        if self.args.gns_type is not None:
+                            log_message+=f", gns {self.gns:.2f}"
+                        log_message+=f", batch_size {self.args.batch_size}"
+                        log_message+=f", lr {self.lr:.4f}"
+                        print(log_message)
+                        self.log_metrics(losses, running_mfu, current_epoch, self.tokens_trained, current_dataset, better_than_chance)
 
                     if math.isnan(losses["val"]):
                         # If val loss is nan, then exit.
@@ -1008,7 +1090,8 @@ class Trainer:
                             self.best_val_loss = losses['val']
                             # Save best validation loss
                             with open(os.path.join(self.args.out_dir, 'best_val_loss_and_iter.txt'), "w") as best_loss_file:
-                                best_loss_file.write(str(self.best_val_loss.item())+","+str(self.iter_num))
+                                chance_ratio = self.model_args['vocab_size']/math.exp(self.best_val_loss.item())
+                                best_loss_file.write(f"{self.best_val_loss.item()}, {self.iter_num}, {self.model.num_param}, {chance_ratio:.3e}, {chance_ratio/self.model.num_param:.3e}")
                             # Reset early exit counter
                             num_steps_with_worse_loss = 0
                         if self.iter_num > 0:
@@ -1017,7 +1100,7 @@ class Trainer:
                             self.save_checkpoint('ckpt.pt')
                         # Sample
                         if self.args.max_sample_tokens:
-                            self.sample_and_print(self.args.max_sample_tokens, start_tokens=self.args.sample_start_tokens)
+                            self.sample_and_print()
                         # export embedding table to npy file
                         if self.args.export_wte_npy:
                             self.raw_model.export_wte(self.args.export_wte_npy)
@@ -1116,14 +1199,34 @@ class Trainer:
                     if local_iter_num >= 5:
                         mfu = self.raw_model.estimate_mfu(self.args.batch_size * self.args.gradient_accumulation_steps, dt)
                         running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
+
+
+                    # training _loss section
+                    better_than_chance = self.model_args['vocab_size'] / math.exp(lossf)
+                    log_message= f"iter {self.iter_num}"
+                    log_message+= f", {dt*1000:.2f} ms"
+                    log_message+= f", {self.model.num_param}"
+
+                    if self.args.dataset_list:
+                        log_message+= f", epoch {self.epochs_trained_dict[prior_dataset]:2.2f}"
+                        log_message+= f", tokens_trained {self.tokens_trained_dict[prior_dataset]:.2e}"
+                        log_message+= f", dataset: {prior_dataset}"
+                    else:
+                        log_message+= f", epoch {current_epoch:6.2f}"
+                        log_message+= f", tokens_trained {self.tokens_trained:.2e}"
+                    log_message+= f", loss {lossf:.4f}"
+                    log_message+=f", chance_train_set {better_than_chance:.2e}"
+                    log_message+=f", chance_train_per_param {(better_than_chance/self.model.num_param):.2e}"
+                    log_message+= f", mfu {running_mfu*100:.2f}%"
                     if self.args.gns_type is not None:
                         self.gns = self.gns_ema.get_gns()
-                        if self.args.dataset_list:
-                            print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, epoch {self.epochs_trained_dict[prior_dataset]:6.2f}, dataset: {prior_dataset}, mfu {running_mfu*100:.2f}%, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr:.4f}, grad_norm {self.grad_norm:2f}, grad_std {self.grad_std:.2f}, tokens_trained {self.tokens_trained_dict[prior_dataset]:e}")
-                        else:
-                            print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, epoch {current_epoch:6.2f}, dataset: {prior_dataset}, mfu {running_mfu*100:.2f}%, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr:.4f}, grad_norm {self.grad_norm:.2f}, grad_std {self.grad_std:.2f}, tokens_trained {self.tokens_trained:e}")
-                    else:
-                        print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, lr {self.lr}, epoch {current_epoch:6.2f}, tokens_trained {self.tokens_trained:e}, dataset: {prior_dataset}, {self.grad_norm}, grad_std {self.grad_std}, mfu {running_mfu*100:.2f}%")
+                        log_message+= f", gns {self.gns:.2f}"
+                    log_message+= f", batch_size {self.args.batch_size}"
+                    log_message+= f", lr {self.lr:.4f}"
+                    log_message+= f", grad_norm {self.grad_norm:2f}"
+                    log_message+= f", grad_std {self.grad_std:.2f}"
+
+                    print(log_message)
 
                     if math.isnan(lossf):
                         # If training loss is nan, then exit.
@@ -1133,9 +1236,9 @@ class Trainer:
 
                     self.vram_allocated = get_gpu_memory_info(info_type='used') if self.args.device != "cpu" else 0
                     if self.args.dataset_list:
-                        self.log_metrics_non_validation(lossf, running_mfu, self.epochs_trained_dict[prior_dataset], self.tokens_trained_dict[prior_dataset], prior_dataset)
+                        self.log_metrics_non_validation(lossf, running_mfu, self.epochs_trained_dict[prior_dataset], self.tokens_trained_dict[prior_dataset], prior_dataset, better_than_chance)
                     else:
-                        self.log_metrics_non_validation(lossf, running_mfu, current_epoch, self.tokens_trained, prior_dataset)
+                        self.log_metrics_non_validation(lossf, running_mfu, current_epoch, self.tokens_trained, prior_dataset, better_than_chance)
 
                 if self.args.create_statistics and local_iter_num % self.args.softmax_io_log_interval == 0:
                     create_statistics(self, graph_y_labels)
@@ -1152,7 +1255,7 @@ class Trainer:
 
                         # Sample if set
                         if self.args.max_sample_tokens:
-                            self.sample_and_print(self.args.max_sample_tokens, start_tokens=self.args.sample_start_tokens)
+                            self.sample_and_print()
                     break
 
             if self.args.plot_statistics:

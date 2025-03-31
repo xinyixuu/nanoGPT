@@ -1,3 +1,4 @@
+# variations/activation_variations.py
 import torch
 import torch.nn as nn
 
@@ -304,6 +305,11 @@ class Tanh_Config(ActivationWrapper):
     def __init__(self, config=None):
         super().__init__(nn.Tanh, config)
 
+class Identity_Config(ActivationWrapper):
+    def __init__(self, config=None):
+        super().__init__(nn.Identity, config)
+
+
 activation_dictionary = {
     "celu": CELU_Config,
     "elu": ELU_Config,
@@ -327,5 +333,6 @@ activation_dictionary = {
     "softsign": Softsign_Config,
     "squared_relu": SquaredReLU,
     "tanh": Tanh_Config,
+    "identity": Identity_Config,
 }
 

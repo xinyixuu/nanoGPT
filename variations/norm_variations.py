@@ -1,7 +1,9 @@
+# norm_variations.py
 import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from variations.activation_variations import activation_dictionary
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -15,6 +17,38 @@ class LayerNorm(nn.Module):
 
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+
+
+class DynamicActivation(nn.Module):
+    """ Dynamic Activation Variations, including that of DyT
+    from: https://arxiv.org/abs/2503.10622
+    https://github.com/jiachenzhu/DyT
+    """
+    def __init__(self, config):
+        super().__init__()
+        ndim = config.n_embd
+
+        if config.dact_use_alpha:
+            self.alpha = nn.Parameter(torch.ones(1) * config.dact_alpha_init)
+        else:
+            self.alpha = 1.0
+
+        if config.dact_use_beta:
+            self.beta = nn.Parameter(torch.zeros(ndim))
+        else:
+            self.beta = 0.0
+
+        if config.dact_use_gamma:
+            self.gamma = nn.Parameter(torch.ones(ndim))
+        else:
+            self.gamma = 1.0
+
+
+        self.activation = activation_dictionary[config.dact_activation](config)
+
+    def forward(self, x):
+        return self.gamma * self.activation(self.alpha * x) + self.beta
+
 
 class RMSNorm(nn.Module):
     """RMS Normalization"""
@@ -52,7 +86,7 @@ class HyperSphereNorm(nn.Module):
             self.radius = nn.Parameter(torch.tensor([radius_init]))
         else:
             self.radius = radius_init
- 
+
     def forward(self, x):
         hypersphere_norm = x.norm(2, dim=-1, keepdim=True)
         return  x / hypersphere_norm * self.radius
@@ -166,4 +200,5 @@ norm_dictionary = {
     "prmsnorm": pRMSNorm,
     "krmsnorm": kRMSNorm,
     "hyperspherenorm": HyperSphereNorm,
+    "dact": DynamicActivation,
 }

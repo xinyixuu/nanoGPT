@@ -1,3 +1,4 @@
+# gpt_conf.py
 from dataclasses import dataclass, field, asdict, fields
 from typing import List
 import json
@@ -5,12 +6,19 @@ import math
 
 @dataclass
 class GPTConfig:
+    attention_list: List[str] = field(default_factory=lambda: [])
     block_size: int = 1024
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
     n_head: int = 12
     n_kv_group: int = 12
     n_embd: int = 768
+
+    # Attention Variation Spedcific
+
+    ## Inf attention variation
+    n_qk_head_dim: int = None
+    n_v_head_dim: int = None
 
     # Steering Vectors
     ## Where to intercept
@@ -84,6 +92,7 @@ class GPTConfig:
     use_parallel_mlp: bool = False
     mlp_variant: str = "mlp"
     mlp_expansion_factor: int = 4
+    mlp_res: bool = False
 
     ## KAN Option
     kan_poly_order: int = 3
@@ -212,8 +221,15 @@ class GPTConfig:
     krmsnorm_selection_type: str = 'last'
     krmsnorm_recompute_percentage: float = 0.05
     hsnorm_gain: bool = False
-    hsnorm_radius: float = None
-    hsnorm_radius_learning: float = None
+    hsnorm_radius: float = 1.0
+    hsnorm_radius_learning: bool = False
+
+    dact_alpha_init: float = 1.0
+    dact_activation: str = 'tanh'
+    dact_use_gamma: bool = True
+    dact_use_beta: bool = True
+    dact_use_alpha: bool = True
+    use_embedding_scale: bool = False
 
     # Activation Alternatives
 
@@ -255,6 +271,9 @@ class GPTConfig:
     ## Linear Initialization Options
     linear_mean_init: float= 0.0
     linear_std_init: float= 0.02
+
+    ## Embedding initialization options
+    init_variant: str = None
 
     # Quantizations
     start_quant_level: float = 0
