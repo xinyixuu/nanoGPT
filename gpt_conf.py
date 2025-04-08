@@ -15,7 +15,10 @@ class GPTConfig:
     n_embd: int = 768
 
     # Attention Variation Spedcific
-    n_head_dim: int = None # For Infinite Attention variation
+
+    ## Inf attention variation
+    n_qk_head_dim: int = None
+    n_v_head_dim: int = None
 
     # Steering Vectors
     ## Where to intercept
@@ -89,6 +92,7 @@ class GPTConfig:
     use_parallel_mlp: bool = False
     mlp_variant: str = "mlp"
     mlp_expansion_factor: int = 4
+    mlp_res: bool = False
 
     ## KAN Option
     kan_poly_order: int = 3

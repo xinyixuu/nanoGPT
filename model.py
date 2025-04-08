@@ -68,28 +68,35 @@ class Block(nn.Module):
         else:
             self.mlp = mlp
 
-    def forward(self, x, iter_num):
+    def forward(self, x, iter_num, mlp_res=None):
         def custom_forward(*inputs):
             x = inputs[0]
+            iter_num = inputs[1]
+            mlp_res = inputs[2]
+
             if self.use_post_ln:
                 if self.use_parallel_mlp:
                     x = self.ln_1(x + self.attn(x, iter_num) + self.mlp(x, iter_num))
                 else:
                     x = self.ln_1(x + self.attn(x, iter_num))
                     x = self.ln_2(x + self.mlp(x, iter_num))
+                return x, mlp_res
             else:
                 if self.use_parallel_mlp:
                     ln_1 = self.ln_1(x)
-                    x = x + self.attn(ln_1, iter_num) + self.mlp(ln_1, iter_num)
+                    mlp, mlp_res = self.mlp(ln_1, iter_num)
+                    x = x + self.attn(ln_1, iter_num) + mlp
+                    return x, mlp_res
                 else:
                     x = x + self.attn(self.ln_1(x), iter_num)
-                    x = x + self.mlp(self.ln_2(x), iter_num)
-            return x
+                    mlp, mlp_res = self.mlp(self.ln_2(x), iter_num, mlp_res)
+                    x = x + mlp
+                    return x, mlp_res
 
         if self.use_gradient_checkpointing and x.requires_grad:
             return checkpoint.checkpoint(custom_forward, x, use_reentrant=False)
         else:
-            return custom_forward(x)
+            return custom_forward(x, iter_num, mlp_res)
 
 class GPT(nn.Module):
 
@@ -354,12 +361,13 @@ class GPT(nn.Module):
             x = self.lsv_matrix(x)
 
         layer = 1
+        mlp_res = None
         for block in self.transformer.h:
             # Propagate tokens through layers
             if self.config.use_gradient_checkpointing:
                 x = checkpoint.checkpoint(block, x, iter_num, use_reentrant=self.config.recompute_backward_pass)
             else:
-                x = block(x, iter_num)
+                x, mlp_res = block(x, iter_num, mlp_res=mlp_res)
 
             # Intercept for Learned Steering Vectors
             if self.use_lsv and layer == self.config.apply_lsv_at_layer_idx:

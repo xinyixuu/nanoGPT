@@ -62,6 +62,7 @@ class Trainer:
         self.grad_norm = None
         self.grad_std = None
         self.tokens_trained = 0
+
         # If using multiple datasets, track tokens trained per dataset.
         if self.args.dataset_list is not None:
             # Flatten each element (which may contain multiple dataset names) into a single list of tokens
@@ -300,7 +301,7 @@ class Trainer:
 
         # Tensorboard
         if self.args.tensorboard_log:
-            timestamped_run_name = timestamp_prefix + "_" + self.args.tensorboard_run_name
+            timestamped_run_name = f"{self.model.num_param:.2e}_{timestamp_prefix}_{self.args.tensorboard_run_name}"
             if self.args.csv_log:
                 self.args.csv_name = timestamped_run_name
             log_subpath = os.path.join(self.args.tensorboard_log_dir, timestamped_run_name)
@@ -861,6 +862,8 @@ class Trainer:
             self.writer.add_scalar(f"{target_dataset}/vram", self.vram_allocated, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/mfu_pct", running_mfu * 100, self.iter_num)
 
+            self.writer.add_scalar(f"{target_dataset}/loss_vocab", self.model_args['vocab_size'] / torch.exp(losses['val']).item(), self.iter_num)
+
             self.writer.add_scalar(f"{target_dataset}/lr_iters", self.lr, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/lr_tokens", self.lr, tokens_trained)
 
@@ -921,6 +924,7 @@ class Trainer:
 
             self.writer.add_scalar(f"{target_dataset}/mfu_pct", running_mfu * 100, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/vram", self.vram_allocated, self.iter_num)
+            self.writer.add_scalar(f"{target_dataset}/param", self.model.num_param, self.iter_num)
 
             self.writer.add_scalar(f"{target_dataset}/epoch", epoch, self.iter_num)
             self.writer.add_scalar(f"{target_dataset}/tokens_trained", tokens_trained, self.iter_num)
@@ -1086,7 +1090,8 @@ class Trainer:
                             self.best_val_loss = losses['val']
                             # Save best validation loss
                             with open(os.path.join(self.args.out_dir, 'best_val_loss_and_iter.txt'), "w") as best_loss_file:
-                                best_loss_file.write(str(self.best_val_loss.item())+","+str(self.iter_num))
+                                chance_ratio = self.model_args['vocab_size']/math.exp(self.best_val_loss.item())
+                                best_loss_file.write(f"{self.best_val_loss.item()}, {self.iter_num}, {self.model.num_param}, {chance_ratio:.3e}, {chance_ratio/self.model.num_param:.3e}")
                             # Reset early exit counter
                             num_steps_with_worse_loss = 0
                         if self.iter_num > 0:
