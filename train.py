@@ -301,7 +301,10 @@ class Trainer:
 
         # Tensorboard
         if self.args.tensorboard_log:
-            timestamped_run_name = f"{self.model.num_param:.2e}_{timestamp_prefix}_{self.args.tensorboard_run_name}"
+            if self.ddp:
+                timestamped_run_name = f"{self.model.module.num_param:.2e}_{timestamp_prefix}_{self.args.tensorboard_run_name}"
+            else:
+                timestamped_run_name = f"{self.model.num_param:.2e}_{timestamp_prefix}_{self.args.tensorboard_run_name}"
             if self.args.csv_log:
                 self.args.csv_name = timestamped_run_name
             log_subpath = os.path.join(self.args.tensorboard_log_dir, timestamped_run_name)
