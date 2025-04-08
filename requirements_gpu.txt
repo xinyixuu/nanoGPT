@@ -1,0 +1,15 @@
+bitstring==4.2.3
+datasets==2.21.0
+numpy==1.26.0
+pandas==2.2.3
+plotly==5.22.0
+rich==13.9.2
+scipy==1.14.1
+seaborn==0.13.2
+tiktoken==0.7.0
+torchinfo==1.8.0
+transformers==4.44.2
+wandb==0.18.3
+onnx==1.17.0
+mamba_ssm==2.2.4
+causal_conv1d==1.5.0
