@@ -199,9 +199,12 @@ source ./logging/start_tensorboard.sh
 
 You can view live validation loss updates on url: [http://localhost:6006](http://localhost:6006)
 
-Note: Only one tensorboard process can grab port 6006 at time, try closing other
-processes (e.g. other tensorboards) using this port, or choose an alternative
-port if new tensorboard isn't showing.
+Note: Only one tensorboard process can grab port 6006 at time, if you want to
+run a second tensorboard, use the script and specify a different port e.g. 6007:
+
+```bash
+source ./logging/start_tensorboard.sh 6007
+```
 
 ## TODO Section:
 
