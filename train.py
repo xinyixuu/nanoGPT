@@ -839,24 +839,24 @@ class Trainer:
             self.writer.add_scalars(
                     f"{target_dataset}/chance_tokens",
                     {f"val_chance": val_better_than_chance},
-                    self.iter_num
+                    tokens_trained
                     )
             self.writer.add_scalars(
                     f"{target_dataset}/chance_iters",
                     {f"val_chance": val_better_than_chance},
-                    tokens_trained
+                    self.iter_num
                     )
 
             # vocab agnostic, cross parameter size comparison
             self.writer.add_scalars(
                     f"{target_dataset}/chance_tokens_per_param",
                     {f"val_chance": val_better_than_chance/self.model.num_param},
-                    self.iter_num
+                    tokens_trained
                     )
             self.writer.add_scalars(
                     f"{target_dataset}/chance_iters_per_param",
                     {f"val_chance": val_better_than_chance/self.model.num_param},
-                    tokens_trained
+                    self.iter_num
                     )
 
             self.writer.add_scalar(f"{target_dataset}/epoch", epoch, self.iter_num)
@@ -905,24 +905,24 @@ class Trainer:
             self.writer.add_scalars(
                     f"{target_dataset}/chance_tokens",
                     {f"train_chance": train_better_than_chance},
-                    self.iter_num
+                    tokens_trained
                     )
             self.writer.add_scalars(
                     f"{target_dataset}/chance_iters",
                     {f"train_chance": train_better_than_chance},
-                    tokens_trained
+                    self.iter_num
                     )
 
             # vocab agnostic, cross parameter size comparison
             self.writer.add_scalars(
                     f"{target_dataset}/chance_tokens_per_param",
-                    {f"val_chance": train_better_than_chance/self.model.num_param},
-                    self.iter_num
+                    {f"train_chance": train_better_than_chance/self.model.num_param},
+                    tokens_trained
                     )
             self.writer.add_scalars(
                     f"{target_dataset}/chance_iters_per_param",
-                    {f"val_chance": train_better_than_chance/self.model.num_param},
-                    tokens_trained
+                    {f"train_chance": train_better_than_chance/self.model.num_param},
+                    self.iter_num
                     )
 
             self.writer.add_scalar(f"{target_dataset}/mfu_pct", running_mfu * 100, self.iter_num)
