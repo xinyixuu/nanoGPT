@@ -1251,6 +1251,7 @@ class Trainer:
                 progress.update(task_id, advance=1)
                 # End of training actions
                 if self.iter_num > self.args.max_iters:
+                    print(self.best_val_loss)
                     if self.args.only_save_checkpoint_at_end:
 
                         self.save_checkpoint('ckpt.pt')
