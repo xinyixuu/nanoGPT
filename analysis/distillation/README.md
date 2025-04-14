@@ -15,3 +15,8 @@ initialization with mean of 0.00 and standard deviation of 0.02
 
 [!image](./images/angle_distribution_log_comparison.png)
 
+### Initialization scripts
+
+These are scripts which work to move closer to 90-deg initialization.
+
+[Sphere Packing on an \(n\)-Sphere with Shadow Vectors](README_Hypersphere_Packing.md)
