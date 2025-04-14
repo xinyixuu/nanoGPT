@@ -1,6 +1,6 @@
 # Sphere Packing on an \(n\)-Sphere with Shadow Vectors and TensorBoard
 
-This repository contains a Python script (`pack_sphere_shadows_tb.py`) that:
+This repository contains a Python script (`hypersphere_shadow_packing.py`) that:
 1. Places \(k\) “main” vectors on an \((n-1)\)-dimensional sphere (in \(\mathbb{R}^n\)) **plus** a “shadow” vector \(-x\) for each main vector.
 2. Minimizes a **Riesz (Coulomb‐like) potential** \(\sum_{i<j} 1 / \|x_i - x_j\|\) among **all** points \(\{x_i, -x_i\}\).
 3. Uses **PyTorch** for gradient-based optimization with either **SGD** or **Adam**.
@@ -8,7 +8,7 @@ This repository contains a Python script (`pack_sphere_shadows_tb.py`) that:
 5. Logs key metrics (energy, minimum angles, learning rates) to **TensorBoard**.
 6. Periodically saves histograms of the **minimum angles** between the main vectors, both as `.png` files and as images/histograms directly to TensorBoard.
 
-![TensorBoard screenshot](imaages/tensorboard.npg)
+![TensorBoard screenshot](./images/tensorboard.npg)
 
 ---
 
@@ -45,10 +45,10 @@ pip install torch matplotlib tensorboard
 
 ## Usage
 
-1. **Clone** or copy the script into a file, e.g. `pack_sphere_shadows_tb.py`.
+1. **Clone** or copy the script into a file, e.g. `hypersphere_shadow_packing.py`.
 2. **Run** from the command line:
    ```bash
-   python pack_sphere_shadows_tb.py \
+   python hypersphere_shadow_packing.py \
      --dim 3 \
      --k 5 \
      --max-iter 1000 \
@@ -76,7 +76,7 @@ pip install torch matplotlib tensorboard
 ## Command-Line Options
 
 ```text
-usage: pack_sphere_shadows_tb.py [-h] [--dim DIM] [--k K]
+usage: hypersphere_shadow_packing.py [-h] [--dim DIM] [--k K]
                                  [--outfile OUTFILE] [--max-iter MAX_ITER]
                                  [--step-size STEP_SIZE]
                                  [--optimizer {SGD,Adam}]
