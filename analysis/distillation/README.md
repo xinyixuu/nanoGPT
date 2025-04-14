@@ -19,4 +19,4 @@ initialization with mean of 0.00 and standard deviation of 0.02
 
 These are scripts which work to move closer to 90-deg initialization.
 
-![Sphere Packing on an \(n\)-Sphere with Shadow Vectors](README_Hypersphere_Packing.md)
+![Sphere Packing on an \(n\)-Sphere with Shadow Vectors](./images/tensorboard.png)
