@@ -8,7 +8,7 @@ This repository contains a Python script (`hypersphere_shadow_packing.py`) that:
 5. Logs key metrics (energy, minimum angles, learning rates) to **TensorBoard**.
 6. Periodically saves histograms of the **minimum angles** between the main vectors, both as `.png` files and as images/histograms directly to TensorBoard.
 
-![TensorBoard screenshot](./images/tensorboard.npg)
+![Sphere Packing on an \(n\)-Sphere with Shadow Vectors](./images/tensorboard.png)
 
 ---
 
