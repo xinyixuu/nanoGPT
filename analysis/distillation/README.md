@@ -13,5 +13,10 @@ initialization with mean of 0.00 and standard deviation of 0.02
 - `comparison_of_log_regression.py` - maps a logarithmic function to the
   minimum angle btwee
 
-[!image](./images/angle_distribution_log_comparison.png)
+![image](./images/angle_distribution_log_comparison.png)
 
+### Initialization scripts
+
+These are scripts which work to move closer to 90-deg initialization.
+
+![Sphere Packing on an \(n\)-Sphere with Shadow Vectors](./images/tensorboard.png)
