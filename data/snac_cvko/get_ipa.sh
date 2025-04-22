@@ -25,7 +25,7 @@ huggingface-cli login --token "${HF_TOKEN}"
 # Get current script directory
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
-url="https://huggingface.co/datasets/xinyixuu/zh_snac"
+url="https://huggingface.co/datasets/xinyixuu/ko_snac"
 out_dir="json_outs"
 
 if [[ ! -d "${out_dir}" ]]; then
@@ -40,6 +40,9 @@ wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "test.json" "${url}/res
 wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "invalidated.json" "${url}/resolve/main/json_dir/invalidated.json?download=true" || true
 wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "train.json" "${url}/resolve/main/json_dir/train.json?download=true" || true
 wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "validated.json" "${url}/resolve/main/json_dir/validated.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac.json" "${url}/resolve/main/json_dir/ko_snac.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac_1.json" "${url}/resolve/main/json_dir/ko_snac_1.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac_3.json" "${url}/resolve/main/json_dir/ko_snac_3.json?download=true" || true
 
 echo "snac conversion files downloaded and saved to ${out_dir}."
 popd
@@ -61,4 +64,5 @@ sed -i "/^[0-9].*/g" "$output_ipa_txt"
 wc -l "$output_ipa_txt"
 
 # Tokenization step to create train.bin and val.bin files.
-python3 "$script_dir"/prepare.py -t "$output_ipa_txt" --method char
+#python3 "$script_dir"/prepare.py -t "$output_ipa_txt" --method char
+python3 "$script_dir"/prepare.py -t "$output_ipa_txt" --method custom_char_byte_fallback --custom_chars_file ../template/phoneme_list.txt

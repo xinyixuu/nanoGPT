@@ -77,4 +77,5 @@ sed -i "/^[0-9].*/g" "$output_ipa_txt"
 wc -l "$output_ipa_txt"
 
 # Tokenization step to create train.bin and val.bin files.
-python3 "$script_dir"/prepare.py -t "$output_ipa_txt" --method char
+#python3 "$script_dir"/prepare.py -t "$output_ipa_txt" --method char
+python3 "$script_dir"/prepare.py -t "$output_ipa_txt" --method custom_char_byte_fallback --custom_chars_file ../template/phoneme_list.txt
