@@ -1,200 +1,226 @@
 import json
 import subprocess
-import os
-import sys
-import pandas as pd
+from pathlib import Path
+from datetime import datetime
+from itertools import product
 import argparse
+import os
+
+import yaml
 from rich import print
 from rich.console import Console
 from rich.table import Table
-from datetime import datetime
-from itertools import product
-from pathlib import Path
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Run experiments based on a json configuration file.")
-    parser.add_argument('--use_timestamp', action='store_true', help="Add timestamp to run‑name/out_dir (off by default)")
-    parser.add_argument('-c', "--config", type=str, required=True, help="Path to the configuration JSON file.")
-    parser.add_argument('-o', "--output_dir", type=str, default="out", help="Directory to place the set of output checkpoints.")
-    parser.add_argument("--csv_ckpt_dir", type=str, default="", help="Directory to place the set of csv checkpoints in csv_logs.")
-    parser.add_argument("--prefix", type=str, default='', help="Optional prefix for tensorboard_run_name and out_dir.")
-    parser.add_argument("--add_names", action="store_true", help="Include names of values of the configuration parameters in addition to values (may cause too long a file name).")
-    parser.add_argument("--use-best-val-loss-from", nargs=2, metavar=('csv_dir', 'output_dir'), type=str, default=['', ''],
-                        help="Grab the best val loss of the run given by the csv_dir. Then, use the corresponding ckpt from the matching output_dir")
-    parser.add_argument('--override_max_iters', default=None, type=int)
-    parser.add_argument('--override_dataset', default=None, type=str)
-    parser.add_argument('--override_block_size', default=None, type=int)
-    return parser.parse_args()
-
-def find_best_val_loss(csv_dir, output_dir):
-    csvList = os.listdir(csv_dir)
-
-    best_ckpt_loss = sys.float_info.max
-    best_ckpt_name = ""
-    for fname in csvList:
-        ext = os.path.splitext(fname)
-        params = ext[0].split('-')
-        df = pd.read_csv(f"{csv_dir}/{fname}", header=None)
-        best_valid_loss = df.iloc[:,-1].dropna().min()
-        if best_valid_loss < best_ckpt_loss:
-            best_ckpt_loss = best_valid_loss
-            best_ckpt_name = ext[0]
-
-    dirList = os.listdir(output_dir)
-    for fname in dirList:
-        params = best_ckpt_name.split('-', 2)
-        if params[2] in fname:
-            best_ckpt_name = fname
-            break
-
-    print("best_valid_loss: ", best_ckpt_loss)
-    print("best_valid_chpt: ", best_ckpt_name)
-    # return both path and loss for logging
-    return f"{output_dir}/{best_ckpt_name}", best_ckpt_loss
-
+# Constants
 LOG_DIR = Path("exploration_logs")
 LOG_DIR.mkdir(exist_ok=True)
+METRICS_FILENAME = "best_val_loss_and_iter.txt"
 
-def _completed_runs(log_path: Path) -> set[str]:
-    if not log_path.exists():
-        return set()
-    with log_path.open() as f:
-        return {json.loads(line)["formatted_name"]           # type: ignore[index]
-                for line in f if line.strip()}
 
-def _append_log(log_path: Path, formatted_name: str,
-                cfg: dict, best_val_loss):
-    with log_path.open("a") as f:
-        f.write(json.dumps({"formatted_name": formatted_name,
-                            "config": cfg,
-                            "best_val_loss": best_val_loss}) + "\n")
+def parse_args() -> argparse.Namespace:
+    """
+    Parse command-line arguments.
+    """
+    parser = argparse.ArgumentParser(
+        description="Run experiments based on a JSON configuration file."
+    )
+    parser.add_argument(
+        "-c", "--config", required=True, help="Path to the configuration JSON file."
+    )
+    parser.add_argument(
+        "-o",
+        "--output_dir",
+        default="out",
+        help="Directory to place experiment outputs.",
+    )
+    parser.add_argument(
+        "--prefix",
+        default="",
+        help="Optional prefix for run names and output directories.",
+    )
+    parser.add_argument(
+        "--use_timestamp",
+        action="store_true",
+        help="Prepend timestamp to run names and out_dir.",
+    )
+    return parser.parse_args()
 
-def check_conditions(conditions, combo_dict):
-    return all(combo_dict.get(cond[0]) == cond[1] for cond in conditions)
 
-def expand_range(value):
-    if isinstance(value, dict) and 'range' in value:
-        range_def = value['range']
-        start, end = range_def['start'], range_def['end']
-        step = range_def.get('step', 1 if isinstance(start, int) else 0.1)
-        return list(range(start, end + 1, step)) if isinstance(start, int) else [start + i * step for i in range(int((end - start) / step) + 1)]
-    return value
+def load_configurations(path: str) -> list[dict]:
+    """
+    Load a list of experiment configurations from a JSON file.
 
-def generate_combinations(config):
-    print("Generating parameter combinations...")
-    # Extract parameter groups if present, otherwise use an empty list to simplify logic
-    parameter_groups = config.pop('parameter_groups', [{}])
-    # Prepare base and conditional parameters
-    base_params = {k: expand_range(v) if isinstance(v, dict) and 'range' in v else v for k, v in config.items() if not isinstance(v, dict) or ('range' in v)}
-    base_params = {k: v if isinstance(v, list) else [v] for k, v in base_params.items()}
-    conditional_params = {k: v for k, v in config.items() if isinstance(v, dict) and 'conditions' in v}
+    Returns:
+        List of configuration dicts.
+    """
+    with open(path) as f:
+        return json.load(f)
 
-    for group in parameter_groups:
-        current_base_params = {**base_params, **group}
-        base_combinations = list(product(*[[(k, v) for v in values] for k, values in current_base_params.items()]))
 
-        for base_combination in base_combinations:
-            combo_dict = dict(base_combination)
-            valid_combos = [combo_dict]
+def expand_range(val):
+    """
+    Expand dicts with 'range' into a list of values.
+    """
+    if isinstance(val, dict) and "range" in val:
+        r = val["range"]
+        start, end = r["start"], r["end"]
+        step = r.get("step", 1 if isinstance(start, int) else 0.1)
+        if isinstance(start, int):
+            return list(range(start, end + 1, step))
+        count = int((end - start) / step) + 1
+        return [start + i * step for i in range(count)]
+    return val
 
-            for cond_param, values in conditional_params.items():
-                new_combos = []
-                for combo in valid_combos:
-                    if check_conditions(values['conditions'], combo):
-                        option_values = values['options'] if isinstance(values['options'], list) else [values['options']]
-                        for option_value in option_values:
-                            new_combo = {**combo, cond_param: option_value}
-                            new_combos.append(new_combo)
+
+def generate_combinations(config: dict) -> dict:
+    """
+    Yield all valid parameter combinations for a single config dict.
+
+    Returns:
+        Iterator of parameter-combination dicts.
+    """
+    groups = config.pop("parameter_groups", [{}])
+    base = {
+        k: (expand_range(v) if isinstance(v, dict) and "range" in v else v)
+        for k, v in config.items()
+        if not (isinstance(v, dict) and "conditions" in v)
+    }
+    base = {k: (v if isinstance(v, list) else [v]) for k, v in base.items()}
+    conditionals = {
+        k: v for k, v in config.items() if isinstance(v, dict) and "conditions" in v
+    }
+
+    for grp in groups:
+        merged = {**base, **grp}
+        keys = list(merged)
+        for combo in product(*(merged[k] for k in keys)):
+            combo_dict = dict(zip(keys, combo))
+            valid = [combo_dict]
+            for param, spec in conditionals.items():
+                next_valid = []
+                for c in valid:
+                    if all(c.get(key) == val for key, val in spec["conditions"]):
+                        opts = spec["options"]
+                        for opt in opts if isinstance(opts, list) else [opts]:
+                            new = dict(c)
+                            new[param] = opt
+                            next_valid.append(new)
                     else:
-                        new_combos.append(combo)
-                valid_combos = new_combos
+                        next_valid.append(c)
+                valid = next_valid
+            for v in valid:
+                yield v
 
-            for combo in valid_combos:
-                yield combo
 
-def format_config_name(config, config_basename, prefix, add_names):
-    if add_names:
-        config_items = [f"{k}_{v}" for k, v in config.items() if k != 'prev_run_ckpt']
-    else:
-        config_items = [f"{v}" for k, v in config.items() if k != 'prev_run_ckpt']
+def format_run_name(combo: dict, base: str, prefix: str) -> str:
+    """
+    Create a unique run name from parameters.
+    """
+    parts = [str(v) for v in combo.values()]
+    return f"{prefix}{base}-{'-'.join(parts)}"
 
-    return f"{prefix}{config_basename}-{'-'.join(config_items)}"
 
-def run_command(config, config_basename, output_dir, csv_ckpt_dir, prefix, add_names,
-                best_val_loss_from, override_max_iters, override_dataset, override_block_size,
-                use_timestamp):
-    formatted_name = format_config_name(config, config_basename, prefix, add_names)
-    log_path = LOG_DIR / f"{config_basename}.log"
-    if formatted_name in _completed_runs(log_path):
-        print(f"[yellow]Skipping existing run:[/] {formatted_name}")
+def read_metrics(out_dir: str) -> dict:
+    """
+    Read best_val_loss_and_iter.txt and parse five metrics.
+
+    Returns:
+        Dict with keys: best_val_loss, best_val_iter, num_params,
+        better_than_chance, btc_per_param.
+    """
+    path = Path(out_dir) / METRICS_FILENAME
+    if not path.exists():
+        raise FileNotFoundError(f"Metrics file not found: {path}")
+    line = path.read_text().strip()
+    loss, iteration, params, btc, btc_pp = [p.strip() for p in line.split(",")]
+    return {
+        "best_val_loss": float(loss),
+        "best_val_iter": int(iteration),
+        "num_params": int(params),
+        "better_than_chance": float(btc),
+        "btc_per_param": float(btc_pp),
+    }
+
+
+def completed_runs(log_file: Path) -> set[str]:
+    """
+    Return set of run names already logged in the YAML file.
+    """
+    if not log_file.exists():
+        return set()
+    runs = set()
+    for doc in yaml.safe_load_all(log_file.open()):
+        if doc and "formatted_name" in doc:
+            runs.add(doc["formatted_name"])
+    return runs
+
+
+def append_log(log_file: Path, name: str, combo: dict, metrics: dict) -> None:
+    """
+    Append a YAML entry with run details and metrics.
+    """
+    entry = {"formatted_name": name, "config": combo, **metrics}
+    with log_file.open("a") as f:
+        yaml.safe_dump(entry, f, explicit_start=True)
+
+
+def build_command(combo: dict) -> list[str]:
+    """
+    Construct the command-line invocation for train.py.
+    """
+    cmd = ["python3", "train.py"]
+    for k, v in combo.items():
+        if isinstance(v, bool):
+            cmd.append(f"--{'' if v else 'no-'}{k}")
+        elif isinstance(v, list):
+            for x in v:
+                cmd += [f"--{k}", str(x)]
+        else:
+            cmd += [f"--{k}", str(v)]
+    return cmd
+
+
+def run_experiment(combo: dict, base: str, args: argparse.Namespace) -> None:
+    """
+    Execute one experiment combo: skip if done, run train.py, record metrics.
+    """
+    run_name = format_run_name(combo, base, args.prefix)
+    log_file = LOG_DIR / f"{base}.yaml"
+    if run_name in completed_runs(log_file):
+        print(f"[yellow]Skipping already-run:[/] {run_name}")
         return
 
-    base_command = ["python3", "train.py"]
-    config['tensorboard_run_name'] = formatted_name
-    if use_timestamp:
-        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        run_dir = f"{ts}_{formatted_name}"
-        base_command.extend(["--timestamp", ts])
-    else:
-        run_dir = formatted_name
-    config['out_dir'] = os.path.join(output_dir, run_dir)
-    if override_max_iters:
-        config['max_iters'] = str(override_max_iters)
-    if override_dataset:
-        config['dataset'] = override_dataset
-    if override_block_size:
-        config['block_size'] = str(override_block_size)
+    # Prepare output directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") if args.use_timestamp else None
+    out_dir_name = f"{timestamp}_{run_name}" if timestamp else run_name
+    combo["out_dir"] = os.path.join(args.output_dir, out_dir_name)
 
-    # Print the entered arguments before each run
+    # Show parameters
     console = Console()
-    table = Table(title="Entered Arguments", show_header=True, header_style="bold magenta")
-    table.add_column("Argument", style="cyan")
-    table.add_column("Value", style="green")
-
-    for key, value in config.items():
-        table.add_row(key, str(value))
-
+    table = Table("Parameters", show_header=False)
+    for k, v in combo.items():
+        table.add_row(k, str(v))
     console.print(table)
 
-    for key, value in config.items():
-        if isinstance(value, bool):
-            base_command.extend([f"--{'' if value else 'no-'}{key}"])
-        elif isinstance(value, list):
-            for val in value:
-                base_command.extend([f"--{key}", str(val)])
-        else:
-            base_command.extend([f"--{key}", str(value)])
+    # Build and run
+    cmd = build_command(combo)
+    print(f"Running: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
 
-    best_val_loss_logged = None
-    if best_val_loss_from[0] and best_val_loss_from[1]:
-        base_command.extend(["--init_from", "prev_run"])
-        ckpt_path = find_best_val_loss(best_val_loss_from[0], best_val_loss_from[1])
-        ckpt_path, best_val_loss_logged = find_best_val_loss(best_val_loss_from[0], best_val_loss_from[1])
-        base_command.extend(["--prev_run_ckpt", ckpt_path])
-
-    if csv_ckpt_dir:
-        base_command.extend(["--csv_ckpt_dir", csv_ckpt_dir])
-
-    print(f"Running command: {' '.join(base_command)}")
-    subprocess.run(base_command)
-    _append_log(log_path, formatted_name, config, best_val_loss_logged)
+    # Read metrics and log
+    metrics = read_metrics(combo["out_dir"])
+    append_log(log_file, run_name, combo, metrics)
 
 
 def main():
     args = parse_args()
-    config_basename = os.path.splitext(os.path.basename(args.config))[0]
+    base = Path(args.config).stem
+    configs = load_configurations(args.config)
 
-    with open(args.config, 'r') as file:
-        original_configurations = json.load(file)
+    for cfg in configs:
+        for combo in generate_combinations(cfg):
+            run_experiment(combo, base, args)
 
-    for config in original_configurations:
-        for combination in generate_combinations(config):
-            run_command(combination, config_basename, args.output_dir,
-                        args.csv_ckpt_dir, args.prefix, args.add_names,
-                        args.use_best_val_loss_from, args.override_max_iters,
-                        args.override_dataset, args.override_block_size,
-                        args.use_timestamp)
 
 if __name__ == "__main__":
     main()
-
