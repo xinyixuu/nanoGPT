@@ -4,14 +4,16 @@ import os
 import sys
 import pandas as pd
 import argparse
-from datetime import datetime
-from itertools import product
 from rich import print
 from rich.console import Console
 from rich.table import Table
+from datetime import datetime
+from itertools import product
+from pathlib import Path
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run experiments based on a json configuration file.")
+    parser.add_argument('--use_timestamp', action='store_true', help="Add timestamp to run‑name/out_dir (off by default)")
     parser.add_argument('-c', "--config", type=str, required=True, help="Path to the configuration JSON file.")
     parser.add_argument('-o', "--output_dir", type=str, default="out", help="Directory to place the set of output checkpoints.")
     parser.add_argument("--csv_ckpt_dir", type=str, default="", help="Directory to place the set of csv checkpoints in csv_logs.")
@@ -47,7 +49,25 @@ def find_best_val_loss(csv_dir, output_dir):
 
     print("best_valid_loss: ", best_ckpt_loss)
     print("best_valid_chpt: ", best_ckpt_name)
-    return f"{output_dir}/{best_ckpt_name}"
+    # return both path and loss for logging
+    return f"{output_dir}/{best_ckpt_name}", best_ckpt_loss
+
+LOG_DIR = Path("exploration_logs")
+LOG_DIR.mkdir(exist_ok=True)
+
+def _completed_runs(log_path: Path) -> set[str]:
+    if not log_path.exists():
+        return set()
+    with log_path.open() as f:
+        return {json.loads(line)["formatted_name"]           # type: ignore[index]
+                for line in f if line.strip()}
+
+def _append_log(log_path: Path, formatted_name: str,
+                cfg: dict, best_val_loss):
+    with log_path.open("a") as f:
+        f.write(json.dumps({"formatted_name": formatted_name,
+                            "config": cfg,
+                            "best_val_loss": best_val_loss}) + "\n")
 
 def check_conditions(conditions, combo_dict):
     return all(combo_dict.get(cond[0]) == cond[1] for cond in conditions)
@@ -101,14 +121,23 @@ def format_config_name(config, config_basename, prefix, add_names):
     return f"{prefix}{config_basename}-{'-'.join(config_items)}"
 
 def run_command(config, config_basename, output_dir, csv_ckpt_dir, prefix, add_names,
-                best_val_loss_from, override_max_iters, override_dataset, override_block_size):
+                best_val_loss_from, override_max_iters, override_dataset, override_block_size,
+                use_timestamp):
     formatted_name = format_config_name(config, config_basename, prefix, add_names)
+    log_path = LOG_DIR / f"{config_basename}.log"
+    if formatted_name in _completed_runs(log_path):
+        print(f"[yellow]Skipping existing run:[/] {formatted_name}")
+        return
+
     base_command = ["python3", "train.py"]
     config['tensorboard_run_name'] = formatted_name
-    timestamp_prefix = datetime.now().strftime('%Y%m%d_%H%M%S')
-    config['out_dir'] = os.path.join(output_dir, f"{timestamp_prefix}_{formatted_name}")
-    base_command.extend(["--timestamp", timestamp_prefix])
-
+    if use_timestamp:
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        run_dir = f"{ts}_{formatted_name}"
+        base_command.extend(["--timestamp", ts])
+    else:
+        run_dir = formatted_name
+    config['out_dir'] = os.path.join(output_dir, run_dir)
     if override_max_iters:
         config['max_iters'] = str(override_max_iters)
     if override_dataset:
@@ -136,9 +165,11 @@ def run_command(config, config_basename, output_dir, csv_ckpt_dir, prefix, add_n
         else:
             base_command.extend([f"--{key}", str(value)])
 
+    best_val_loss_logged = None
     if best_val_loss_from[0] and best_val_loss_from[1]:
         base_command.extend(["--init_from", "prev_run"])
         ckpt_path = find_best_val_loss(best_val_loss_from[0], best_val_loss_from[1])
+        ckpt_path, best_val_loss_logged = find_best_val_loss(best_val_loss_from[0], best_val_loss_from[1])
         base_command.extend(["--prev_run_ckpt", ckpt_path])
 
     if csv_ckpt_dir:
@@ -146,6 +177,8 @@ def run_command(config, config_basename, output_dir, csv_ckpt_dir, prefix, add_n
 
     print(f"Running command: {' '.join(base_command)}")
     subprocess.run(base_command)
+    _append_log(log_path, formatted_name, config, best_val_loss_logged)
+
 
 def main():
     args = parse_args()
@@ -156,9 +189,11 @@ def main():
 
     for config in original_configurations:
         for combination in generate_combinations(config):
-            run_command(combination, config_basename, args.output_dir, args.csv_ckpt_dir,
-                        args.prefix, args.add_names, args.use_best_val_loss_from,
-                        args.override_max_iters, args.override_dataset, args.override_block_size)
+            run_command(combination, config_basename, args.output_dir,
+                        args.csv_ckpt_dir, args.prefix, args.add_names,
+                        args.use_best_val_loss_from, args.override_max_iters,
+                        args.override_dataset, args.override_block_size,
+                        args.use_timestamp)
 
 if __name__ == "__main__":
     main()
