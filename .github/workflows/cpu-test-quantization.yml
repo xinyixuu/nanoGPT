@@ -23,7 +23,7 @@ jobs:
       - name: Test all quantization options
         run: |
           source venv/bin/activate
-          python3 data/shakespeare_char/prepare.py
+          bash data/shakespeare_char/get_dataset.sh
           cd tests
           source test_quantization_cpu.sh
 

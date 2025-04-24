@@ -4,7 +4,7 @@
 cd ../
 
 dataset="shakespeare_char"
-python3 "data/${dataset}/prepare.py"
+bash "data/${dataset}/get_dataset.sh"
 
 softmax_variation=( \
   "softmax" \

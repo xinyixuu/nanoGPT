@@ -22,6 +22,6 @@ jobs:
       - name: Test all softmax variations
         run: |
           source venv/bin/activate
-          python3 data/shakespeare_char/prepare.py
+          bash data/shakespeare_char/get_dataset.sh
           python3 optimization_and_search/run_experiments.py --config explorations/config_cpu.json
 
