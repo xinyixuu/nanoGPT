@@ -25,23 +25,20 @@ def parse_args() -> argparse.Namespace:
         description="Run experiments based on a JSON configuration file."
     )
     parser.add_argument(
-        "-c", "--config", required=True, help="Path to the configuration JSON file."
+        '-c', '--config', required=True,
+        help="Path to the configuration JSON file."
     )
     parser.add_argument(
-        "-o",
-        "--output_dir",
-        default="out",
-        help="Directory to place experiment outputs.",
+        '-o', '--output_dir', default="out",
+        help="Directory to place experiment outputs."
     )
     parser.add_argument(
-        "--prefix",
-        default="",
-        help="Optional prefix for run names and output directories.",
+        '--prefix', default='',
+        help="Optional prefix for run names and output directories."
     )
     parser.add_argument(
-        "--use_timestamp",
-        action="store_true",
-        help="Prepend timestamp to run names and out_dir.",
+        '--use_timestamp', action='store_true',
+        help="Prepend timestamp to run names and out_dir."
     )
     return parser.parse_args()
 
@@ -61,10 +58,10 @@ def expand_range(val):
     """
     Expand dicts with 'range' into a list of values.
     """
-    if isinstance(val, dict) and "range" in val:
-        r = val["range"]
-        start, end = r["start"], r["end"]
-        step = r.get("step", 1 if isinstance(start, int) else 0.1)
+    if isinstance(val, dict) and 'range' in val:
+        r = val['range']
+        start, end = r['start'], r['end']
+        step = r.get('step', 1 if isinstance(start, int) else 0.1)
         if isinstance(start, int):
             return list(range(start, end + 1, step))
         count = int((end - start) / step) + 1
@@ -79,16 +76,14 @@ def generate_combinations(config: dict) -> dict:
     Returns:
         Iterator of parameter-combination dicts.
     """
-    groups = config.pop("parameter_groups", [{}])
+    groups = config.pop('parameter_groups', [{}])
     base = {
-        k: (expand_range(v) if isinstance(v, dict) and "range" in v else v)
+        k: (expand_range(v) if isinstance(v, dict) and 'range' in v else v)
         for k, v in config.items()
-        if not (isinstance(v, dict) and "conditions" in v)
+        if not (isinstance(v, dict) and 'conditions' in v)
     }
     base = {k: (v if isinstance(v, list) else [v]) for k, v in base.items()}
-    conditionals = {
-        k: v for k, v in config.items() if isinstance(v, dict) and "conditions" in v
-    }
+    conditionals = {k: v for k, v in config.items() if isinstance(v, dict) and 'conditions' in v}
 
     for grp in groups:
         merged = {**base, **grp}
@@ -99,9 +94,9 @@ def generate_combinations(config: dict) -> dict:
             for param, spec in conditionals.items():
                 next_valid = []
                 for c in valid:
-                    if all(c.get(key) == val for key, val in spec["conditions"]):
-                        opts = spec["options"]
-                        for opt in opts if isinstance(opts, list) else [opts]:
+                    if all(c.get(key) == val for key, val in spec['conditions']):
+                        opts = spec['options']
+                        for opt in (opts if isinstance(opts, list) else [opts]):
                             new = dict(c)
                             new[param] = opt
                             next_valid.append(new)
@@ -132,13 +127,13 @@ def read_metrics(out_dir: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Metrics file not found: {path}")
     line = path.read_text().strip()
-    loss, iteration, params, btc, btc_pp = [p.strip() for p in line.split(",")]
+    loss, iteration, params, btc, btc_pp = [p.strip() for p in line.split(',')]
     return {
-        "best_val_loss": float(loss),
-        "best_val_iter": int(iteration),
-        "num_params": int(params),
-        "better_than_chance": float(btc),
-        "btc_per_param": float(btc_pp),
+        'best_val_loss': float(loss),
+        'best_val_iter': int(iteration),
+        'num_params': int(params),
+        'better_than_chance': float(btc),
+        'btc_per_param': float(btc_pp),
     }
 
 
@@ -150,8 +145,8 @@ def completed_runs(log_file: Path) -> set[str]:
         return set()
     runs = set()
     for doc in yaml.safe_load_all(log_file.open()):
-        if doc and "formatted_name" in doc:
-            runs.add(doc["formatted_name"])
+        if doc and 'formatted_name' in doc:
+            runs.add(doc['formatted_name'])
     return runs
 
 
@@ -159,8 +154,8 @@ def append_log(log_file: Path, name: str, combo: dict, metrics: dict) -> None:
     """
     Append a YAML entry with run details and metrics.
     """
-    entry = {"formatted_name": name, "config": combo, **metrics}
-    with log_file.open("a") as f:
+    entry = {'formatted_name': name, 'config': combo, **metrics}
+    with log_file.open('a') as f:
         yaml.safe_dump(entry, f, explicit_start=True)
 
 
@@ -168,7 +163,7 @@ def build_command(combo: dict) -> list[str]:
     """
     Construct the command-line invocation for train.py.
     """
-    cmd = ["python3", "train.py"]
+    cmd = ['python3', 'train.py']
     for k, v in combo.items():
         if isinstance(v, bool):
             cmd.append(f"--{'' if v else 'no-'}{k}")
@@ -180,7 +175,11 @@ def build_command(combo: dict) -> list[str]:
     return cmd
 
 
-def run_experiment(combo: dict, base: str, args: argparse.Namespace) -> None:
+def run_experiment(
+    combo: dict,
+    base: str,
+    args: argparse.Namespace
+) -> None:
     """
     Execute one experiment combo: skip if done, run train.py, record metrics.
     """
@@ -191,9 +190,9 @@ def run_experiment(combo: dict, base: str, args: argparse.Namespace) -> None:
         return
 
     # Prepare output directory
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") if args.use_timestamp else None
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S') if args.use_timestamp else None
     out_dir_name = f"{timestamp}_{run_name}" if timestamp else run_name
-    combo["out_dir"] = os.path.join(args.output_dir, out_dir_name)
+    combo['out_dir'] = os.path.join(args.output_dir, out_dir_name)
 
     # Show parameters
     console = Console()
@@ -205,10 +204,23 @@ def run_experiment(combo: dict, base: str, args: argparse.Namespace) -> None:
     # Build and run
     cmd = build_command(combo)
     print(f"Running: {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError:
+        print(f"[red]Process exited with error for run:[/] {run_name}")
 
-    # Read metrics and log
-    metrics = read_metrics(combo["out_dir"])
+    # Read metrics (use existing or nan on failure)
+    try:
+        metrics = read_metrics(combo['out_dir'])
+    except Exception:
+        metrics = {
+            'best_val_loss': float('nan'),
+            'best_val_iter': float('nan'),
+            'num_params': float('nan'),
+            'better_than_chance': float('nan'),
+            'btc_per_param': float('nan'),
+        }
+
     append_log(log_file, run_name, combo, metrics)
 
 
@@ -222,5 +234,6 @@ def main():
             run_experiment(combo, base, args)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
+
