@@ -16,7 +16,6 @@ huggingface_hub==0.30.2
 jieba==0.42.1
 konlpy==0.6.0
 MeCab==0.996.11
-mecab_python3==1.0.5
 pykakasi==2.0.0
 Requests==2.32.3
 rich==14.0.0
