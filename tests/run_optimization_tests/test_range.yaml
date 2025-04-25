@@ -1,0 +1,16 @@
+---
+# Range sweep for a single parameter
+seed:
+  range:
+    start: 42
+    end: 45
+    step: 1
+
+# Everything else fixed
+max_iters: [1000]
+n_layer: [6]
+n_head: [6]
+block_size: [256]
+dataset: ["shakespeare_char"]
+tensorboard_run_name: ["range_demo"]
+

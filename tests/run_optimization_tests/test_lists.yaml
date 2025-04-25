@@ -1,0 +1,8 @@
+---
+# Lists of discrete values
+max_iters: [1000, 2000, 3000]
+n_layer: [4, 6, 8]
+device: ["cuda"]
+dtype: ["float16", "bfloat16"]
+dataset: ["shakespeare_char"]
+tensorboard_run_name: ["list_demo"]

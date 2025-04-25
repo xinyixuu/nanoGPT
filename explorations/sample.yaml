@@ -1,0 +1,44 @@
+# sample_config.yaml
+---
+# parameter_groups: define sets of overrides to apply on top of base params
+parameter_groups:
+  - use_rotary_embeddings: [true]
+    use_abs_pos_embeddings: [true]
+  - use_rotary_embeddings: [false]
+    use_abs_pos_embeddings: [true]
+
+# base hyperparameters
+max_iters: [250]
+n_layer: [6]
+n_head: [6]
+n_embd: [384]
+block_size: [256]
+device: ["cuda"]
+dtype: ["bfloat16"]
+dataset: ["shakespeare_char"]
+
+# ranged sweep
+seed:
+  range:
+    start: 100
+    end: 102
+    step: 1
+
+# conditional options
+consmax_initial_beta:
+  conditions:
+    - ["softmax_variant_attn", "consmax"]
+  options: ["2.5", "5.0", "10.0"]
+
+softmax_variant_attn:
+  - softmax
+  - polymax
+  - consmax
+
+# boolean flags
+compile: [true]
+use_post_ln: [true, false]
+
+# tensorboard run name
+tensorboard_run_name: ["full_feature_demo"]
+

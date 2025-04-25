@@ -22,11 +22,15 @@ def parse_args() -> argparse.Namespace:
     Parse command-line arguments.
     """
     parser = argparse.ArgumentParser(
-        description="Run experiments based on a JSON configuration file."
+        description="Run experiments based on a configuration file (JSON or YAML)."
     )
     parser.add_argument(
         '-c', '--config', required=True,
-        help="Path to the configuration JSON file."
+        help="Path to the configuration file."
+    )
+    parser.add_argument(
+        '--config_format', choices=['json', 'yaml'], default='json',
+        help="Configuration file format (json or yaml)."
     )
     parser.add_argument(
         '-o', '--output_dir', default="out",
@@ -43,15 +47,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_configurations(path: str) -> list[dict]:
+def load_configurations(path: str, fmt: str) -> list[dict]:
     """
-    Load a list of experiment configurations from a JSON file.
+    Load experiment configurations from a JSON or YAML file.
+
+    Args:
+        path: File path.
+        fmt: 'json' or 'yaml'.
 
     Returns:
-        List of configuration dicts.
+        A list of configuration dictionaries.
     """
-    with open(path) as f:
-        return json.load(f)
+    text = Path(path).read_text()
+    if fmt == 'yaml':
+        # YAML may contain multiple documents or a single list
+        loaded = list(yaml.safe_load_all(text))
+        # Flatten if outer list-of-lists
+        if len(loaded) == 1 and isinstance(loaded[0], list):
+            return loaded[0]
+        return loaded
+    else:
+        return json.loads(text)
 
 
 def expand_range(val):
@@ -109,7 +125,7 @@ def generate_combinations(config: dict) -> dict:
 
 def format_run_name(combo: dict, base: str, prefix: str) -> str:
     """
-    Create a unique run name from parameters.
+    Create a unique run name from parameter values.
     """
     parts = [str(v) for v in combo.values()]
     return f"{prefix}{base}-{'-'.join(parts)}"
@@ -139,7 +155,7 @@ def read_metrics(out_dir: str) -> dict:
 
 def completed_runs(log_file: Path) -> set[str]:
     """
-    Return set of run names already logged in the YAML file.
+    Return set of run names already logged in YAML file.
     """
     if not log_file.exists():
         return set()
@@ -211,15 +227,12 @@ def run_experiment(
 
     # Read metrics (use existing or nan on failure)
     try:
-        metrics = read_metrics(combo['out_dir'])
+        metrics = read_metrics(str(combo['out_dir']))
     except Exception:
-        metrics = {
-            'best_val_loss': float('nan'),
-            'best_val_iter': float('nan'),
-            'num_params': float('nan'),
-            'better_than_chance': float('nan'),
-            'btc_per_param': float('nan'),
-        }
+        metrics = {k: float('nan') for k in (
+            'best_val_loss','best_val_iter','num_params',
+            'better_than_chance','btc_per_param'
+        )}
 
     append_log(log_file, run_name, combo, metrics)
 
@@ -227,7 +240,7 @@ def run_experiment(
 def main():
     args = parse_args()
     base = Path(args.config).stem
-    configs = load_configurations(args.config)
+    configs = load_configurations(args.config, args.config_format)
 
     for cfg in configs:
         for combo in generate_combinations(cfg):

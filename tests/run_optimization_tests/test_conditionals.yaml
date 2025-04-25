@@ -1,0 +1,14 @@
+---
+max_iters: [1000]
+softmax_variant_attn: ["softmax", "consmax"]
+
+# Only if softmax_variant_attn == "consmax" do we sweep these
+consmax_initial_beta:
+  conditions:
+    - ["softmax_variant_attn", "consmax"]
+  options: ["1.0", "2.5", "5.0"]
+
+# Unconditional flag
+compile: [true]
+tensorboard_run_name: ["conditional_demo"]
+
