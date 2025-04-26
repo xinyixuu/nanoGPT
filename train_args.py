@@ -157,6 +157,17 @@ def parse_args():
     model_group.add_argument('--moe_router_scheme', default="softmax", type=str, help="option to set routing scheme for MoE layer, defaults to softmax")
     model_group.add_argument('--use_flex_attn', default=None,  action=argparse.BooleanOptionalAction, help="option for using flex attention for sliding windows")
 
+    ## Learned Position Embeddings
+    model_group.add_argument( '--n_lpe', type=int, default=6, help='Number of LearnedPositionEmbedding modules to instantiate (one per transformer block)')
+
+    model_group.add_argument('--lpe_block_size', default=256, type=int)
+    model_group.add_argument('--lpe_n_layer', default=3, type=int)
+    model_group.add_argument('--lpe_n_head', default=6, type=int)
+    model_group.add_argument('--lpe_n_kv_group', default=None, type=int)
+    model_group.add_argument('--lpe_n_embd', default=384, type=int, help="Size of embeddings in decoder layer and wte unless n_embd_wte is set." )
+    model_group.add_argument('--lpe_use_abs_pos_embeddings', default=True, action=argparse.BooleanOptionalAction, help='Whether LPE modules add absolute position embeddings')
+    model_group.add_argument('--lpe_n_qk_head_dim', default=None, type=int)
+    model_group.add_argument('--lpe_n_v_head_dim', default=None, type=int)
 
     ## Manual Steering Vector Options
 
@@ -320,6 +331,14 @@ def parse_args():
 
     model_group.add_argument(
         "--attention_variant",
+        type=str,
+        default="causal",
+        choices=attention_variants,
+        help="Which attention variant to use for the Transformer blocks."
+    )
+
+    model_group.add_argument(
+        "--lpe_attention_variant",
         type=str,
         default="causal",
         choices=attention_variants,

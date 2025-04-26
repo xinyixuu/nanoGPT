@@ -1,0 +1,17 @@
+[
+  {
+    "max_iters": ["30000"],
+    "n_layer": ["6"],
+    "n_head": ["6"],
+    "n_embd": ["384"],
+    "device": ["cuda"],
+    "dtype": ["float16"],
+    "dataset": ["conala"],
+    "compile": [true],
+    "use_rotary_embeddings": [true],
+    "use_abs_pos_embeddings": [true],
+    "lpe_use_abs_pos_embeddings": [true, false],
+    "lpe_n_layer": ["6", "3", "1"],
+    "n_lpe": ["6", "3", "1"]
+  }
+]
