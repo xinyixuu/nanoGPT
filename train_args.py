@@ -130,7 +130,7 @@ def parse_args():
     training_group.add_argument('--show_heatmaps', default=False, action=argparse.BooleanOptionalAction, help="Show heatmaps (or bar charts) of top-k token probabilities.")
     training_group.add_argument('--chart_type', type=str, default='heatmap', choices=['heatmap', 'barchart'], help="Type of chart to display if --show_heatmaps is set.")
     training_group.add_argument('--last_k_tokens', type=int, default=10, help="Number of last tokens to display in heatmaps or bar charts.")
-    training_group.add_argument('--sample_file', type=str, default=None, help="Output file for inference samples (if you want to save them).")
+    training_group.add_argument('--sample_file', type=str, default="sample.txt", help="Output file for inference samples (if you want to save them).")
     training_group.add_argument('--token_boundary', type=str, default=None, help="Optional separator string between emitted tokens (for decode).")
     training_group.add_argument('--num_samples', type=int, default=1, help="Number of generated samples during sampling.")
     training_group.add_argument('--temperature', type=float, default=0.8, help="Temperature for predictions (1.0 = normal, < 1.0 = less random).")
@@ -158,17 +158,18 @@ def parse_args():
     model_group.add_argument('--use_flex_attn', default=None,  action=argparse.BooleanOptionalAction, help="option for using flex attention for sliding windows")
 
     ## Learned Position Embeddings
-    model_group.add_argument( '--n_lpe', type=int, default=6, help='Number of LearnedPositionEmbedding modules to instantiate (one per transformer block)')
+    model_group.add_argument( '--n_lpe', type=int, default=0, help='Number of LearnedPositionEmbedding modules to instantiate (one per transformer block)')
 
     model_group.add_argument('--lpe_block_size', default=256, type=int)
     model_group.add_argument('--lpe_n_layer', default=3, type=int)
     model_group.add_argument('--lpe_n_head', default=6, type=int)
     model_group.add_argument('--lpe_n_kv_group', default=None, type=int)
-    model_group.add_argument('--lpe_n_embd', default=384, type=int, help="Size of embeddings in decoder layer and wte unless n_embd_wte is set." )
     model_group.add_argument('--lpe_use_abs_pos_embeddings', default=True, action=argparse.BooleanOptionalAction, help='Whether LPE modules add absolute position embeddings')
     model_group.add_argument('--lpe_n_qk_head_dim', default=None, type=int)
     model_group.add_argument('--lpe_n_v_head_dim', default=None, type=int)
 
+    model_group.add_argument('--target_layer_in_lpe', default=0, type=int)
+    model_group.add_argument('--target_layer_out_lpe', default=0, type=int)
     ## Manual Steering Vector Options
 
     ### Applying Steering Vectors

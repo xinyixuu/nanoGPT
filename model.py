@@ -170,10 +170,11 @@ class GPT(nn.Module):
             self.lsv_variant = config.lsv_variant
             self.lsv_matrix = lsv_dictionary[self.lsv_variant](config)
 
-        self.learned_position_embeddings = nn.ModuleList([
-            LearnedPositionEmbedding(config)
-            for _ in range(config.n_lpe)
-            ])
+        if config.n_lpe != 0:
+            self.learned_position_embeddings = nn.ModuleList([
+                LearnedPositionEmbedding(config)
+                for _ in range(config.n_lpe)
+                ])
 
         # Configure wte, with optional quantization and factoring
         if config.quantize_wte:
@@ -401,10 +402,16 @@ class GPT(nn.Module):
 
         # sum all learned position residuals
         learned_sum = None
-        for lpe in self.learned_position_embeddings:
-            out = lpe(b, t, x, iter_num)
-            # Accumulate embedding sum
-            learned_sum = out if learned_sum is None else learned_sum + out
+
+
+        # TODO: abstact into a method
+        if self.config.n_lpe != 0 and self.config.target_layer_in_lpe == 0:
+            for lpe in self.learned_position_embeddings:
+                out = lpe(b, t, x, iter_num)
+                # Accumulate embedding sum
+                learned_sum = out if learned_sum is None else learned_sum + out
+
+        if self.config.n_lpe != 0 and self.config.target_layer_out_lpe == 0:
             # Add learned embeddings to x
             x = x + learned_sum
 
@@ -427,7 +434,18 @@ class GPT(nn.Module):
                 x = self.lsv_matrix(x)
                 # x = self.apply_learned_vector_to_layer_output(x)
 
-            # Intercept for Steering Vectors
+            # TODO: abstact into a method
+            if self.config.n_lpe != 0 and self.config.target_layer_in_lpe == layer:
+                for lpe in self.learned_position_embeddings:
+                    out = lpe(b, t, x, iter_num)
+                    # Accumulate embedding sum
+                    learned_sum = out if learned_sum is None else learned_sum + out
+
+            if self.config.n_lpe != 0 and self.config.target_layer_out_lpe == layer:
+                # Add learned embeddings to x
+                x = x + learned_sum
+            # END lpe section
+
             if self.config.apply_vector_at_layer_idx is not None and layer == self.config.apply_vector_at_layer_idx:
                 x = self.apply_vector_to_layer_output(x)
             if self.config.obtain_vector_at_layer_idx is not None and layer == self.config.obtain_vector_at_layer_idx:
