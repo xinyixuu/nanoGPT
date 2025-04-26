@@ -36,7 +36,10 @@ On completion, the script writes:
 - **`<source>.mapped`**: the mapped output file (one character per original character).
 - **Console**: confirms length and prints a legend mapping each marker back to its category.
 
-## general
+---
+
+## Examples:
+### general
 
 Categories:
 ```
@@ -66,7 +69,7 @@ FFFFCCCADEDDDDEADEE
 FFFFFFFFCCCCCCADDDDEDDDDDEDDDDDEDE
 ```
 
-## exact
+### exact
 
 Categories:
 ```
@@ -97,7 +100,7 @@ CCCCCACD
 EEEECCCACFCCCCGACHD
 EEEEEEEECCCCCCACCCCICCCCCICCCCCFCH
 ```
-## keywords
+### keywords
 
 Categories
 ```
@@ -132,7 +135,7 @@ FFFFGGGADHDDDDIADJE
 FFFFFFFFKKKKKKADDDDLDDDDDLDDDDDHDJ
 ```
 
-## nesting
+### nesting
 
 Categories:
 ```
@@ -157,7 +160,7 @@ BBBBBBBBBBBBBBBBBBB
 CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 ```
 
-## param_nesting
+### param_nesting
 Categories:
 ```
 # Legend: char → category
@@ -176,7 +179,7 @@ class C:
                                AAA
 ```
 
-## argnum
+### argnum
 Categories:
 ```
 # Legend: char → category
@@ -196,7 +199,7 @@ class C:
                                 A
 ```
 
-## dot_nesting
+### dot_nesting
 
 Categories:
 ```
@@ -219,7 +222,7 @@ class C:
                BBBBACCCCCADDDDD
 ```
 
-## name_kind
+### name_kind
 
 Categories:
 ```
@@ -244,7 +247,7 @@ AAAAAAAACADDDDAADAA
 AAAAAAAAAAAAAAADDDDADDDDDADDDDDADA
 ```
 
-## literals
+### literals
 
 Categories:
 ```
@@ -264,7 +267,7 @@ AAAABBBAAAC
 AAAACAAAC
 ```
 
-## semantic
+### semantic
 
 Categories:
 ```
@@ -292,7 +295,7 @@ FFFFCCCADEDDDDEADEE
 FFFFFFFFGGGGGGADDDDEDDDDDEDDDDDEDE
 ```
 
-## comments
+### comments
 
 Categories:
 ```
@@ -316,7 +319,7 @@ CCCCCCCACCCCCCCACCC
 CCCCCCCCCCCCCCACCCCCCCCCCCCCCCCCCC
 ```
 
-## scope
+### scope
 
 Categories:
 ```
