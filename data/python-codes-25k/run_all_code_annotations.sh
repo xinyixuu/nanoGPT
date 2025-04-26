@@ -1,27 +1,5 @@
-##!/usr/bin/env bash
-
-## filename to convert
-#filename="$1"
-
-## List out every supported mode
-#MODES=(
-#  general exact keywords nesting param_nesting argnum
-#  dot_nesting name_kind literals semantic comments scope
-#)
-
-
-#for mode in "${MODES[@]}"; do
-#  echo "=== MODE: $mode ==="
-#  echo
-#  python code_highlighter.py --mode "$mode" "$filename"
-#  mv small_example.py.mapped "$mode".txt
-#  echo
-#  cat "$mode.txt"
-#  echo
-#  cat "$filename"
-#  echo
-#done
-#!/usr/bin/env bash
+#!/bin/bash
+# run_all_code_annotations.sh
 
 # Color codes
 BLUE='\033[0;34m'
@@ -31,9 +9,14 @@ NC='\033[0m'
 
 # filename to convert
 filename="$1"
+output_folder="annotated_files"
 mapped_file="${filename}.mapped"
 
-# List out every supported mode
+if [[ ! -d "$output_folder" ]]; then
+  mkdir -p  "$output_folder"
+fi
+
+# List of every supported mode
 MODES=(
   general exact keywords nesting param_nesting argnum
   dot_nesting name_kind literals semantic comments scope
@@ -47,11 +30,11 @@ for mode in "${MODES[@]}"; do
   python code_highlighter.py --mode "$mode" "$filename" 2>&1
 
   # Move the .mapped file to a mode-specific file
-  mv "$mapped_file" "$mode.txt"
+  mv "$mapped_file" "${output_folder}/$mode.txt"
   echo
 
   # Show the mapped output in green
-  echo -e "${GREEN}--- $mode.txt (mapped output) ---${NC}"
+  echo -e "${GREEN}--- ${output_folder}/$mode.txt (mapped output) ---${NC}"
   cat "$mode.txt"
   echo
 
