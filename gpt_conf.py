@@ -30,6 +30,7 @@ class GPTConfig:
     lpe_use_rotary_embeddings: bool = True
     lpe_attention_variant: str = "causal"
     lpe_mlp_variant: str = "mlp"
+    lpe_mlp_size: str = None
     target_layer_in_lpe: int = 0
     target_layer_out_lpe: int = 0
 
