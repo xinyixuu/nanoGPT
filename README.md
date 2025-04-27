@@ -87,7 +87,7 @@ If unsure, visit the pytorch page and subtitute the appropriate line for the `to
 This downloads and parses a literature dataset into `train.bin` and `val.bin` files.
 
 ```bash
-python3 data/shakespeare_char/prepare.py
+bash data/shakespeare_char/get_dataset.sh
 ```
 ### Train Model From Scratch
 
