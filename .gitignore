@@ -2,6 +2,7 @@
 __pycache__/
 logs/
 csv_logs/
+exploration_logs/
 
 # file extensions
 *.pkl

@@ -19,7 +19,7 @@ jobs:
           python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           python3 -m pip install numpy transformers datasets tiktoken wandb tqdm tensorboard
           python3 -m pip install -r requirements_cpu.txt
-      - name: Test all softmax variations
+      - name: Test gqa variations
         run: |
           source venv/bin/activate
           python3 data/shakespeare_char/prepare.py

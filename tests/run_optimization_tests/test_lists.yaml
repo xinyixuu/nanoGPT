@@ -1,0 +1,11 @@
+---
+# Lists of discrete values
+max_iters: [250]
+n_layer: [2,4,6]
+n_head: [2,3]
+n_embd: [30]
+block_size: [25]
+device: ["cpu"]
+dtype: ["float16", "bfloat16"]
+dataset: ["shakespeare_char"]
+tensorboard_run_name: ["list_demo"]
