@@ -1,7 +1,5 @@
-#!/usr/bin/env python3
+# code_highlighter.py
 """
-token_map.py
-
 Map each character of a Python source file one-to-one to a single character
 representing various facets of the code (token types, nesting, names, etc.).
 Literal '\n' characters are kept as '\n'.  Other unmapped chars become
