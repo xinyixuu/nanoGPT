@@ -157,20 +157,6 @@ def parse_args():
     model_group.add_argument('--moe_router_scheme', default="softmax", type=str, help="option to set routing scheme for MoE layer, defaults to softmax")
     model_group.add_argument('--use_flex_attn', default=None,  action=argparse.BooleanOptionalAction, help="option for using flex attention for sliding windows")
 
-    ## Learned Position Embeddings
-    model_group.add_argument( '--n_lpe', type=int, default=0, help='Number of LearnedPositionEmbedding modules to instantiate (one per transformer block)')
-
-    model_group.add_argument('--lpe_block_size', default=256, type=int)
-    model_group.add_argument('--lpe_n_layer', default=3, type=int)
-    model_group.add_argument('--lpe_n_head', default=6, type=int)
-    model_group.add_argument('--lpe_n_kv_group', default=None, type=int)
-    model_group.add_argument('--lpe_use_abs_pos_embeddings', default=True, action=argparse.BooleanOptionalAction, help='Whether LPE modules add absolute position embeddings')
-    model_group.add_argument('--lpe_use_rotary_embeddings', default=True, action=argparse.BooleanOptionalAction, help='Whether LPE modules add absolute position embeddings')
-    model_group.add_argument('--lpe_n_qk_head_dim', default=None, type=int)
-    model_group.add_argument('--lpe_n_v_head_dim', default=None, type=int)
-
-    model_group.add_argument('--target_layer_in_lpe', default=0, type=int)
-    model_group.add_argument('--target_layer_out_lpe', default=0, type=int)
     ## Manual Steering Vector Options
 
     ### Applying Steering Vectors
@@ -203,10 +189,19 @@ def parse_args():
     training_group.add_argument("--lsv_focused_training", default=False, action=argparse.BooleanOptionalAction, help="train but only unfreeze lsv")
 
     ## MLP Options
+
+    # MLP Variations
+    mlp_variants = [
+            "mlp",
+            "kan",
+            "swiglu",
+            "identity",
+            ]
+
     model_group.add_argument('--use_parallel_mlp', default=False, action=argparse.BooleanOptionalAction)
-    model_group.add_argument("--mlp_variant", type=str, default="mlp", choices=["mlp", "kan", "swiglu"], help="MLP variation type")
-    model_group.add_argument("--lpe_mlp_variant", type=str, default="mlp", choices=["mlp", "kan", "swiglu"], help="MLP variation type")
+    model_group.add_argument("--mlp_variant", type=str, default="mlp", choices=mlp_variants, help="MLP variation type")
     model_group.add_argument("--mlp_expansion_factor", type=int, default=4, help="If MLP like variant is used, set the expansion factor for the linear transformations, default is 4.")
+    model_group.add_argument("--mlp_size", type=int, default=None, help="If not None, is used instead of mlp_expansion_factor")
     model_group.add_argument("--mlp_size", type=int, default=None, help="If not None, is used instead of mlp_expansion_factor")
     model_group.add_argument('--mlp_res', default=False, action=argparse.BooleanOptionalAction)
 
@@ -334,14 +329,6 @@ def parse_args():
 
     model_group.add_argument(
         "--attention_variant",
-        type=str,
-        default="causal",
-        choices=attention_variants,
-        help="Which attention variant to use for the Transformer blocks."
-    )
-
-    model_group.add_argument(
-        "--lpe_attention_variant",
         type=str,
         default="causal",
         choices=attention_variants,
@@ -601,6 +588,31 @@ def parse_args():
     model_group.add_argument('--use_gradient_checkpointing', default=False, action=argparse.BooleanOptionalAction, help="Memory efficient training, but takes longer time to train due to trading compute time for memory efficiency. For best memory tradeoff omit the --compile flag. For medium memory tradeoff add --compile.")
     model_group.add_argument('--recompute_backward_pass', default=False, action=argparse.BooleanOptionalAction, help="Recomputes for the backward pass, must use with --use_gradient_checkpointing")
 
+    ## Learned Position Embeddings
+    model_group.add_argument( '--n_lpe', type=int, default=0, help='Number of LearnedPositionEmbedding modules to instantiate (one per transformer block)')
+
+    model_group.add_argument('--lpe_block_size', default=256, type=int)
+    model_group.add_argument('--lpe_n_layer', default=3, type=int)
+    model_group.add_argument('--lpe_n_head', default=6, type=int)
+    model_group.add_argument('--lpe_n_kv_group', default=None, type=int)
+    model_group.add_argument('--lpe_use_abs_pos_embeddings', default=True, action=argparse.BooleanOptionalAction, help='Whether LPE modules add absolute position embeddings')
+    model_group.add_argument('--lpe_use_rotary_embeddings', default=True, action=argparse.BooleanOptionalAction, help='Whether LPE modules add absolute position embeddings')
+    model_group.add_argument('--lpe_n_qk_head_dim', default=None, type=int)
+    model_group.add_argument('--lpe_n_v_head_dim', default=None, type=int)
+
+    model_group.add_argument('--target_layer_in_lpe', default=0, type=int)
+    model_group.add_argument('--target_layer_out_lpe', default=0, type=int)
+
+    model_group.add_argument(
+        "--lpe_attention_variant",
+        type=str,
+        default="causal",
+        choices=attention_variants,
+        help="Which attention variant to use for the Transformer blocks."
+    )
+
+
+    model_group.add_argument("--lpe_mlp_variant", type=str, default="mlp", choices=mlp_variants, "kan", "swiglu"], help="MLP variation type")
     # Optimizer args
     training_group.add_argument('--max_iters', default=3500, type=int)
     training_group.add_argument('--weight_decay', default=1e-1, type=float)
