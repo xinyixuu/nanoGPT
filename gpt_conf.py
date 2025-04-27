@@ -24,7 +24,6 @@ class GPTConfig:
     lpe_n_layer: int = 12
     lpe_n_head: int = 12
     lpe_n_kv_group: int = 12
-    lpe_n_embd: int = 768
     lpe_n_qk_head_dim: int = None
     lpe_n_v_head_dim: int = None
     lpe_use_abs_pos_embeddings: bool = True # Note: one can use this AND rotary embeddings

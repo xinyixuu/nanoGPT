@@ -1,13 +1,13 @@
 [
   {
-    "max_iters": ["30000"],
+    "max_iters": ["20000"],
     "n_head": ["6"],
     "n_embd": ["384"],
     "device": ["cuda"],
     "dtype": ["float16"],
-    "dataset": ["conala"],
+    "dataset": ["tiny-stories"],
     "compile": [true],
-    "max_sample_tokens": ["100"],
+    "max_sample_tokens": ["256"],
     "use_rotary_embeddings": [true],
     "use_abs_pos_embeddings": [true],
     "parameter_groups": [
@@ -21,6 +21,13 @@
         "lpe_n_layer": ["6"],
         "target_layer_in_lpe": ["0", "3"],
         "target_layer_out_lpe": ["3", "6"],
+        "lpe_use_abs_pos_embeddings": [false, true]
+      },
+      {
+        "n_lpe": ["6"],
+        "lpe_n_layer": ["6"],
+        "target_layer_in_lpe": ["2"],
+        "target_layer_out_lpe": ["4"],
         "lpe_use_abs_pos_embeddings": [false, true]
       }
     ]
