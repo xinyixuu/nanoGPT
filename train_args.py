@@ -300,7 +300,14 @@ def parse_args():
 
 
     # Attention Variations
-    attention_variants = ["causal", "linear", "ssm", "identity", "infinite"]
+    attention_variants = [
+                          "causal",
+                          "linear",
+                          "ssm",
+                          "identity",
+                          "infinite",
+                          "iqa",
+                          ]
 
     model_group.add_argument(
         "--attention_list",
