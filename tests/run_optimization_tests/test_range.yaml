@@ -7,10 +7,12 @@ seed:
     step: 1
 
 # Everything else fixed
-max_iters: [1000]
-n_layer: [6]
-n_head: [6]
-block_size: [256]
+max_iters: [250]
+n_layer: [2]
+n_head: [2]
+n_embd: [30]
+block_size: [25]
+device: ["cpu"]
 dataset: ["shakespeare_char"]
 tensorboard_run_name: ["range_demo"]
 

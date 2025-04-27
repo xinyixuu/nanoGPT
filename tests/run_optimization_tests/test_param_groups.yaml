@@ -12,11 +12,12 @@ parameter_groups:
     tensorboard_run_name: ["group_both"]
 
 # Base settings
-max_iters: [2000]
-n_layer: [6]
-n_head: [6]
-block_size: [256]
-device: ["cuda"]
+max_iters: [250]
+n_layer: [2]
+n_head: [2]
+n_embd: [32]
+block_size: [25]
+device: ["cpu"]
 dtype: ["bfloat16"]
 dataset: ["shakespeare_char"]
 

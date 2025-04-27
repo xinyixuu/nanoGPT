@@ -1,16 +1,15 @@
 ---
-max_iters: [1000]
-n_layer: [6]
-n_head: [6]
-block_size: [128]
-device: ["cuda"]
+max_iters: [250]
+n_layer: [2]
+n_head: [2]
+n_embd: [32]
+block_size: [25]
+device: ["cpu"]
 dataset: ["shakespeare_char"]
 
 # Boolean switches
-compile: [true]
-use_post_ln: [true, false]
-always_save_checkpoint: [true]
-plot_statistics: [true, false]
+use_abs_pos_embeddings: [true, false]
+use_rotary_embeddings: [true, false]
 
 tensorboard_run_name: ["boolean_demo"]
 
