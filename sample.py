@@ -23,6 +23,10 @@ from model import GPT, GPTConfig
 from utils.model_info import print_summary, print_module_structure, print_model_blocks
 from variations.model_variations import model_variation_dictionary
 
+import lm_eval
+from pprint import pprint
+from benchmarks.gpt_lm_eval_wrapper import NanoGPTLM
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Inference from trained models")
     parser.add_argument("--device", type=str, default="cuda", help="Device to run inference (e.g., 'cpu', 'cuda', 'cuda:0', 'cuda:1')")
@@ -76,6 +80,12 @@ def parse_args():
     parser.add_argument("--eval_only", action=argparse.BooleanOptionalAction, help="Enable evaluation only mode to calculate and print validation loss")
     parser.add_argument("--eval_iters", type=int, default=250, help="iterations for evaluation")
     parser.add_argument("--eval_dataset", type=str, default=None, help="dataset for evaluation")
+
+    # lm_eval Benchmarking Related
+    parser.add_argument('--lm_eval_tasks', type=str, default=None,
+                    help="Comma-separated list of tasks for lm-eval (e.g. 'arc_easy,hellaswag')")
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help="Batch size to use for evaluation")
 
     return parser.parse_args()
 
@@ -498,6 +508,34 @@ def main():
     # Inference with different Rope Length
     if args.rope_length:
         model.update_rope_length(args.rope_length)
+
+    if args.lm_eval_tasks:
+        print(f"Running LM-Eval on tasks: {args.lm_eval_tasks}")
+        
+        # Prepare wrapped model
+        wrapped_model = NanoGPTLM(
+            model=model,
+            tokenizer_encode=encode,
+            tokenizer_decode=decode,
+            eot_token_id=model.config.vocab_size - 1, # |endoftext| token is the last token in GPT2
+            device=args.device,
+            max_new_tokens=args.max_new_tokens,
+            batch_size=args.batch_size,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            stop_string=args.stop_string,
+        )
+        
+        # Run evaluation
+        results = lm_eval.simple_evaluate(
+            model=wrapped_model,
+            tasks=args.lm_eval_tasks.split(","),
+            batch_size=args.batch_size,
+        )
+        
+        pprint(results)
+        
+        return
 
     if args.eval_only:
         print("Running in eval_only mode...")
