@@ -202,7 +202,6 @@ def parse_args():
     model_group.add_argument("--mlp_variant", type=str, default="mlp", choices=mlp_variants, help="MLP variation type")
     model_group.add_argument("--mlp_expansion_factor", type=int, default=4, help="If MLP like variant is used, set the expansion factor for the linear transformations, default is 4.")
     model_group.add_argument("--mlp_size", type=int, default=None, help="If not None, is used instead of mlp_expansion_factor")
-    model_group.add_argument("--mlp_size", type=int, default=None, help="If not None, is used instead of mlp_expansion_factor")
     model_group.add_argument('--mlp_res', default=False, action=argparse.BooleanOptionalAction)
 
     ## KAN Options
@@ -599,6 +598,7 @@ def parse_args():
     model_group.add_argument('--lpe_use_rotary_embeddings', default=True, action=argparse.BooleanOptionalAction, help='Whether LPE modules add absolute position embeddings')
     model_group.add_argument('--lpe_n_qk_head_dim', default=None, type=int)
     model_group.add_argument('--lpe_n_v_head_dim', default=None, type=int)
+    model_group.add_argument("--lpe_mlp_size", type=int, default=None, help="If not None, is used instead of mlp_expansion_factor")
 
     model_group.add_argument('--target_layer_in_lpe', default=0, type=int)
     model_group.add_argument('--target_layer_out_lpe', default=0, type=int)
