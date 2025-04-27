@@ -7,10 +7,16 @@
     "dtype": ["float16"],
     "dataset": ["tiny-stories"],
     "compile": [true],
-    "max_sample_tokens": ["256"],
+    "block_size": ["325"],
+    "max_sample_tokens": ["325"],
     "use_rotary_embeddings": [true],
     "use_abs_pos_embeddings": [true],
     "parameter_groups": [
+      {
+        "lpe_n_layer": ["1"],
+        "n_layer": ["6"],
+        "n_lpe": ["0"]
+      },
       {
         "lpe_n_layer": ["1"],
         "n_layer": ["42"],
@@ -21,14 +27,16 @@
         "lpe_n_layer": ["6"],
         "target_layer_in_lpe": ["0", "3"],
         "target_layer_out_lpe": ["3", "6"],
-        "lpe_use_abs_pos_embeddings": [false, true]
+        "lpe_use_abs_pos_embeddings": [true],
+        "lpe_use_rotary_embeddings": [true]
       },
       {
         "n_lpe": ["6"],
         "lpe_n_layer": ["6"],
         "target_layer_in_lpe": ["2"],
         "target_layer_out_lpe": ["4"],
-        "lpe_use_abs_pos_embeddings": [false, true]
+        "lpe_use_abs_pos_embeddings": [true],
+        "lpe_use_rotary_embeddings": [true]
       }
     ]
   }

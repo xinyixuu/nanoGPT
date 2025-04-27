@@ -26,7 +26,8 @@ class GPTConfig:
     lpe_n_kv_group: int = 12
     lpe_n_qk_head_dim: int = None
     lpe_n_v_head_dim: int = None
-    lpe_use_abs_pos_embeddings: bool = True # Note: one can use this AND rotary embeddings
+    lpe_use_abs_pos_embeddings: bool = True
+    lpe_use_rotary_embeddings: bool = True
     lpe_attention_variant: str = "causal"
     target_layer_in_lpe: int = 0
     target_layer_out_lpe: int = 0

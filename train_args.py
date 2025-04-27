@@ -165,6 +165,7 @@ def parse_args():
     model_group.add_argument('--lpe_n_head', default=6, type=int)
     model_group.add_argument('--lpe_n_kv_group', default=None, type=int)
     model_group.add_argument('--lpe_use_abs_pos_embeddings', default=True, action=argparse.BooleanOptionalAction, help='Whether LPE modules add absolute position embeddings')
+    model_group.add_argument('--lpe_use_rotary_embeddings', default=True, action=argparse.BooleanOptionalAction, help='Whether LPE modules add absolute position embeddings')
     model_group.add_argument('--lpe_n_qk_head_dim', default=None, type=int)
     model_group.add_argument('--lpe_n_v_head_dim', default=None, type=int)
 

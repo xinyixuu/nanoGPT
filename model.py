@@ -127,7 +127,7 @@ class LearnedPositionEmbedding(nn.Module):
         # add absolute position embeddings if used
         if self.lpe_config.use_abs_pos_embeddings:
             pos = torch.arange(t, dtype=torch.long, device=x.device)
-            pos_emb = self.wpe(pos).unsqueeze(0).expand(b, -1, -1)
+            pos_emb = self.wpe(pos)
             x = x + pos_emb
         # dropout on combined embedding
         x = self.drop(x)
