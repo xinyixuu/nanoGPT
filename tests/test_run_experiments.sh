@@ -1,8 +1,10 @@
 #!/bin/bash
-# test_experiments.sh
+# test_run_experiments.sh
 
+pushd ../
 dataset="shakespeare_char"
 python3 "data/${dataset}/prepare.py"
+popd
 
 pushd ../
 python3 optimization_and_search/run_experiments.py -c tests/run_optimization_tests/test_range.yaml         --config_format yaml

@@ -27,5 +27,5 @@ jobs:
       - name: Test run_experiments yaml
         run: |
           cd tests
-          source test_experiments.sh
+          source test_run_experiments.sh
 
