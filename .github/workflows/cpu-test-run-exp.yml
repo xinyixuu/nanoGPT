@@ -26,6 +26,8 @@ jobs:
           python3 optimization_and_search/run_experiments.py --config explorations/config_cpu.json
       - name: Test run_experiments yaml
         run: |
+          source venv/bin/activate
+          python3 data/shakespeare_char/prepare.py
           cd tests
           source test_run_experiments.sh
 
