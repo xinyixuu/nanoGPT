@@ -2,7 +2,6 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from variations.activation_variations import activation_dictionary
 from variations.linear_variations import linear_dictionary
@@ -48,14 +47,20 @@ class OriginalMLP(nn.Module):
             elif arg.startswith("quantize_") and "linear_mlp" in arg and arg.endswith("_method"):
                 self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_linear_method)
 
+        mlp_expansion_size = None
+        if config.mlp_size is not None:
+            mlp_expansion_size = config.mlp_size
+        else:
+            mlp_expansion_size = config.mlp_expansion_factor * config.n_embd
+
         # Instantiate Linear Layers
         if self.mlp_variant == "mlp":
-            self.c_fc = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"], bias=config.bias)
-            self.c_proj = self.linear_variant_mlp_down(config.mlp_expansion_factor * config.n_embd, config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_down_method"], self.quantization_mlp_dict["quantize_linear_mlp_down_bits"], bias=config.bias)
+            self.c_fc = self.linear_variant_mlp_up(config.n_embd, mlp_expansion_size, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"], bias=config.bias)
+            self.c_proj = self.linear_variant_mlp_down(mlp_expansion_size, config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_down_method"], self.quantization_mlp_dict["quantize_linear_mlp_down_bits"], bias=config.bias)
         elif self.mlp_variant == "swiglu":
-            self.c_fc_in1 = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
-            self.c_fc_in2 = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
-            self.c_fc_out = self.linear_variant_mlp_down(config.mlp_expansion_factor * config.n_embd, config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_down_method"], self.quantization_mlp_dict["quantize_linear_mlp_down_bits"])
+            self.c_fc_in1 = self.linear_variant_mlp_up(config.n_embd, mlp_expansion_size, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
+            self.c_fc_in2 = self.linear_variant_mlp_up(config.n_embd, mlp_expansion_size, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
+            self.c_fc_out = self.linear_variant_mlp_down(mlp_expansion_size, config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_down_method"], self.quantization_mlp_dict["quantize_linear_mlp_down_bits"])
 
         self.dropout = nn.Dropout(config.dropout)
 
@@ -87,7 +92,6 @@ class OriginalMLP(nn.Module):
                     mlp_res = torch.zeros_like(x)
                 mlp_res = x + mlp_res
                 x = mlp_res
-
 
             x = self.c_proj(x)
 
@@ -161,11 +165,17 @@ class Swiglu(nn.Module):
             elif arg.startswith("quantize_") and "linear_mlp" in arg and arg.endswith("_method"):
                 self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_linear_method)
 
-        self.c_fc_in1 = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
-        self.c_fc_in2 = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
-        self.c_fc_out = self.linear_variant_mlp_down(config.mlp_expansion_factor * config.n_embd, config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_down_method"], self.quantization_mlp_dict["quantize_linear_mlp_down_bits"])
+        mlp_expansion_size = None
+        if config.mlp_size is not None:
+            mlp_expansion_size = config.mlp_size
+        else:
+            mlp_expansion_size = config.mlp_expansion_factor * config.n_embd
 
-        self.mlp_res_gate = self.linear_variant_mlp_up(config.mlp_expansion_factor * config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
+        self.c_fc_in1 = self.linear_variant_mlp_up(config.n_embd, mlp_expansion_size, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
+        self.c_fc_in2 = self.linear_variant_mlp_up(config.n_embd, mlp_expansion_size, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
+        self.c_fc_out = self.linear_variant_mlp_down(mlp_expansion_size, config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_down_method"], self.quantization_mlp_dict["quantize_linear_mlp_down_bits"])
+
+        self.mlp_res_gate = self.linear_variant_mlp_up(mlp_expansion_size, mlp_expansion_size, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
 
         self.dropout = nn.Dropout(config.dropout)
 

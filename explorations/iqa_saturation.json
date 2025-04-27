@@ -1,0 +1,22 @@
+
+[
+    {
+      "max_iters": ["7500"],
+      "n_layer": ["6"],
+      "n_embd": ["384"],
+      "block_size":["200"],
+      "device": ["cuda"],
+      "dtype": ["float16"],
+      "dataset": ["cosmopedia_100k"],
+      "use_rotary_embeddings": [false],
+      "use_abs_pos_embeddings": [true],
+      "compile": [true],
+      "n_qk_head_dim": ["128"],
+      "n_v_head_dim": ["64", "128", "192", "256"],
+      "tensorboard_run_name": ["iqa_saturation"],
+      "attention_variant": ["iqa"],
+      "n_head": ["6", "12", "18", "24"],
+      "n_kv_group": ["1"]
+    }
+  ]
+

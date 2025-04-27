@@ -1,0 +1,15 @@
+---
+max_iters: [250]
+n_layer: [2]
+n_head: [2]
+n_embd: [32]
+block_size: [25]
+device: ["cpu"]
+dataset: ["shakespeare_char"]
+
+# Boolean switches
+use_abs_pos_embeddings: [true, false]
+use_rotary_embeddings: [true, false]
+
+tensorboard_run_name: ["boolean_demo"]
+

@@ -1,0 +1,23 @@
+---
+# Three different positional-embedding strategies
+parameter_groups:
+  - use_rotary_embeddings: [true]
+    use_abs_pos_embeddings: [false]
+    tensorboard_run_name: ["group_rotary"]
+  - use_rotary_embeddings: [false]
+    use_abs_pos_embeddings: [true]
+    tensorboard_run_name: ["group_absolute"]
+  - use_rotary_embeddings: [true]
+    use_abs_pos_embeddings: [true]
+    tensorboard_run_name: ["group_both"]
+
+# Base settings
+max_iters: [250]
+n_layer: [2]
+n_head: [2]
+n_embd: [32]
+block_size: [25]
+device: ["cpu"]
+dtype: ["bfloat16"]
+dataset: ["shakespeare_char"]
+

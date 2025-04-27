@@ -193,6 +193,7 @@ def parse_args():
     model_group.add_argument('--use_parallel_mlp', default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument("--mlp_variant", type=str, default="mlp", choices=["mlp", "kan", "swiglu"], help="MLP variation type")
     model_group.add_argument("--mlp_expansion_factor", type=int, default=4, help="If MLP like variant is used, set the expansion factor for the linear transformations, default is 4.")
+    model_group.add_argument("--mlp_size", type=int, default=None, help="If not None, is used instead of mlp_expansion_factor")
     model_group.add_argument('--mlp_res', default=False, action=argparse.BooleanOptionalAction)
 
     ## KAN Options
@@ -300,7 +301,14 @@ def parse_args():
 
 
     # Attention Variations
-    attention_variants = ["causal", "linear", "ssm", "identity", "infinite"]
+    attention_variants = [
+                          "causal",
+                          "linear",
+                          "ssm",
+                          "identity",
+                          "infinite",
+                          "iqa",
+                          ]
 
     model_group.add_argument(
         "--attention_list",

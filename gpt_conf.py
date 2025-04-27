@@ -92,6 +92,7 @@ class GPTConfig:
     use_parallel_mlp: bool = False
     mlp_variant: str = "mlp"
     mlp_expansion_factor: int = 4
+    mlp_size: int = None
     mlp_res: bool = False
 
     ## KAN Option

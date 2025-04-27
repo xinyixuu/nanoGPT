@@ -1,0 +1,21 @@
+[
+    {
+      "max_iters": ["3000"],
+      "n_layer": ["6"],
+      "n_head": ["6"],
+      "n_embd": ["384"],
+      "block_size":["256"],
+      "device": ["cuda"],
+      "dtype": ["float16"],
+      "dataset": ["shakespeare_char"],
+      "use_rotary_embeddings": [false],
+      "use_abs_pos_embeddings": [true],
+      "compile": [true],
+      "n_qk_head_dim": ["64"],
+      "n_v_head_dim": ["128"],
+      "tensorboard_run_name": ["iqa_iha_comparison"],
+      "attention_variant": ["infinite", "iqa"],
+      "n_kv_group": ["6", "2", "1"]
+    }
+  ]
+
