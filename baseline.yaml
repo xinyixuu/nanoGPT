@@ -2,10 +2,10 @@ dataset: shakespeare_char
 n_layer: 1
 n_head: 1
 n_embd: 64
-n_kv: 64
+compile: True
 n_qk_head_dim: 64
 n_v_head_dim: 64
-mlp_expansion_factor: 3
+mlp_size: 64
 block_size: 128
 batch_size: 32
 attention_variant: "infinite"
