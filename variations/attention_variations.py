@@ -529,7 +529,7 @@ class LinearAttention(nn.Module):
 #         return output
 
 
-class Identity(nn.Module):
+class AttnIdentity(nn.Module):
     def __init__(self, config, fire_pos_enc=None):
         super(Identity, self).__init__()
 
@@ -721,7 +721,7 @@ attention_dictionary = {
     "causal": CausalSelfAttention,
     "linear": LinearAttention,
     # "ssm": MambaBlock,
-    "identity": Identity,
+    "identity": AttnIdentity,
     "infinite": InfiniteHeadAttention,
     "iqa": InfiniteQueryAttention,
 }

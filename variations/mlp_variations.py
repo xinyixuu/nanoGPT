@@ -236,9 +236,17 @@ class KanMLP(nn.Module):
 
         return x
 
+class MLP_Identity(nn.Module):
+    def __init__(self, config):
+        super(Identity, self).__init__()
+
+    def forward(self, x, iter_num=None):
+        return x
+
 mlp_dictionary = {
     "mlp": OriginalMLP,
     "swiglu": Swiglu,
+    "identity": MLP_Identity,
     "kan": KanMLP
     }
 

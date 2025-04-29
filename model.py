@@ -11,6 +11,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 from rich import print
+import copy
 
 import numpy as np
 
@@ -98,6 +99,44 @@ class Block(nn.Module):
         else:
             return custom_forward(x, iter_num, mlp_res)
 
+class LearnedPositionEmbedding(nn.Module):
+    """
+    Learns a position-aware residual using the same Block modules (transformer.h)
+    and config as the main GPT.  Each instance processes token+pos embeddings
+    through its own Block stack and returns a (b, t, n_embd) tensor.
+    """
+    def __init__(self, config):
+        super().__init__()
+        self.lpe_config = copy.deepcopy(config)
+
+        # override the config values by mapping config.lpe_value -> config.value
+        for key, val in vars(config).items():
+            if key.startswith('lpe_') and val is not None:
+                # strip 'lpe_' prefix to map to the actual config field
+                core_key = key[len('lpe_'):]
+                setattr(self.lpe_config, core_key, val)
+
+        if self.lpe_config.use_abs_pos_embeddings:
+            self.wpe = nn.Embedding(self.lpe_config.block_size, self.lpe_config.n_embd)
+
+        self.drop = nn.Dropout(config.dropout)
+        # reuse the same Block init as GPT.transformer.h
+        self.blocks = nn.ModuleList([Block(self.lpe_config) for _ in range(self.lpe_config.n_layer)])
+
+    def forward(self, b, t, x, iter_num=None):
+        # add absolute position embeddings if used
+        if self.lpe_config.use_abs_pos_embeddings:
+            pos = torch.arange(t, dtype=torch.long, device=x.device)
+            pos_emb = self.wpe(pos)
+            x = x + pos_emb
+        # dropout on combined embedding
+        x = self.drop(x)
+        # pass through Block modules
+        mlp_res = None
+        for block in self.blocks:
+            x, mlp_res = block(x, iter_num, mlp_res)
+        return x
+
 class GPT(nn.Module):
 
     def __init__(self, config):
@@ -130,6 +169,12 @@ class GPT(nn.Module):
             print(config.lsv_variant)
             self.lsv_variant = config.lsv_variant
             self.lsv_matrix = lsv_dictionary[self.lsv_variant](config)
+
+        if config.n_lpe != 0:
+            self.learned_position_embeddings = nn.ModuleList([
+                LearnedPositionEmbedding(config)
+                for _ in range(config.n_lpe)
+                ])
 
         # Configure wte, with optional quantization and factoring
         if config.quantize_wte:
@@ -355,6 +400,21 @@ class GPT(nn.Module):
         else:
             x = self.transformer.drop(tok_emb)
 
+        # sum all learned position residuals
+        learned_sum = None
+
+
+        # TODO: abstact into a method
+        if self.config.n_lpe != 0 and self.config.target_layer_in_lpe == 0:
+            for lpe in self.learned_position_embeddings:
+                out = lpe(b, t, x, iter_num)
+                # Accumulate embedding sum
+                learned_sum = out if learned_sum is None else learned_sum + out
+
+        if self.config.n_lpe != 0 and self.config.target_layer_out_lpe == 0:
+            # Add learned embeddings to x
+            x = x + learned_sum
+
         x.requires_grad_(True)  # Ensure requires_grad is True
 
         if self.use_lsv and self.config.apply_lsv_at_layer_idx == 0:
@@ -374,7 +434,18 @@ class GPT(nn.Module):
                 x = self.lsv_matrix(x)
                 # x = self.apply_learned_vector_to_layer_output(x)
 
-            # Intercept for Steering Vectors
+            # TODO: abstact into a method
+            if self.config.n_lpe != 0 and self.config.target_layer_in_lpe == layer:
+                for lpe in self.learned_position_embeddings:
+                    out = lpe(b, t, x, iter_num)
+                    # Accumulate embedding sum
+                    learned_sum = out if learned_sum is None else learned_sum + out
+
+            if self.config.n_lpe != 0 and self.config.target_layer_out_lpe == layer:
+                # Add learned embeddings to x
+                x = x + learned_sum
+            # END lpe section
+
             if self.config.apply_vector_at_layer_idx is not None and layer == self.config.apply_vector_at_layer_idx:
                 x = self.apply_vector_to_layer_output(x)
             if self.config.obtain_vector_at_layer_idx is not None and layer == self.config.obtain_vector_at_layer_idx:
