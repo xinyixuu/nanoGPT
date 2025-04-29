@@ -11,6 +11,7 @@ Keys
 ----
 ↑ / ↓   select in sidebar  q   quit
 """
+
 from __future__ import annotations
 
 import sys
@@ -30,14 +31,17 @@ from textual.widgets import Header, Footer, DataTable, Static
 DEFAULT_LOG = "sweep_log.yaml"
 POLL_INTERVAL = 5.0  # seconds
 SUMMARY_LABEL = "Summary"
-HILITE = "bold orange3"
+HILITE_STYLE = "bold orange3"
 
 # ── helper functions ─────────────────────────────────────
 
+
 def load_yaml(path: Path) -> Dict[str, Any]:
+    """Return parsed YAML or empty dict if file missing/empty."""
     if not path.exists():
-        sys.exit(f"Log file not found: {path}")
-    return yaml.safe_load(path.read_text()) or {}
+        return {}
+    data = yaml.safe_load(path.read_text())
+    return data or {}
 
 
 def fnum(val: Any, spec: str) -> str:
@@ -46,14 +50,17 @@ def fnum(val: Any, spec: str) -> str:
 
 def metrics_panel(m: Dict[str, Any]) -> Panel:
     g = Table.grid(padding=1)
-    g.add_column(justify="right"); g.add_column()
-    g.add_row("Loss",   fnum(m.get("best_val_loss", m.get("loss", "-")), "{:.4f}"))
-    g.add_row("Score",  fnum(m.get("score", "-"), "{:.4e}"))
+    g.add_column(justify="right")
+    g.add_column()
+    g.add_row("Loss", fnum(m.get("best_val_loss", m.get("loss", "-")), "{:.4f}"))
+    g.add_row("Score", fnum(m.get("score", "-"), "{:.4e}"))
     g.add_row("Params", fnum(m.get("num_params", m.get("params", "-")), "{:.3e}"))
     g.add_row("Best iter", str(m.get("best_iter", "-")))
     return Panel(g, title="Iteration stats", border_style="green")
 
+
 # ── TUI application ──────────────────────────────────────
+
 
 class SweepViewer(App):
     CSS = """#navbox{width:16;} #main{width:1fr;}"""
@@ -74,9 +81,11 @@ class SweepViewer(App):
     def compose(self):  # type: ignore[override]
         yield Header()
         with Horizontal():
+            # sidebar
             with Vertical(id="navbox"):
                 yield Static("Iterations", classes="title")
                 yield DataTable(id="nav", show_header=False, zebra_stripes=True)
+            # main pane
             with Vertical(id="main"):
                 yield Static(id="panel")
                 yield DataTable(id="table", zebra_stripes=True)
@@ -90,13 +99,12 @@ class SweepViewer(App):
         self.set_interval(POLL_INTERVAL, self._poll_yaml)
 
     def _poll_yaml(self):
-        try:
-            mtime = self.log_path.stat().st_mtime
-        except FileNotFoundError:
-            return
+        mtime = self.log_path.stat().st_mtime if self.log_path.exists() else 0.0
         if mtime == self._mtime:
             return
-        remember = None if self.show_summary else self.iters[self.idx]["iter"]
+        remember = None
+        if self.iters and not self.show_summary:
+            remember = self.iters[self.idx]["iter"]
         self._load_yaml()
         self._build_nav()
         if remember is not None:
@@ -117,13 +125,20 @@ class SweepViewer(App):
                 self.base_iter = it
                 self.base_metrics = it.get("baseline_metrics", self.base_metrics)
                 break
-        self.iters = [i for i in data.get("iterations", []) if i.get("iter", 0) >= 0 and "candidates" in i]
-        if not self.iters:
-            sys.exit("No iterations with candidate data.")
-        self.idx = len(self.iters) - 1 if initial else min(self.idx, len(self.iters)-1)
-        self._mtime = self.log_path.stat().st_mtime
+        self.iters = [
+            it
+            for it in data.get("iterations", [])
+            if it.get("iter", 0) >= 0 and "candidates" in it
+        ]
+        if self.iters:
+            self.idx = (
+                len(self.iters) - 1 if initial else min(self.idx, len(self.iters) - 1)
+            )
+        else:
+            self.idx = 0
+        self._mtime = self.log_path.stat().st_mtime if self.log_path.exists() else 0.0
 
-    # ── navigation table ────────────────────
+    # ── navigation list ─────────────────────
     def _build_nav(self):
         nav = self.query_one("#nav", DataTable)
         nav.clear(columns=True)
@@ -132,38 +147,52 @@ class SweepViewer(App):
             nav.add_row(str(it["iter"]))
         nav.add_row(SUMMARY_LABEL)
         nav.cursor_type = "row"
-        nav.cursor_coordinate = (self.idx if not self.show_summary else len(self.iters), 0)
+        row_coord = (
+            self.idx if (self.iters and not self.show_summary) else len(self.iters),
+            0,
+        )
+        nav.cursor_coordinate = row_coord
         nav.focus()
 
     def on_data_table_row_highlighted(self, e: DataTable.RowHighlighted):  # type: ignore[override]
         if e.data_table.id != "nav":
             return
         row = e.cursor_row  # type: ignore[attr-defined]
-        self.show_summary = (row == len(self.iters))
-        if not self.show_summary:
+        self.show_summary = row == len(self.iters)
+        if not self.show_summary and self.iters:
             self.idx = row
         self._refresh_view()
 
     # ── summary helpers ─────────────────────
     def _summary_data(self):
-        changed_params = sorted({it["chosen"]["param"] for it in self.iters})
-        hdrs = ["iter", *changed_params, "best_loss", "best_iter", "params", "Δparams", "eff."]
+        if not self.iters:
+            return ["iter"], [["-1"]]
+        changed = sorted({it["chosen"]["param"] for it in self.iters})
+        hdrs = ["iter", *changed, "best_loss", "best_iter", "params", "Δparams", "eff."]
         rows: List[List[Any]] = []
 
         # baseline (iter -1) row
         base_src = (self.base_iter or {}).get("baseline_config_after", self.base_cfg)
-        base_vals = [str(base_src.get(p, "-")) for p in changed_params]
-        rows.append([
-            "-1", *base_vals,
-            fnum(self.base_metrics.get("loss", "-"), "{:.4f}"),
-            str(self.base_metrics.get("best_iter", "-")),
-            fnum(self.base_metrics.get("params", "-"), "{:,}"), "-", "-",
-        ])
-
-        # iterations 0..N rows
+        base_vals = [str(base_src.get(p, "-")) for p in changed]
+        rows.append(
+            [
+                "-1",
+                *base_vals,
+                fnum(self.base_metrics.get("loss", "-"), "{:.4f}"),
+                str(self.base_metrics.get("best_iter", "-")),
+                fnum(self.base_metrics.get("params", "-"), "{:,}"),
+                "-",
+                "-",
+            ]
+        )
         for i, it in enumerate(self.iters):
-            ch = it["chosen"]; after = it["baseline_config_after"]
-            vals = [Text(str(after.get(p, "-")), style=HILITE) if p == ch["param"] else str(after.get(p, "-")) for p in changed_params]
+            ch, after = it["chosen"], it["baseline_config_after"]
+            vals = [
+                Text(str(after.get(p, "-")), style=HILITE_STYLE)
+                if p == ch["param"]
+                else str(after.get(p, "-"))
+                for p in changed
+            ]
             vals += [
                 f"{ch['best_val_loss']:.4f}",
                 str(ch.get("best_iter", "-")),
@@ -177,38 +206,57 @@ class SweepViewer(App):
     # ── UI refresh ─────────────────────────
     def _refresh_view(self):
         panel = self.query_one("#panel", Static)
-        tbl   = self.query_one("#table", DataTable)
-        tbl.visible = True
+        table = self.query_one("#table", DataTable)
 
+        # waiting for data …
+        if not self.iters:
+            table.visible = False
+            panel.update(Panel("Waiting for data… (polling)", border_style="red"))
+            self.sub_title = "No data yet"
+            return
+
+        table.visible = True
         if self.show_summary:
-            panel.update(Panel("Summary (best config per iteration)", border_style="cyan"))
+            panel.update(
+                Panel("Summary (best config per iteration)", border_style="cyan")
+            )
             hdrs, rows = self._summary_data()
-            tbl.clear(columns=True)
-            tbl.add_columns(*hdrs)
+            table.clear(columns=True)
+            table.add_columns(*hdrs)
             for r in rows:
-                tbl.add_row(*[c if isinstance(c, Text) else str(c) for c in r])
+                table.add_row(*[c if isinstance(c, Text) else str(c) for c in r])
             self.sub_title = "Summary view"
             return
 
         blk = self.iters[self.idx]
         panel.update(metrics_panel(blk["baseline_metrics"]))
-        self.sub_title = f"Iteration {blk['iter']}  (↑/↓ to navigate, q quit)"
-        tbl.clear(columns=True)
-        tbl.add_columns("param", "value", "best_loss", "best_iter", "Δscore", "Δparams", "eff.")
+        self.sub_title = f"Iteration {blk['iter']}  (↑/↓ nav, q quit)"
+        table.clear(columns=True)
+        table.add_columns(
+            "param", "value", "best_loss", "best_iter", "Δscore", "Δparams", "eff."
+        )
         chosen = blk["chosen"]
-        for cand in blk["candidates"]:
-            hl = cand["param"] == chosen["param"] and cand["value"] == chosen["value"]
+        for c in blk["candidates"]:
+            hl = c["param"] == chosen["param"] and c["value"] == chosen["value"]
             st = "bold yellow" if hl else ""
-            tbl.add_row(
-                Text(str(cand["param"]), style=st), Text(str(cand["value"]), style=st),
-                f"{cand['best_val_loss']:.4f}", str(cand.get("best_iter", "-")),
-                f"{cand['delta_score']:.2e}", f"{cand['delta_params']:.2e}", f"{cand['efficiency']:.2e}")
+            table.add_row(
+                Text(str(c["param"]), style=st),
+                Text(str(c["value"]), style=st),
+                f"{c['best_val_loss']:.4f}",
+                str(c.get("best_iter", "-")),
+                f"{c['delta_score']:.2e}",
+                f"{c['delta_params']:.2e}",
+                f"{c['efficiency']:.2e}",
+            )
+
 
 # ── entry point ─────────────────────────────
+
 
 def main():
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(DEFAULT_LOG)
     SweepViewer(path).run()
+
 
 if __name__ == "__main__":
     main()
