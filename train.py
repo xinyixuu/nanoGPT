@@ -25,7 +25,12 @@ from utils.statistic_plots import (
     create_statistics,
 )
 
-from sample import sample_with_existing_model
+from sample import (
+    sample_with_existing_model,
+    custom_char_with_byte_fallback_encode as ccwb_encode,
+    custom_char_with_byte_fallback_decode as ccwb_decode,
+)
+
 
 from rich.progress import Progress
 
@@ -373,9 +378,9 @@ class Trainer:
             elif 'tokenizer' in meta and meta['tokenizer'] == 'custom_char_with_byte_fallback':
                 self.stoi = meta['stoi']
                 self.itos = meta['itos']
-                self.custom_char_count = meta['custom_char_count']
-                self.encode = self.custom_char_with_byte_fallback_encode
-                self.decode = self.custom_char_with_byte_fallback_decode
+                # One-liners pointing at the shared helpers
+                self.encode = lambda s: ccwb_encode(s, self.stoi)
+                self.decode = lambda l: ccwb_decode(l, self.itos)
                 print("Using CustomCharTokenizerWithByteFallback tokenizer")
             else:
                 self.stoi, self.itos = meta['stoi'], meta['itos']
@@ -397,31 +402,6 @@ class Trainer:
                     ids.append(self.stoi[byte])
 
         return ids
-
-
-    def custom_char_with_byte_fallback_decode(self, ids):
-        chars = []
-        idx = 0
-        while idx < len(ids):
-            id = ids[idx]
-            if id < self.custom_char_count:
-                # It's a custom character
-                chars.append(self.itos[id])
-                idx += 1
-            else:
-                # It's a byte
-                byte_buffer = []
-                while idx < len(ids) and ids[idx] >= self.custom_char_count:
-                    byte_value = self.itos[ids[idx]]
-                    byte_buffer.append(byte_value)
-                    idx += 1
-                # Convert byte buffer to character
-                byte_array = bytes(byte_buffer)
-                try:
-                    chars.append(byte_array.decode('utf-8'))
-                except UnicodeDecodeError:
-                    chars.append('�')  # Replacement character for invalid sequences
-        return ''.join(chars)
 
     @torch.no_grad()
     def sample_and_print(self):

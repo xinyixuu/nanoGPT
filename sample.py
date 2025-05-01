@@ -328,41 +328,51 @@ def calculate_validation_loss(model, val_data, block_size, eval_iters, device, d
     print(f"Elapsed time: {total_time} seconds")
     return np.mean(losses)
 
-def custom_char_with_byte_fallback_encode(text, stoi):
-    ids = []
+def custom_char_with_byte_fallback_encode(text: str, stoi: dict) -> list[int]:
+    """
+    Encode *text* into a list of token IDs using a bytes-first vocabulary.
+
+    • If a Unicode character maps directly to an ID in `stoi`, emit it.
+    • Otherwise, fall back to UTF-8 bytes.  Each byte is looked up with
+      the *single-byte bytes object* (e.g. b'\\x61'), **not** the int.
+    """
+    ids: list[int] = []
     for ch in text:
-        if ch in stoi:
+        if ch in stoi:                       # direct hit (custom token / common char)
             ids.append(stoi[ch])
-        else:
-            # Byte fallback
-            byte_sequence = ch.encode('utf-8')
-            for byte in byte_sequence:
-                ids.append(stoi[byte])
+        else:                                # fallback → UTF-8 bytes
+            for b in ch.encode('utf-8'):
+                ids.append(stoi[bytes([b])])
     return ids
 
-def custom_char_with_byte_fallback_decode(ids, itos, custom_char_count):
-    chars = []
-    idx = 0
-    while idx < len(ids):
-        id = ids[idx]
-        if id < custom_char_count:
-            # It's a custom character
-            chars.append(itos[id])
-            idx += 1
-        else:
-            # It's a byte
-            byte_buffer = []
-            while idx < len(ids) and ids[idx] >= custom_char_count:
-                byte_value = itos[ids[idx]]
-                byte_buffer.append(byte_value)
-                idx += 1
-            # Convert byte buffer to character
-            byte_array = bytes(byte_buffer)
-            try:
-                chars.append(byte_array.decode('utf-8'))
-            except UnicodeDecodeError:
-                chars.append('�')  # Replacement character for invalid sequences
-    return ''.join(chars)
+
+def custom_char_with_byte_fallback_decode(ids: list[int], itos: dict) -> str:
+    """
+    Reverse of the encoder.
+
+    • 0 ≤ id < 256  ⇒ raw byte
+    • id ≥ 256      ⇒ custom token string
+    """
+    out_parts: list[str] = []
+    byte_buffer: list[bytes] = []
+
+    flush_bytes = lambda: (
+        out_parts.append(b''.join(byte_buffer).decode('utf-8', errors='replace')),
+        byte_buffer.clear()
+    )
+
+    for tok_id in ids:
+        if tok_id < 256:                 # raw byte
+            byte_buffer.append(itos[tok_id])         # itos[id] is a bytes object
+        else:                                        # custom token
+            if byte_buffer:
+                flush_bytes()
+            out_parts.append(itos[tok_id])           # itos[id] is a str
+
+    if byte_buffer:
+        flush_bytes()
+
+    return ''.join(out_parts)
 
 def main():
     args = parse_args()
@@ -455,9 +465,8 @@ def main():
         elif 'tokenizer' in meta and meta['tokenizer'] == 'custom_char_with_byte_fallback':
             stoi = meta['stoi']
             itos = meta['itos']
-            custom_char_count = meta['custom_char_count']
             encode = lambda s: custom_char_with_byte_fallback_encode(s, stoi)
-            decode = lambda l: custom_char_with_byte_fallback_decode(l, itos, custom_char_count)
+            decode = lambda l: custom_char_with_byte_fallback_decode(l, itos)
             print("Using CustomCharTokenizerWithByteFallback tokenizer")
         elif args.token_boundary:
             stoi, itos = meta['stoi'], meta['itos']
