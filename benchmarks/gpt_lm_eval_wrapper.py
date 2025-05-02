@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import lm_eval.api.model as model_api
 
 class NanoGPTLM(model_api.LM):
-    def __init__(self, model, tokenizer_encode, tokenizer_decode, eot_token_id, device, max_new_tokens, batch_size=1, temperature=1.0, top_k=None, stop_string=None):
+    def __init__(self, model, tokenizer_encode, tokenizer_decode, eot_token_id, device, max_new_tokens, batch_size=1, temperature=1.0, top_k=None):
         super().__init__()
         self.model = model
         self.tokenizer_encode = tokenizer_encode
@@ -15,7 +15,6 @@ class NanoGPTLM(model_api.LM):
         self._batch_size = batch_size
         self.temperature = temperature
         self.top_k = top_k
-        self.stop_string = stop_string
         self.max_new_tokens = max_new_tokens
 
     @property
@@ -43,7 +42,7 @@ class NanoGPTLM(model_api.LM):
     def _model_generate(self, context, max_length, eos_token_id):
         idx = context.to(self.device)
         idx = self.model.generate(
-            idx, 
+            idx,
             max_new_tokens=max_length, 
             temperature=self.temperature, 
             top_k=self.top_k
@@ -51,89 +50,138 @@ class NanoGPTLM(model_api.LM):
         return idx
 
     def loglikelihood(self, requests):
+        """
+        requests: list of Instance with arguments (context, continuation)
+        returns: list of (loglikelihood, is_greedy)
+        """
         res = []
-        batch_size = self.batch_size
+        bs = self.batch_size
+        B  = self.model.config.block_size
 
-        for batch_start in range(0, len(requests), batch_size):
-            batch = requests[batch_start:batch_start+batch_size]
-            contexts, continuations = zip(*batch)
+        for i in range(0, len(requests), bs):
+            batch = requests[i : i+bs]
 
-            context_tokens = [self.tok_encode(c) for c in contexts]
-            continuation_tokens = [self.tok_encode(c) for c in continuations]
+            # unpack and tokenize
+            ctx_toks  = [self.tok_encode(inst.arguments[0]) for inst in batch]
+            cont_toks = [self.tok_encode(inst.arguments[1]) for inst in batch]
 
-            max_len = max(len(ctx) + len(cont) for ctx, cont in zip(context_tokens, continuation_tokens))
-            batch_tokens = []
-            for ctx, cont in zip(context_tokens, continuation_tokens):
-                tokens = ctx + cont
-                pad_len = max_len - len(tokens)
-                tokens += [self.eot_token_id] * pad_len
-                batch_tokens.append(tokens)
+            # LEFT-TRUNCATE each (ctx + cont) to ≤ B+1 tokens
+            truncated = []
+            for c, t in zip(ctx_toks, cont_toks):
+                seq = c + t
+                if len(seq) > B + 1:
+                    seq = seq[-(B + 1):]
+                    # re-split so that `t` remains the last len(t) tokens
+                    t = seq[-len(t):]
+                    c = seq[: -len(t)]
+                truncated.append((c, t))
 
-            batch_tokens = torch.tensor(batch_tokens, device=self.device)
+            # PAD all to the same length
+            max_len = max(len(c) + len(t) for c, t in truncated)
+            inputs  = []
+            for c, t in truncated:
+                seq = c + t
+                seq += [self.eot_token_id] * (max_len - len(seq))
+                inputs.append(seq)
 
+            inp_tensor = torch.tensor(inputs, device=self.device)
+
+            # run the model on all but the last token → [B×(L-1)×V]
             with torch.no_grad():
-                logits, _ = self.model(batch_tokens[:, :-1])
-                log_probs = F.log_softmax(logits, dim=-1)
+                logits, _ = self.model(inp_tensor[:, :-1])
+                logp      = F.log_softmax(logits, dim=-1)
 
-                for i, (ctx, cont) in enumerate(zip(context_tokens, continuation_tokens)):
-                    ctx_len = len(ctx)
-                    cont_len = len(cont)
+            # now score each continuation
+            for j, (c, t) in enumerate(truncated):
+                Lc, Lt = len(c), len(t)
+                if Lt == 0:
+                    # no continuation → zero log-likelihood, but greedy=TRUE by convention
+                    res.append((0.0, True))
+                    continue
 
-                    logits_for_cont = log_probs[i, ctx_len-1:ctx_len-1+cont_len]
-                    targets = batch_tokens[i, ctx_len:ctx_len+cont_len]
+                # grab exactly the continuation slice
+                slice_logits = logp[j, Lc : Lc+Lt]       # shape [Lt, V]
+                targets      = inp_tensor[j, Lc : Lc+Lt] # shape [Lt]
 
-                    selected_log_probs = logits_for_cont.gather(1, targets.unsqueeze(-1)).squeeze(-1)
-                    ll = selected_log_probs.sum().item()
-                    res.append((ll, True))
+                # safety: if something mismatched, trim to the shortest
+                if slice_logits.size(0) != targets.size(0):
+                    m = min(slice_logits.size(0), targets.size(0))
+                    slice_logits = slice_logits[:m]
+                    targets      = targets[:m]
+
+                # gather per-token log-probs and sum them
+                lp = slice_logits.gather(1, targets.unsqueeze(-1)).squeeze(-1)
+                ll = lp.sum().item()
+
+                # greedy‐flag: true iff every argmax matches the target
+                preds  = slice_logits.argmax(dim=-1)
+                greedy = bool((preds == targets).all().item())
+
+                res.append((ll, greedy))
 
         return res
 
     def loglikelihood_rolling(self, requests):
+        """
+        requests: list of Instance with arguments (text,)
+        returns: list of loglikelihoods
+        """
         res = []
-        batch_size = self.batch_size
+        bs = self.batch_size
+        B  = self.model.config.block_size
 
-        for batch_start in range(0, len(requests), batch_size):
-            batch = requests[batch_start:batch_start+batch_size]
-            all_tokens = [self.tok_encode(r) for r in batch]
-            max_len = max(len(t) for t in all_tokens)
+        for i in range(0, len(requests), bs):
+            batch = requests[i : i+bs]
+            texts = [inst.arguments[0] for inst in batch]
 
-            input_batch = []
-            for tokens in all_tokens:
-                pad_len = max_len - len(tokens)
-                tokens += [self.eot_token_id] * pad_len
-                input_batch.append(tokens)
+            # 1) tokenize and left-truncate to B tokens
+            toks = []
+            for txt in texts:
+                t = self.tok_encode(txt)
+                if len(t) > B:
+                    t = t[-B:]
+                toks.append(t)
 
-            input_batch = torch.tensor(input_batch, device=self.device)
+            # 2) pad to a common length (≤ B)
+            max_len = max(len(t) for t in toks)
+            inputs  = [t + [self.eot_token_id]*(max_len - len(t)) for t in toks]
+            inp_tensor = torch.tensor(inputs, device=self.device)
 
+            # 3) run through model (all but last token)
             with torch.no_grad():
-                logits, _ = self.model(input_batch[:, :-1])
-                log_probs = F.log_softmax(logits, dim=-1)
+                logits, _ = self.model(inp_tensor[:, :-1])
+                logp = F.log_softmax(logits, dim=-1)
 
-                for i, tokens in enumerate(all_tokens):
-                    tokens_tensor = torch.tensor(tokens, device=self.device)
-
-                    logits_for_tokens = log_probs[i, :tokens_tensor.shape[0]-1]
-                    targets = tokens_tensor[1:]
-
-                    selected_log_probs = logits_for_tokens.gather(1, targets.unsqueeze(-1)).squeeze(-1)
-                    ll = selected_log_probs.sum().item()
-                    res.append(ll)
+            # 4) for each sequence, sum log‐probs of its tokens
+            for j, t in enumerate(toks):
+                L = len(t)
+                if L < 2:
+                    # if only 0 or 1 token, define loglikelihood = 0
+                    res.append(0.0)
+                    continue
+                # slice logits corresponding to positions 0..L-2 predicting tokens 1..L-1
+                slice_logits = logp[j, : L-1]   # shape [L-1, V]
+                targets = inp_tensor[j, 1 : L]  # shape [L-1]
+                lp = slice_logits.gather(1, targets.unsqueeze(-1)).squeeze(-1)
+                ll = lp.sum().item()
+                res.append(ll)
 
         return res
 
     def generate_until(self, requests):
         res = []
-        for context, until in requests:
-            context_tokens = torch.tensor([self.tok_encode(context)], device=self.device)
+        for inst in requests:
+            input_str, control_gen_params = inst.arguments
+            input_tokens = torch.tensor([self.tok_encode(input_str)], device=self.device)
+            # list of stopping strings
+            stop_strings = control_gen_params.get("until", [])
             idx, generated_text = self.model.generate_with_stop(
-                context_tokens,
+                input_tokens,
                 max_new_tokens=self.max_new_tokens,
-                # assuming until is a list of stop strings
-                stop_string=until[0],
+                stop_strings=stop_strings,
                 decode=self.tokenizer_decode,
                 temperature=self.temperature,
                 top_k=self.top_k
             )
-            new_text = generated_text[len(context):]
-            res.append(new_text)
+            res.append(generated_text)
         return res

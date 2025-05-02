@@ -24,7 +24,6 @@ from utils.model_info import print_summary, print_module_structure, print_model_
 from variations.model_variations import model_variation_dictionary
 
 import lm_eval
-from pprint import pprint
 from benchmarks.gpt_lm_eval_wrapper import NanoGPTLM
 
 def parse_args():
@@ -84,6 +83,13 @@ def parse_args():
     # lm_eval Benchmarking Related
     parser.add_argument('--lm_eval_tasks', type=str, default=None,
                     help="Comma-separated list of tasks for lm-eval (e.g. 'arc_easy,hellaswag')")
+    parser.add_argument(
+        '--lm_eval_results_output',
+        type=str,
+        default=None,
+        help="Where to save the lm-eval results (JSON). "
+             "If not set, defaults to out_dir/<timestamp>_lm_eval_results.json"
+    )
     parser.add_argument('--batch_size', type=int, default=1,
                         help="Batch size to use for evaluation")
 
@@ -523,7 +529,6 @@ def main():
             batch_size=args.batch_size,
             temperature=args.temperature,
             top_k=args.top_k,
-            stop_string=args.stop_string,
         )
         
         # Run evaluation
@@ -533,7 +538,20 @@ def main():
             batch_size=args.batch_size,
         )
         
-        pprint(results)
+        print(results["results"])
+
+        # determine where to save
+        if args.lm_eval_results_output:
+            save_path = args.lm_eval_results_output
+        else:
+            # default under your out_dir with timestamp
+            fname = f"{timestamp}_lm_eval_results.json"
+            save_path = os.path.join(out_dir, fname)
+
+        print(f"Saving lm-eval results to {save_path}")
+        with open(save_path, "w") as f:
+            json.dump(results, f, indent=2)
+            f.write("\n")
         
         return
 
