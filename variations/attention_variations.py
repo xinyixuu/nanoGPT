@@ -8,7 +8,7 @@ from variations.linear_variations import linear_dictionary
 from quantization.quantize import fake_quantize_act
 from quantization.quant_utils import set_variant, create_activation_buffers
 from variations.softmax_variations import softmax_dictionary
-from variations.position_encoding_variations import QuantizedEmbedding, RotaryEmbedding, SymmetricalOverlapAngularPositions, FIRE
+from variations.position_encoding_variations import RotaryEmbedding, SymmetricalOverlapAngularPositions, FIRE
 
 # Mamba related imports
 # if torch.cuda.is_available():
@@ -24,7 +24,7 @@ class CausalSelfAttention(nn.Module):
         self.start_quant_level = config.start_quant_level
         self.quant_scheduler = config.quant_scheduler
 
-        if (config.n_kv_group == None):
+        if (config.n_kv_group is None):
             config.n_kv_group = config.n_head
         else:
             assert config.n_embd % config.n_kv_group == 0
@@ -54,7 +54,7 @@ class CausalSelfAttention(nn.Module):
         self.c_attn_q = self.linear_variant_q(config.n_embd, config.n_embd, config, self.quantization_attn_dict["quantize_linear_attn_q_method"], self.quantization_attn_dict["quantize_linear_attn_q_bits"], bias=config.bias)
 
         self.n_head = config.n_head
-        if config.n_kv_group == None:
+        if config.n_kv_group is None:
             self.n_kv_group = config.n_head
         else:
             assert config.n_head % config.n_kv_group == 0
@@ -531,7 +531,7 @@ class LinearAttention(nn.Module):
 
 class AttnIdentity(nn.Module):
     def __init__(self, config, fire_pos_enc=None):
-        super(Identity, self).__init__()
+        super(nn.Identity, self).__init__()
 
     def forward(self, x, iter_num=None):
         return x
