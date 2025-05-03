@@ -7,19 +7,20 @@ Use 'h'/'l' to move the selected column left/right, with cursor following.
 Press 'd' to hide the selected column, and 'o' to unhide all hidden columns.
 Preserves cursor position and header order across refreshes, fully expanding to fill vertical space.
 Only shows horizontal scrollbar if content overflows horizontally; vertical scrollbar appears only if content exceeds available height.
+Sorting is implemented via bubble sort to preserve stability and applies new sorts on currently displayed order.
 """
 import argparse
 import yaml
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 from textual.app import App, ComposeResult
 from textual import events
 from textual.containers import Container
 from textual.widgets import DataTable, Header, Footer
 
 
-def load_runs(log_file: Path) -> List[dict]:
-    docs = []
+def load_runs(log_file: Path) -> List[Dict]:
+    docs: List[Dict] = []
     if not log_file.exists():
         return docs
     with log_file.open() as f:
@@ -56,6 +57,8 @@ class MonitorApp(App):
         self.sort_column: Optional[int] = None
         self.sort_reverse: bool = False
         self.table: Optional[DataTable] = None
+        # Current displayed entries (maintains order across sorts)
+        self.current_entries: List[Dict] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -66,10 +69,11 @@ class MonitorApp(App):
 
     def on_mount(self) -> None:
         self.table = self.query_one(DataTable)
-        entries = load_runs(self.log_file)
+        # Load initial entries
+        self.current_entries = load_runs(self.log_file)
         # Determine parameter columns
         keys = set()
-        for e in entries:
+        for e in self.current_entries:
             keys.update(e.get("config", {}).keys())
         self.param_keys = sorted(keys)
 
@@ -96,18 +100,27 @@ class MonitorApp(App):
     def refresh_table(self, new_cursor: Optional[int] = None) -> None:
         if not self.table:
             return
-        entries = load_runs(self.log_file)
-        # Apply stable sort if requested
+        # Reload entries if no active sort to reflect disk changes
+        if self.sort_column is None:
+            self.current_entries = load_runs(self.log_file)
+
+        entries = list(self.current_entries)
+        # Apply bubble sort if requested
         if self.sort_column is not None:
             col_name = self.columns[self.sort_column]
-            entries.sort(
-                key=lambda e: (
-                    e.get(col_name)
-                    if col_name in ("best_val_loss", "best_val_iter", "num_params")
-                    else e.get("config", {}).get(col_name)
-                ),
-                reverse=self.sort_reverse
-            )
+            def get_val(e: Dict):
+                if col_name in ("best_val_loss", "best_val_iter", "num_params"):
+                    return e.get(col_name)
+                return e.get("config", {}).get(col_name)
+            n = len(entries)
+            for i in range(n):
+                for j in range(0, n - i - 1):
+                    a = get_val(entries[j])
+                    b = get_val(entries[j+1])
+                    if (not self.sort_reverse and a > b) or (self.sort_reverse and a < b):
+                        entries[j], entries[j+1] = entries[j+1], entries[j]
+            # Update current_entries to new sorted order
+            self.current_entries = entries
 
         # Save cursor
         old = self.table.cursor_coordinate
@@ -150,8 +163,8 @@ class MonitorApp(App):
 
         key = event.key
         if key == "enter":
-            # Toggle sort
             if self.sort_column == col:
+                # Toggle off sort
                 self.sort_column = None
                 self.sort_reverse = False
             else:
