@@ -103,6 +103,10 @@ class CausalSelfAttention(nn.Module):
         self.window_size = config.window_size
         print(f"sliding window size: {self.window_size}")
 
+        # qk_norm
+        self.use_qk_norm = config.use_qk_norm
+        self.use_qk_norm_scale = config.use_qk_norm_scale
+
         # Using flex attention
         self.use_flex_attn = config.use_flex_attn
 
@@ -133,6 +137,11 @@ class CausalSelfAttention(nn.Module):
                 self.rotary_emb_q = RotaryEmbedding(config, size=config.n_embd // self.n_head)
                 self.rotary_emb_k = RotaryEmbedding(config, size=config.n_embd // self.n_head)
 
+        # qk norm factor
+        if self.use_qk_norm_scale:
+            L = config.block_size
+            g0 = math.log2(L*L - L)
+            self.qk_norm_factor = nn.Parameter(torch.tensor(g0))
 
         self.flash = True
         if self.window_size is not None:
@@ -251,8 +260,20 @@ class CausalSelfAttention(nn.Module):
             k = self.rotary_emb_k(k)
 
         y = None
+
+        if self.use_qk_norm:
+            q = q / (q.norm(dim=-1, keepdim=True) + 1e-6)
+            k = k / (k.norm(dim=-1, keepdim=True) + 1e-6)
+
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
+
+            if self.use_qk_norm_scale:
+                # pre-scale Q so that built-in √dₕ division becomes our g scaling
+                head_dim = math.sqrt(k.size(-1))
+                qk_scaling_factor = self.qk_norm_factor * math.sqrt(head_dim)
+                q = q * qk_scaling_factor
+
             # efficient attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
         elif self.use_flex_attn and self.window_size is not None:
@@ -270,11 +291,17 @@ class CausalSelfAttention(nn.Module):
 
             att = None
             # manual implementation of attention
+            head_dim = math.sqrt(k.size(-1))
             if self.n_head != self.n_kv_group:
                 k_repeated = k.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
-                att = (q @ k_repeated.transpose(-2, -1)) / math.sqrt(k.size(-1))
+                att = (q @ k_repeated.transpose(-2, -1))
             else:
-                att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+                att = (q @ k.transpose(-2, -1))
+
+            if self.use_qk_norm_scale:
+                att = att / self.qk_norm_factor
+            else:
+                att = att / head_dim
 
             # apply masks
             if self.window_size is not None:

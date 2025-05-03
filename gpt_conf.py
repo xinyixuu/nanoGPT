@@ -105,6 +105,10 @@ class GPTConfig:
     # Attention Options
     attention_variant: str = "causal"
 
+    # QK Norm Options
+    use_qk_norm: bool = "false"
+    use_qk_norm_scale: bool = "false"
+
     ## SSM - Attention Varient (same as Hymba)
     ssm_mamba_expand: int = 2
     ssm_conv_kernel_size: int = 3
