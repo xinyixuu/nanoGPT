@@ -5,7 +5,8 @@ Refreshes every N seconds, showing all runs in a DataTable view.
 Press Enter on the selected cell to toggle sorting by that column; repeat to clear the sort.
 Use 'h'/'l' to move the selected column left/right, with cursor following.
 Press 'd' to hide the selected column, and 'o' to unhide all hidden columns.
-Preserves cursor position and header order across refreshes.
+Preserves cursor position and header order across refreshes, fully expanding to fill vertical space.
+Only shows horizontal scrollbar if content overflows horizontally; vertical scrollbar appears only if content exceeds available height.
 """
 import argparse
 import yaml
@@ -33,9 +34,14 @@ class MonitorApp(App):
     Screen {
         align: center middle;
     }
-    #table {
-        height: auto;
+    Container {
+        height: 1fr;
+    }
+    DataTable#table {
+        height: 1fr;
         width: 1fr;
+        overflow-x: auto;
+        overflow-y: auto;
     }
     """
 
@@ -54,7 +60,7 @@ class MonitorApp(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Container(
-            DataTable(id="table"),
+            DataTable(id="table", zebra_stripes=True),
         )
         yield Footer()
 
