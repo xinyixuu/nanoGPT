@@ -556,11 +556,12 @@ class LinearAttention(nn.Module):
 #         return output
 
 
-class AttnIdentity(nn.Module):
+class AttnIdentity(nn.Identity):
     def __init__(self, config, fire_pos_enc=None):
-        super(nn.Identity, self).__init__()
+        super().__init__()
 
     def forward(self, x, iter_num=None):
+        x = super().forward(x)
         return x
 
 class InfiniteHeadAttention(nn.Module):
