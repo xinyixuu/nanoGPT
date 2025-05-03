@@ -106,8 +106,8 @@ class GPTConfig:
     attention_variant: str = "causal"
 
     # QK Norm Options
-    use_qk_norm: bool = "false"
-    use_qk_norm_scale: bool = "false"
+    use_qk_norm: bool = False
+    use_qk_norm_scale: bool = False
 
     ## SSM - Attention Varient (same as Hymba)
     ssm_mamba_expand: int = 2

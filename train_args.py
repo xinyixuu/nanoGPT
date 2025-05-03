@@ -339,8 +339,8 @@ def parse_args():
     model_group.add_argument('--n_v_head_dim', default=None, type=int)
 
     # qk_norm variations
-    model_group.add_argument("--use_qk_norm",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="applies the norn to q and k before attn")
-    model_group.add_argument("--use_qk_norm_scale",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="applies norm scale, preloads scale for flash attn, post qk multplication in manual attn")
+    model_group.add_argument("--use_qk_norm",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="applies the norm to q and k before attn")
+    model_group.add_argument("--use_qk_norm_scale",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="applies norm scale, preloads scale for flash attn, post qk multiplication in manual attn")
 
     ## SSM - Attention Varient (same as Hymba)
     model_group.add_argument("--ssm_mamba_expand",   type=int,  default=2)
