@@ -10,19 +10,16 @@ Interactive keybindings:
   x     - hide all rows matching current cell in column
   i     - invert filter: keep only rows matching current cell in column
   O     - unhide all rows (clear row filters)
-  ?     - show help overlay
   e     - export current view to CSV
   s     - save current layout
 
-Preserves cursor position, header order, and applied row/column filters across refreshes.
-Fully expands to fill vertical space with scrollbars only when overflow.
-Sorting is a stable bubble sort applied to the current view order.
-Persistent layout and filters are stored in ~/.monitor_layout.json when 's' is pressed.
+Use `--hotkeys` to print this help and exit.
 """
 
 import argparse
 import csv
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -31,8 +28,7 @@ import yaml
 from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Container
-from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.widgets import DataTable, Footer, Header
 
 LAYOUT_FILE = Path.home() / ".monitor_layout.json"
 
@@ -48,25 +44,17 @@ def load_runs(log_file: Path) -> List[Dict]:
     return docs
 
 
-class HelpScreen(ModalScreen):
-    def compose(self) -> ComposeResult:
-        help_text = (
-            "Enter: toggle sort by column\n"
-            "h/l: move column left/right\n"
-            "d: hide column\n"
-            "o: unhide all columns\n"
-            "x: hide rows matching value\n"
-            "i: keep only rows matching value\n"
-            "O: clear all row filters\n"
-            "?: show this help\n"
-            "e: export CSV\n"
-            "s: save layout (columns, hidden-cols, filters)\n"
-            "Press any key to close."
-        )
-        yield Static(help_text, id="help_text")
-
-    async def on_key(self, event: events.Key) -> None:
-        await self.dismiss()
+HOTKEYS_TEXT = (
+    "Enter: toggle sort by column\n"
+    "h/l: move column left/right\n"
+    "d: hide column\n"
+    "o: unhide all columns\n"
+    "x: hide rows matching value\n"
+    "i: keep only rows matching value\n"
+    "O: clear all row filters\n"
+    "e: export CSV\n"
+    "s: save layout (columns, hidden-cols, filters)\n"
+)
 
 
 class MonitorApp(App):
@@ -79,7 +67,6 @@ class MonitorApp(App):
         overflow-x: auto;
         overflow-y: auto;
     }
-    #help_text { padding: 1; background: $surface; color: $text; border: heavy $primary; }
     """
 
     def __init__(self, log_file: Path, interval: float) -> None:
@@ -204,11 +191,8 @@ class MonitorApp(App):
             return
         r, c = coord.row, coord.column
         key = event.key
-        # Help
-        if key == "?":
-            await self.push_screen(HelpScreen())
         # Export
-        elif key == "e":
+        if key == "e":
             fname = f"monitor_export_{int(time.time())}.csv"
             with open(fname, "w", newline="") as f:
                 w = csv.writer(f)
@@ -216,25 +200,19 @@ class MonitorApp(App):
                 for e in self.current_entries:
                     w.writerow(
                         [
-                            f"{self.get_cell(e, col):.6f}"
-                            if col == "best_val_loss"
-                            else str(self.get_cell(e, col))
+                            f"{self.get_cell(e, col):.6f}" if col == "best_val_loss" else str(self.get_cell(e, col))
                             for col in self.columns
                         ]
                     )
             self.bell()
         # Save layout + filters
         elif key == "s":
-            filters = []
-            for col_name in self.all_columns:
-                # not storing column filters here—just row_filters list preserved by handlers
-                pass
             cfg = {
                 "all_columns": self.all_columns,
                 "hidden_cols": list(self.hidden_cols),
                 "sort_column": self.sort_column,
                 "sort_reverse": self.sort_reverse,
-                "row_filters": self.row_filters if hasattr(self, "row_filters") else [],
+                "row_filters": getattr(self, "row_filters", []),
             }
             json.dump(cfg, open(LAYOUT_FILE, "w"))
             self.bell()
@@ -257,17 +235,13 @@ class MonitorApp(App):
                     self.all_columns[i2],
                     self.all_columns[i1],
                 )
-                self.columns = [
-                    col for col in self.all_columns if col not in self.hidden_cols
-                ]
+                self.columns = [col for col in self.all_columns if col not in self.hidden_cols]
                 self.refresh_table(new_cursor=t)
         # Hide col
         elif key == "d":
             cn = self.columns[c]
             self.hidden_cols.add(cn)
-            self.columns = [
-                col for col in self.all_columns if col not in self.hidden_cols
-            ]
+            self.columns = [col for col in self.all_columns if col not in self.hidden_cols]
             self.refresh_table(new_cursor=c)
         # Unhide cols
         elif key == "o":
@@ -283,10 +257,7 @@ class MonitorApp(App):
                 for e in self.current_entries
                 if str(self.get_cell(e, col_name)) != val
             ]
-            # record filter
-            self.row_filters = getattr(self, "row_filters", []) + [
-                (col_name, "hide", val)
-            ]
+            self.row_filters = getattr(self, "row_filters", []) + [(col_name, "hide", val)]
             self.refresh_table(new_cursor=r)
         # Inverse filter
         elif key == "i":
@@ -297,9 +268,7 @@ class MonitorApp(App):
                 for e in self.current_entries
                 if str(self.get_cell(e, col_name)) == val
             ]
-            self.row_filters = getattr(self, "row_filters", []) + [
-                (col_name, "keep", val)
-            ]
+            self.row_filters = getattr(self, "row_filters", []) + [(col_name, "keep", val)]
             self.refresh_table(new_cursor=0)
         # Unhide rows
         elif key == "O":
@@ -316,10 +285,19 @@ def main() -> None:
     parser.add_argument(
         "--interval", type=float, default=5.0, help="Refresh interval seconds"
     )
+    parser.add_argument(
+        "--hotkeys", action="store_true", help="Print available hotkeys and exit"
+    )
     args = parser.parse_args()
+
+    if args.hotkeys:
+        print(HOTKEYS_TEXT)
+        sys.exit(0)
+
     app = MonitorApp(args.log_file, args.interval)
     app.run()
 
 
 if __name__ == "__main__":
     main()
+
