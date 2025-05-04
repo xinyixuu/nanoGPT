@@ -30,7 +30,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.widgets import DataTable, Footer, Header
 
-LAYOUT_FILE = Path.home() / ".monitor_layout.json"
+LAYOUT_FILE = "monitor_layout.json"
 
 
 def load_runs(log_file: Path) -> List[Dict]:
