@@ -19,18 +19,20 @@ Fully expands to fill vertical space with scrollbars only when overflow.
 Sorting is a stable bubble sort applied to the current view order.
 Persistent layout and filters are stored in ~/.monitor_layout.json when 's' is pressed.
 """
+
 import argparse
 import csv
 import json
 import time
-import yaml
 from pathlib import Path
-from typing import Optional, List, Dict
-from textual.app import App, ComposeResult
+from typing import Dict, List, Optional
+
+import yaml
 from textual import events
+from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Header, Footer, Static
+from textual.widgets import DataTable, Footer, Header, Static
 
 LAYOUT_FILE = Path.home() / ".monitor_layout.json"
 
@@ -92,7 +94,7 @@ class MonitorApp(App):
         self.sort_reverse: bool = False
         self.table: Optional[DataTable] = None
         self.original_entries: List[Dict] = []  # unfiltered data
-        self.current_entries: List[Dict] = []   # view data with row filters
+        self.current_entries: List[Dict] = []  # view data with row filters
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -128,9 +130,17 @@ class MonitorApp(App):
             for filt in row_filters:
                 col, op, val = filt
                 if op == "hide":
-                    self.current_entries = [e for e in self.current_entries if str(self.get_cell(e,col)) != val]
+                    self.current_entries = [
+                        e
+                        for e in self.current_entries
+                        if str(self.get_cell(e, col)) != val
+                    ]
                 elif op == "keep":
-                    self.current_entries = [e for e in self.current_entries if str(self.get_cell(e,col)) == val]
+                    self.current_entries = [
+                        e
+                        for e in self.current_entries
+                        if str(self.get_cell(e, col)) == val
+                    ]
         # Build and schedule
         self.build_table()
         self.set_interval(self.interval, self.refresh_table)
@@ -141,7 +151,7 @@ class MonitorApp(App):
             return
         self.table.clear(columns=True)
         for col in self.columns:
-            self.table.add_column(col, width=max(12, len(col)+2))
+            self.table.add_column(col, width=max(12, len(col) + 2))
 
     def get_cell(self, entry: Dict, col_name: str):
         if col_name in ("best_val_loss", "best_val_iter", "num_params"):
@@ -152,11 +162,14 @@ class MonitorApp(App):
         col_name = self.columns[self.sort_column]
         n = len(self.current_entries)
         for i in range(n):
-            for j in range(n-i-1):
+            for j in range(n - i - 1):
                 a = self.get_cell(self.current_entries[j], col_name)
-                b = self.get_cell(self.current_entries[j+1], col_name)
+                b = self.get_cell(self.current_entries[j + 1], col_name)
                 if (not self.sort_reverse and a > b) or (self.sort_reverse and a < b):
-                    self.current_entries[j], self.current_entries[j+1] = self.current_entries[j+1], self.current_entries[j]
+                    self.current_entries[j], self.current_entries[j + 1] = (
+                        self.current_entries[j + 1],
+                        self.current_entries[j],
+                    )
 
     def refresh_table(self, new_cursor: Optional[int] = None) -> None:
         if not self.table:
@@ -177,11 +190,11 @@ class MonitorApp(App):
             row = []
             for col in self.columns:
                 val = self.get_cell(e, col)
-                row.append(f"{val:.6f}" if col=="best_val_loss" else str(val))
+                row.append(f"{val:.6f}" if col == "best_val_loss" else str(val))
             self.table.add_row(*row)
         # Restore cursor
-        maxr, maxc = len(self.current_entries)-1, len(self.columns)-1
-        self.table.cursor_coordinate = (min(max(ri,0),maxr), min(max(ci,0),maxc))
+        maxr, maxc = len(self.current_entries) - 1, len(self.columns) - 1
+        self.table.cursor_coordinate = (min(max(ri, 0), maxr), min(max(ci, 0), maxc))
 
     async def on_key(self, event: events.Key) -> None:
         if not self.table:
@@ -201,7 +214,14 @@ class MonitorApp(App):
                 w = csv.writer(f)
                 w.writerow(self.columns)
                 for e in self.current_entries:
-                    w.writerow([f"{self.get_cell(e,col):.6f}" if col=="best_val_loss" else str(self.get_cell(e,col)) for col in self.columns])
+                    w.writerow(
+                        [
+                            f"{self.get_cell(e, col):.6f}"
+                            if col == "best_val_loss"
+                            else str(self.get_cell(e, col))
+                            for col in self.columns
+                        ]
+                    )
             self.bell()
         # Save layout + filters
         elif key == "s":
@@ -214,7 +234,7 @@ class MonitorApp(App):
                 "hidden_cols": list(self.hidden_cols),
                 "sort_column": self.sort_column,
                 "sort_reverse": self.sort_reverse,
-                "row_filters": self.row_filters if hasattr(self, 'row_filters') else []
+                "row_filters": self.row_filters if hasattr(self, "row_filters") else [],
             }
             json.dump(cfg, open(LAYOUT_FILE, "w"))
             self.bell()
@@ -228,39 +248,58 @@ class MonitorApp(App):
                 self.sort_reverse = False
             self.refresh_table(new_cursor=c)
         # Move columns
-        elif key in ("h","l"):
-            t = c-1 if key=="h" else c+1
-            if 0<=t<len(self.columns):
-                n1,n2 = self.columns[c], self.columns[t]
-                i1,i2 = self.all_columns.index(n1), self.all_columns.index(n2)
-                self.all_columns[i1],self.all_columns[i2] = self.all_columns[i2], self.all_columns[i1]
-                self.columns=[col for col in self.all_columns if col not in self.hidden_cols]
+        elif key in ("h", "l"):
+            t = c - 1 if key == "h" else c + 1
+            if 0 <= t < len(self.columns):
+                n1, n2 = self.columns[c], self.columns[t]
+                i1, i2 = self.all_columns.index(n1), self.all_columns.index(n2)
+                self.all_columns[i1], self.all_columns[i2] = (
+                    self.all_columns[i2],
+                    self.all_columns[i1],
+                )
+                self.columns = [
+                    col for col in self.all_columns if col not in self.hidden_cols
+                ]
                 self.refresh_table(new_cursor=t)
         # Hide col
         elif key == "d":
             cn = self.columns[c]
             self.hidden_cols.add(cn)
-            self.columns=[col for col in self.all_columns if col not in self.hidden_cols]
+            self.columns = [
+                col for col in self.all_columns if col not in self.hidden_cols
+            ]
             self.refresh_table(new_cursor=c)
         # Unhide cols
         elif key == "o":
             self.hidden_cols.clear()
-            self.columns=self.all_columns.copy()
+            self.columns = self.all_columns.copy()
             self.refresh_table(new_cursor=c)
         # Hide matching rows
         elif key == "x":
             col_name = self.columns[c]
             val = str(self.get_cell(self.current_entries[r], col_name))
-            self.current_entries = [e for e in self.current_entries if str(self.get_cell(e,col_name)) != val]
+            self.current_entries = [
+                e
+                for e in self.current_entries
+                if str(self.get_cell(e, col_name)) != val
+            ]
             # record filter
-            self.row_filters = getattr(self, 'row_filters', []) + [(col_name,'hide',val)]
+            self.row_filters = getattr(self, "row_filters", []) + [
+                (col_name, "hide", val)
+            ]
             self.refresh_table(new_cursor=r)
         # Inverse filter
         elif key == "i":
             col_name = self.columns[c]
             val = str(self.get_cell(self.current_entries[r], col_name))
-            self.current_entries = [e for e in self.current_entries if str(self.get_cell(e,col_name)) == val]
-            self.row_filters = getattr(self, 'row_filters', []) + [(col_name,'keep',val)]
+            self.current_entries = [
+                e
+                for e in self.current_entries
+                if str(self.get_cell(e, col_name)) == val
+            ]
+            self.row_filters = getattr(self, "row_filters", []) + [
+                (col_name, "keep", val)
+            ]
             self.refresh_table(new_cursor=0)
         # Unhide rows
         elif key == "O":
@@ -274,7 +313,9 @@ def main() -> None:
         description="Monitor hyperparameter search results (Textual TUI)."
     )
     parser.add_argument("log_file", type=Path, help="Path to YAML log file")
-    parser.add_argument("--interval", type=float, default=5.0, help="Refresh interval seconds")
+    parser.add_argument(
+        "--interval", type=float, default=5.0, help="Refresh interval seconds"
+    )
     args = parser.parse_args()
     app = MonitorApp(args.log_file, args.interval)
     app.run()
@@ -282,4 +323,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
