@@ -1,5 +1,9 @@
 # gpt_lm_eval_wrapper.py
 
+import os
+import json
+from datetime import datetime
+import lm_eval
 import torch
 import torch.nn.functional as F
 import lm_eval.api.model as model_api
@@ -185,3 +189,55 @@ class NanoGPTLM(model_api.LM):
             )
             res.append(generated_text)
         return res
+    
+    @classmethod
+    def create_model(cls, model, encode_fn, decode_fn, args):
+        return cls(
+            model=model,
+            tokenizer_encode=encode_fn,
+            tokenizer_decode=decode_fn,
+            eot_token_id=model.config.vocab_size - 1, # |endoftext| token is the last token in GPT2
+            device=args.device,
+            max_new_tokens=args.max_new_tokens,
+            batch_size=args.batch_size,
+            temperature=args.temperature,
+            top_k=args.top_k,
+        )
+    
+    def evaluate_and_save(self, tasks, batch_size, out_dir, timestamp=None, results_output=None):
+        """
+        tasks: list of lm-eval task names, e.g. ["arc_easy","hellaswag"]
+        batch_size: how many samples per batch
+        out_dir: base directory to write results into
+        timestamp: optional timestamp string to use in the output filename
+        results_output: if given, exact file path to write results; otherwise
+                        generates a timestamped file under out_dir
+        returns: dict of raw evaluation results
+        """
+        print(f"Running LM-Eval on tasks: {','.join(tasks)}")
+
+        results = lm_eval.simple_evaluate(
+            model=self,
+            tasks=tasks,
+            batch_size=batch_size,
+        )
+
+        # print just the summarized metrics
+        print(results["results"])
+
+        # decide where to save
+        if results_output:
+            save_path = results_output
+        else:
+            if not timestamp:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            fname = f"{timestamp}_lm_eval_results.json"
+            os.makedirs(out_dir, exist_ok=True)
+            save_path = os.path.join(out_dir, fname)
+
+        print(f"Saving lm-eval results to {save_path}")
+        with open(save_path, "w") as f:
+            json.dump(results, f, indent=2)
+            f.write("\n")
+
+        return results

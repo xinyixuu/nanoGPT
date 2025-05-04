@@ -42,7 +42,7 @@ def parse_args():
     parser.add_argument('--compile', action=argparse.BooleanOptionalAction, help="Compile the model (requires PyTorch 2.0)")
     parser.add_argument('--sample_file', type=str, default=None, help="Output file for inference")
     parser.add_argument('--interactive', action=argparse.BooleanOptionalAction, help="Enable interactive generation")
-    parser.add_argument('--stop_string', type=str, default='~W', help="String to stop generation and allow user input")
+    parser.add_argument('--stop_strings', nargs='+', type=str, default=['~W'], help="One or more strings to stop generation and allow user input. ""E.g. --stop_strings \"\n\n\" \".\"")
     parser.add_argument('--last_k_tokens', type=int, default=10, help="Number of last tokens to display in heatmaps")
     parser.add_argument('--chart_type', type=str, default='heatmap', choices=['heatmap', 'barchart'], help="Type of chart to display: 'heatmap' or 'barchart'")
     parser.add_argument('--block_size', type=int, default=None, help="Block size for context length, default is model's block size")
@@ -516,43 +516,16 @@ def main():
         model.update_rope_length(args.rope_length)
 
     if args.lm_eval_tasks:
-        print(f"Running LM-Eval on tasks: {args.lm_eval_tasks}")
-        
         # Prepare wrapped model
-        wrapped_model = NanoGPTLM(
-            model=model,
-            tokenizer_encode=encode,
-            tokenizer_decode=decode,
-            eot_token_id=model.config.vocab_size - 1, # |endoftext| token is the last token in GPT2
-            device=args.device,
-            max_new_tokens=args.max_new_tokens,
-            batch_size=args.batch_size,
-            temperature=args.temperature,
-            top_k=args.top_k,
-        )
-        
-        # Run evaluation
-        results = lm_eval.simple_evaluate(
-            model=wrapped_model,
+        wrapped_model = NanoGPTLM.create_model(model=model, encode_fn=encode, decode_fn=decode, args=args)
+
+        wrapped_model.evaluate_and_save(
             tasks=args.lm_eval_tasks.split(","),
             batch_size=args.batch_size,
+            out_dir=out_dir,
+            timestamp=timestamp,
+            results_output=args.lm_eval_results_output
         )
-        
-        print(results["results"])
-
-        # determine where to save
-        if args.lm_eval_results_output:
-            save_path = args.lm_eval_results_output
-        else:
-            # default under your out_dir with timestamp
-            fname = f"{timestamp}_lm_eval_results.json"
-            save_path = os.path.join(out_dir, fname)
-
-        print(f"Saving lm-eval results to {save_path}")
-        with open(save_path, "w") as f:
-            json.dump(results, f, indent=2)
-            f.write("\n")
-        
         return
 
     if args.eval_only:
