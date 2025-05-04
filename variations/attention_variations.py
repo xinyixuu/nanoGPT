@@ -299,7 +299,7 @@ class CausalSelfAttention(nn.Module):
                 att = (q @ k.transpose(-2, -1))
 
             if self.use_qk_norm_scale:
-                att = att / self.qk_norm_factor
+                att = att * self.qk_norm_factor
             else:
                 att = att / head_dim
 
