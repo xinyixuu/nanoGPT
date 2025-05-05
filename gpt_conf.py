@@ -44,6 +44,11 @@ class GPTConfig:
 
     # Attention Variation Specific
 
+    ## Flash Lobo
+    use_flash_lobo: bool = False
+    use_flash_obo_const: bool = False
+    flash_lobo_log_const: float = 0.0
+
     # Steering Vectors
     ## Where to intercept
     apply_vector_at_layer_idx: int = None
