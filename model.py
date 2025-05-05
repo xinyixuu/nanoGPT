@@ -685,10 +685,13 @@ class GPT(nn.Module):
         return idx
 
     @torch.no_grad()
-    def generate_with_stop(self, idx, max_new_tokens, stop_string, decode, temperature=1.0, top_k=None):
+    def generate_with_stop(self, idx, max_new_tokens, stop_strings, decode, temperature=1.0, top_k=None):
         """
-        Generate tokens and stop on fixed string match, return the state for further input.
+        Generate tokens and stop on any fixed string match from a list of stop strings.
         """
+        if isinstance(stop_strings, str):
+            stop_strings = [stop_strings]  # make it a list if a single string
+
         generated_text = ""
         buffer = ""
         for _ in range(max_new_tokens):
@@ -706,9 +709,9 @@ class GPT(nn.Module):
             generated_text += next_token_text
             buffer += next_token_text
 
-            # Check if the buffer ends with the stop_string
-            if buffer.endswith(stop_string):
-                break
+            # Check if buffer ends with any stop string
+            for stop_string in stop_strings:
+                if buffer.endswith(stop_string):
+                    return idx, generated_text
 
         return idx, generated_text
-

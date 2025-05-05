@@ -23,6 +23,9 @@ from model import GPT, GPTConfig
 from utils.model_info import print_summary, print_module_structure, print_model_blocks
 from variations.model_variations import model_variation_dictionary
 
+import lm_eval
+from benchmarks.gpt_lm_eval_wrapper import NanoGPTLM
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Inference from trained models")
     parser.add_argument("--device", type=str, default="cuda", help="Device to run inference (e.g., 'cpu', 'cuda', 'cuda:0', 'cuda:1')")
@@ -39,7 +42,7 @@ def parse_args():
     parser.add_argument('--compile', action=argparse.BooleanOptionalAction, help="Compile the model (requires PyTorch 2.0)")
     parser.add_argument('--sample_file', type=str, default=None, help="Output file for inference")
     parser.add_argument('--interactive', action=argparse.BooleanOptionalAction, help="Enable interactive generation")
-    parser.add_argument('--stop_string', type=str, default='~W', help="String to stop generation and allow user input")
+    parser.add_argument('--stop_strings', nargs='+', type=str, default=['~W'], help="One or more strings to stop generation and allow user input. ""E.g. --stop_strings \"\n\n\" \".\"")
     parser.add_argument('--last_k_tokens', type=int, default=10, help="Number of last tokens to display in heatmaps")
     parser.add_argument('--chart_type', type=str, default='heatmap', choices=['heatmap', 'barchart'], help="Type of chart to display: 'heatmap' or 'barchart'")
     parser.add_argument('--block_size', type=int, default=None, help="Block size for context length, default is model's block size")
@@ -76,6 +79,19 @@ def parse_args():
     parser.add_argument("--eval_only", action=argparse.BooleanOptionalAction, help="Enable evaluation only mode to calculate and print validation loss")
     parser.add_argument("--eval_iters", type=int, default=250, help="iterations for evaluation")
     parser.add_argument("--eval_dataset", type=str, default=None, help="dataset for evaluation")
+
+    # lm_eval Benchmarking Related
+    parser.add_argument('--lm_eval_tasks', type=str, default=None,
+                    help="Comma-separated list of tasks for lm-eval (e.g. 'arc_easy,hellaswag')")
+    parser.add_argument(
+        '--lm_eval_results_output',
+        type=str,
+        default=None,
+        help="Where to save the lm-eval results (JSON). "
+             "If not set, defaults to out_dir/<timestamp>_lm_eval_results.json"
+    )
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help="Batch size to use for evaluation")
 
     return parser.parse_args()
 
@@ -507,6 +523,19 @@ def main():
     # Inference with different Rope Length
     if args.rope_length:
         model.update_rope_length(args.rope_length)
+
+    if args.lm_eval_tasks:
+        # Prepare wrapped model
+        wrapped_model = NanoGPTLM.create_model(model=model, encode_fn=encode, decode_fn=decode, args=args)
+
+        wrapped_model.evaluate_and_save(
+            tasks=args.lm_eval_tasks.split(","),
+            batch_size=args.batch_size,
+            out_dir=out_dir,
+            timestamp=timestamp,
+            results_output=args.lm_eval_results_output
+        )
+        return
 
     if args.eval_only:
         print("Running in eval_only mode...")
