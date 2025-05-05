@@ -1,0 +1,28 @@
+# flash_lobo.yaml
+---
+# pos embeddings
+use_rotary_embeddings: [true]
+use_abs_pos_embeddings: [false]
+
+# base hyperparameters
+max_iters: [3500]
+device: ["cuda"]
+dtype: ["bfloat16", "float16", "float32"]
+dataset: ["cosmopedia_100k"]
+
+use_flash_lobo: [true, false]
+
+# conditional options
+use_flash_obo_const:
+  conditions:
+    - ["use_flash_lobo", true]
+  options: [false, true]
+
+# conditional options
+flash_lobo_log_const:
+  conditions:
+    - ["use_flash_lobo", true]
+  options: ["0.0", "0.1", "0.5"]
+
+# boolean flags
+compile: [true]

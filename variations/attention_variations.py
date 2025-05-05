@@ -107,6 +107,14 @@ class CausalSelfAttention(nn.Module):
         self.use_qk_norm = config.use_qk_norm
         self.use_qk_norm_scale = config.use_qk_norm_scale
 
+        # Flash Lobo
+        self.use_flash_lobo = config.use_flash_lobo
+        if self.use_flash_lobo:
+            if config.use_flash_obo_const:
+                self.flash_lobo_log_const = config.flash_lobo_log_const # log C (0 -> C = 1)
+            else:
+                self.flash_lobo_log_const = nn.Parameter(torch.tensor(config.flash_lobo_log_const))  # log C  (0 → C = 1)
+
         # Using flex attention
         self.use_flex_attn = config.use_flex_attn
 
@@ -268,14 +276,36 @@ class CausalSelfAttention(nn.Module):
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
 
+            # Flash QK Norm
             if self.use_qk_norm_scale:
                 # pre-scale Q so that built-in √dₕ division becomes our g scaling
                 head_dim = math.sqrt(k.size(-1))
                 qk_scaling_factor = self.qk_norm_factor * math.sqrt(head_dim)
                 q = q * qk_scaling_factor
 
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            # Flash Lobo
+            attn_bias = None
+            if self.use_flash_lobo:
+                # 2-a  Make dummy key/value column of zeros
+                dummy_k = q.new_zeros(B, self.n_kv_group, 1, q.size(-1))
+                dummy_v = q.new_zeros(B, self.n_kv_group, 1, v.size(-1))
+
+                k = torch.cat([dummy_k, k], dim=2)   # prepend → causal mask still valid
+                v = torch.cat([dummy_v, v], dim=2)
+
+                # 2-b  Bias only that column with log C
+                attn_bias = q.new_zeros(1, self.n_head, 1, k.size(2))
+                attn_bias[..., 0] = self.flash_lobo_log_const    # first column only
+
+            # Efficient attention using Flash Attention CUDA kernels
+            y = torch.nn.functional.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_bias,
+                dropout_p=self.dropout if self.training else 0,
+                is_causal=True,
+            )
         elif self.use_flex_attn and self.window_size is not None:
             block_mask = self.get_block_mask(T, x.device)
             y = torch.nn.attention.flex_attention.flex_attention(q, k, v, block_mask=block_mask)

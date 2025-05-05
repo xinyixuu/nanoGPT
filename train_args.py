@@ -334,13 +334,18 @@ def parse_args():
         help="Which attention variant to use for the Transformer blocks."
     )
 
-    # Infinite Attention variation
+    ## Infinite Attention variation
     model_group.add_argument('--n_qk_head_dim', default=None, type=int)
     model_group.add_argument('--n_v_head_dim', default=None, type=int)
 
-    # qk_norm variations
+    ## qk_norm variations
     model_group.add_argument("--use_qk_norm",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="applies the norm to q and k before attn")
     model_group.add_argument("--use_qk_norm_scale",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="applies norm scale, preloads scale for flash attn, post qk multiplication in manual attn")
+
+    ## Flash Lobo
+    model_group.add_argument("--use_flash_lobo",   type=bool, default=False, action=argparse.BooleanOptionalAction)
+    model_group.add_argument("--use_flash_obo_const",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="if set, will make the flash lobo _not_ a learned value")
+    model_group.add_argument("--flash_lobo_log_const",   type=float, default=0.0, help="initialized value for the lobo log constant")
 
     ## SSM - Attention Varient (same as Hymba)
     model_group.add_argument("--ssm_mamba_expand",   type=int,  default=2)
