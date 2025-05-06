@@ -159,11 +159,44 @@ class MonitorApp(App):
             for j in range(n - i - 1):
                 a = self.get_cell(self.current_entries[j], col)
                 b = self.get_cell(self.current_entries[j + 1], col)
-                if (not self.sort_reverse and a > b) or (self.sort_reverse and a < b):
+                cmp = self._compare_values(a, b)
+                if (not self.sort_reverse and cmp > 0) or (self.sort_reverse and cmp < 0):
                     self.current_entries[j], self.current_entries[j + 1] = (
                         self.current_entries[j + 1],
                         self.current_entries[j],
                     )
+
+    @staticmethod
+    def _compare_values(a, b) -> int:
+        """
+        Compare *a* and *b* so that **None is always treated as the lowest-priority
+        value**, i.e. it is pushed to the bottom of the table no matter the
+        sort direction.
+
+        Returns:
+            -1 if a < b, 0 if a == b, 1 if a > b (w.r.t. this custom order).
+        """
+        if a is None and b is None:
+            return 0
+        if a is None:
+            return 1          # a goes after b
+        if b is None:
+            return -1         # a goes before b
+        try:
+            if a < b:
+                return -1
+            if a > b:
+                return 1
+            return 0
+        except TypeError:
+            # Fall back to string comparison when types are incomparable (e.g., int vs str)
+            sa, sb = str(a), str(b)
+            if sa < sb:
+                return -1
+            if sa > sb:
+                return 1
+            return 0
+
 
     def refresh_table(self, new_cursor: Optional[int] = None) -> None:
         """Reload data, apply sorting, and repopulate the DataTable."""
@@ -182,12 +215,13 @@ class MonitorApp(App):
         # Rebuild columns and rows
         self.build_table()
         for entry in self.current_entries:
-            row = [
-                f"{self.get_cell(entry, col):.6f}"
-                if col == "best_val_loss"
-                else str(self.get_cell(entry, col))
-                for col in self.columns
-            ]
+            row: List[str] = []
+            for col in self.columns:
+                val = self.get_cell(entry, col)
+                if col == "best_val_loss" and val is not None:
+                    row.append(f"{val:.6f}")
+                else:
+                    row.append(str(val))
             self.table.add_row(*row)
         # Restore cursor
         maxr, maxc = len(self.current_entries) - 1, len(self.columns) - 1
@@ -209,14 +243,14 @@ class MonitorApp(App):
                 w = csv.writer(f)
                 w.writerow(self.columns)
                 for entry in self.current_entries:
-                    w.writerow(
-                        [
-                            f"{self.get_cell(entry, col):.6f}"
-                            if col == "best_val_loss"
-                            else str(self.get_cell(entry, col))
-                            for col in self.columns
-                        ]
-                    )
+                    row: List[str] = []
+                    for col in self.columns:
+                        val = self.get_cell(entry, col)
+                        if col == "best_val_loss" and val is not None:
+                            row.append(f"{val:.6f}")
+                        else:
+                            row.append(str(val))
+                    w.writerow(row)
             self.bell()
         elif key == "s":
             # Save layout to JSON with same base name
