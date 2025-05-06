@@ -13,10 +13,13 @@ Interactive keybindings:
   e     - export current view to CSV
   s     - save current layout
   p     - shows help menu
+  g     - graphs first two rows
+  L     - graph & connect points sharing the 3rd column value
 
 Use `--hotkeys` to print this help and exit.
 """
 
+import plot_view
 import argparse
 import csv
 import json
@@ -56,7 +59,9 @@ HOTKEYS_TEXT = (
     "O: clear all row filters\n"
     "e: export CSV\n"
     "s: save layout (columns, hidden-cols, filters)\n"
+    "g: graph first two columns (opens a Plotly window)\n"
     "p: shows help menu\n"
+    "L: graph & connect points sharing the 3rd column value\n"
 )
 
 
@@ -352,17 +357,31 @@ class MonitorApp(App):
             # Reset row filters
             self.current_entries, self.row_filters = list(self.original_entries), []
             self.refresh_table(new_cursor=0)
-        elif key in ("p", "escape"):
-            # Toggle help overlay
-            if self._help_note is not None:
-                # Dismiss existing note
-                try:
-                    self._help_note.dismiss()
-                except Exception:
-                    pass
-                self._help_note = None
-            elif key == "p":
-                self._msg(HOTKEYS_TEXT, timeout=10.0)
+        elif key == "p":
+            self._msg(HOTKEYS_TEXT, timeout=10.0)
+        elif key == "g":
+            # ── Graph using first two visible columns: col[0] ⇒ Y, col[1] ⇒ X ──
+            try:
+                if len(self.columns) < 2:
+                    raise ValueError("Need at least two visible columns to graph")
+                y_col, x_col = self.columns[0], self.columns[1]
+                plot_view.plot_rows(self.current_entries, x=x_col, y=y_col)
+                self._msg(f"Plotted {y_col} vs {x_col}", timeout=3)
+            except Exception as exc:
+                self._msg(f"Graph error: {exc}", timeout=4)
+        elif key == "L":
+            try:
+                if len(self.columns) < 3:
+                    raise ValueError("Need at least three visible columns for 'L'")
+                y_col, x_col, grp_col = self.columns[0], self.columns[1], self.columns[2]
+                plot_view.plot_rows(
+                    self.current_entries, x=x_col, y=y_col, connect_by=grp_col
+                )
+                self._msg(f"Plotted {y_col} vs {x_col} grouped by {grp_col}", timeout=3)
+            except Exception as exc:
+                self._msg(f"Graph error: {exc}", timeout=4)
+
+
 
 
 def main() -> None:
