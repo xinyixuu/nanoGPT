@@ -12,6 +12,7 @@ Interactive keybindings:
   O     - unhide all rows (clear row filters)
   e     - export current view to CSV
   s     - save current layout
+  p     - shows help menu
 
 Use `--hotkeys` to print this help and exit.
 """
@@ -55,6 +56,7 @@ HOTKEYS_TEXT = (
     "O: clear all row filters\n"
     "e: export CSV\n"
     "s: save layout (columns, hidden-cols, filters)\n"
+    "p: shows help menu\n"
 )
 
 
@@ -237,6 +239,18 @@ class MonitorApp(App):
         maxr, maxc = len(self.current_entries) - 1, len(self.columns) - 1
         self.table.cursor_coordinate = (min(max(ri, 0), maxr), min(max(ci, 0), maxc))
 
+    def _msg(self, text: str, timeout: float = 2.0) -> None:
+        """
+        Show a transient 2-second notification at the bottom-right.
+        Works on Textual ≥0.32; falls back to a console bell if unavailable.
+        """
+        try:
+            # Textual's builtin notifier (dismisses automatically)
+            self.notify(text, timeout=timeout)
+        except AttributeError:
+            # Older Textual: just beep so the user at least gets feedback
+            self.bell()
+
     async def on_key(self, event: events.Key) -> None:
         """Handle key presses for table interactions and config saving."""
         if not self.table:
@@ -262,6 +276,7 @@ class MonitorApp(App):
                             row.append(str(val))
                     w.writerow(row)
             self.bell()
+            self._msg(f"Exported view → {fname}")
         elif key == "s":
             # Save layout to JSON with same base name
             cfg = {
@@ -273,6 +288,7 @@ class MonitorApp(App):
             }
             self.config_file.write_text(json.dumps(cfg, indent=2))
             self.bell()
+            self._msg("Layout saved")
         elif key == "enter":
             # Toggle sort
             if self.sort_column == c:
@@ -280,6 +296,13 @@ class MonitorApp(App):
             else:
                 self.sort_column, self.sort_reverse = c, False
             self.refresh_table(new_cursor=c)
+
+            # User message
+            col_name = self.columns[c]
+            if self.sort_column is None:
+                self._msg("Sorting cleared")
+            else:
+                self._msg(f"Sorted by “{col_name}”")
         elif key in ("h", "l"):
             # Move column
             t = c - 1 if key == "h" else c + 1
@@ -329,6 +352,17 @@ class MonitorApp(App):
             # Reset row filters
             self.current_entries, self.row_filters = list(self.original_entries), []
             self.refresh_table(new_cursor=0)
+        elif key in ("p", "escape"):
+            # Toggle help overlay
+            if self._help_note is not None:
+                # Dismiss existing note
+                try:
+                    self._help_note.dismiss()
+                except Exception:
+                    pass
+                self._help_note = None
+            elif key == "p":
+                self._msg(HOTKEYS_TEXT, timeout=10.0)
 
 
 def main() -> None:
