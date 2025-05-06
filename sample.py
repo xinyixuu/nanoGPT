@@ -571,7 +571,7 @@ def main():
 
 
     if args.interactive:
-        interactive_generation(model, start_ids, args.device, args.max_new_tokens, args.temperature, args.top_k, args.stop_string, decode, encode)
+        interactive_generation(model, start_ids, args.device, args.max_new_tokens, args.temperature, args.top_k, args.stop_strings, decode, encode)
     else:
         # Run generation
         with torch.no_grad():
