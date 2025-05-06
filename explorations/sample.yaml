@@ -1,4 +1,4 @@
-# sample_config.yaml
+# sample.yaml
 ---
 # parameter_groups: define sets of overrides to apply on top of base params
 parameter_groups:

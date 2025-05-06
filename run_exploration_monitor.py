@@ -12,10 +12,15 @@ Interactive keybindings:
   O     - unhide all rows (clear row filters)
   e     - export current view to CSV
   s     - save current layout
+  p     - shows help menu
+  g     - graphs first two rows
+  L     - graph & connect points sharing the 3rd column value
+  c     - toggle colour-map on first column (green → red)
 
 Use `--hotkeys` to print this help and exit.
 """
 
+import plot_view
 import argparse
 import csv
 import json
@@ -55,6 +60,11 @@ HOTKEYS_TEXT = (
     "O: clear all row filters\n"
     "e: export CSV\n"
     "s: save layout (columns, hidden-cols, filters)\n"
+    "g: graph first two columns (matplotlib)\n"
+    "g: graph first two columns (opens a Plotly window)\n"
+    "p: shows help menu\n"
+    "L: graph & connect points sharing the 3rd column value\n"
+    "c: toggle colour-map on first column (green → red)\n"
 )
 
 
@@ -86,6 +96,7 @@ class MonitorApp(App):
         self.original_entries: List[Dict] = []  # Unfiltered data
         self.current_entries: List[Dict] = []  # View data with filters
         self.row_filters: List[tuple] = []     # (col, op, val) triples
+        self.colour_first: bool = False        # toggled with “c”
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -222,9 +233,38 @@ class MonitorApp(App):
         old = self.table.cursor_coordinate
         ri = old.row if old else 0
         ci = new_cursor if new_cursor is not None else (old.column if old else 0)
+
+        # ── pre-compute colour-map for first column if enabled ─────────────
+        colour_map: List[str | None] = []
+        if self.colour_first and self.current_entries and self.columns:
+            first_col = self.columns[0]
+            numeric_vals = [
+                self.get_cell(e, first_col)
+                for e in self.current_entries
+                if isinstance(self.get_cell(e, first_col), (int, float))
+            ]
+            if numeric_vals:
+                lo, hi = min(numeric_vals), max(numeric_vals)
+                if hi == lo:                      # avoid ÷0
+                    hi += 1e-9
+                rng = hi - lo
+                for e in self.current_entries:
+                    v = self.get_cell(e, first_col)
+                    if isinstance(v, (int, float)):
+                        t = (v - lo) / rng          # 0→green, 1→red
+                        r = int(255 * t)
+                        g = int(255 * (1 - t))
+                        colour_map.append(f"#{r:02x}{g:02x}00")
+                    else:
+                        colour_map.append(None)
+            else:
+                colour_map = [None] * len(self.current_entries)
+        else:
+            colour_map = [None] * len(self.current_entries)
+
         # Rebuild columns and rows
         self.build_table()
-        for entry in self.current_entries:
+        for row_idx, entry in enumerate(self.current_entries):
             row: List[str] = []
             for col in self.columns:
                 val = self.get_cell(entry, col)
@@ -232,10 +272,25 @@ class MonitorApp(App):
                     row.append(f"{val:.6f}")
                 else:
                     row.append(str(val))
+            # apply colour markup to first cell if requested
+            if colour_map[row_idx]:
+                row[0] = f"[{colour_map[row_idx]}]{row[0]}[/]"
             self.table.add_row(*row)
         # Restore cursor
         maxr, maxc = len(self.current_entries) - 1, len(self.columns) - 1
         self.table.cursor_coordinate = (min(max(ri, 0), maxr), min(max(ci, 0), maxc))
+
+    def _msg(self, text: str, timeout: float = 2.0) -> None:
+        """
+        Show a transient 2-second notification at the bottom-right.
+        Works on Textual ≥0.32; falls back to a console bell if unavailable.
+        """
+        try:
+            # Textual's builtin notifier (dismisses automatically)
+            self.notify(text, timeout=timeout)
+        except AttributeError:
+            # Older Textual: just beep so the user at least gets feedback
+            self.bell()
 
     async def on_key(self, event: events.Key) -> None:
         """Handle key presses for table interactions and config saving."""
@@ -262,6 +317,7 @@ class MonitorApp(App):
                             row.append(str(val))
                     w.writerow(row)
             self.bell()
+            self._msg(f"Exported view → {fname}")
         elif key == "s":
             # Save layout to JSON with same base name
             cfg = {
@@ -273,6 +329,7 @@ class MonitorApp(App):
             }
             self.config_file.write_text(json.dumps(cfg, indent=2))
             self.bell()
+            self._msg("Layout saved")
         elif key == "enter":
             # Toggle sort
             if self.sort_column == c:
@@ -280,6 +337,13 @@ class MonitorApp(App):
             else:
                 self.sort_column, self.sort_reverse = c, False
             self.refresh_table(new_cursor=c)
+
+            # User message
+            col_name = self.columns[c]
+            if self.sort_column is None:
+                self._msg("Sorting cleared")
+            else:
+                self._msg(f"Sorted by “{col_name}”")
         elif key in ("h", "l"):
             # Move column
             t = c - 1 if key == "h" else c + 1
@@ -329,6 +393,36 @@ class MonitorApp(App):
             # Reset row filters
             self.current_entries, self.row_filters = list(self.original_entries), []
             self.refresh_table(new_cursor=0)
+        elif key == "p":
+            self._msg(HOTKEYS_TEXT, timeout=10.0)
+        elif key == "g":
+            # ── Graph using first two visible columns: col[0] ⇒ Y, col[1] ⇒ X ──
+            try:
+                if len(self.columns) < 2:
+                    raise ValueError("Need at least two visible columns to graph")
+                y_col, x_col = self.columns[0], self.columns[1]
+                plot_view.plot_rows(self.current_entries, x=x_col, y=y_col)
+                self._msg(f"Plotted {y_col} vs {x_col}", timeout=3)
+            except Exception as exc:
+                self._msg(f"Graph error: {exc}", timeout=4)
+        elif key == "L":
+            try:
+                if len(self.columns) < 3:
+                    raise ValueError("Need at least three visible columns for 'L'")
+                y_col, x_col, grp_col = self.columns[0], self.columns[1], self.columns[2]
+                plot_view.plot_rows(
+                    self.current_entries, x=x_col, y=y_col, connect_by=grp_col
+                )
+                self._msg(f"Plotted {y_col} vs {x_col} grouped by {grp_col}", timeout=3)
+            except Exception as exc:
+                self._msg(f"Graph error: {exc}", timeout=4)
+        elif key == "c":
+            self.colour_first = not self.colour_first
+            state = "enabled" if self.colour_first else "disabled"
+            self.refresh_table()
+            self._msg(f"First-column colour-map {state}")
+
+
 
 
 def main() -> None:
