@@ -85,6 +85,7 @@ class MonitorApp(App):
         self.table: Optional[DataTable] = None
         self.original_entries: List[Dict] = []  # Unfiltered data
         self.current_entries: List[Dict] = []  # View data with filters
+        self.row_filters: List[tuple] = []     # (col, op, val) triples
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -115,23 +116,22 @@ class MonitorApp(App):
             self.columns = [c for c in self.all_columns if c not in self.hidden_cols]
             self.sort_column = cfg.get("sort_column")
             self.sort_reverse = cfg.get("sort_reverse", False)
-            # Apply saved row filters
+            # Restore saved row filters
+            self.row_filters = cfg.get("row_filters", [])
             self.current_entries = list(self.original_entries)
-            for col, op, val in cfg.get("row_filters", []):
+            for col, op, val in self.row_filters:
                 if op == "hide":
                     self.current_entries = [
-                        e
-                        for e in self.current_entries
-                        if str(self.get_cell(e, col)) != val
+                        e for e in self.current_entries if str(self.get_cell(e, col)) != val
                     ]
                 elif op == "keep":
                     self.current_entries = [
-                        e
-                        for e in self.current_entries
-                        if str(self.get_cell(e, col)) == val
+                        e for e in self.current_entries if str(self.get_cell(e, col)) == val
                     ]
         # Build table and start refresh loop
         self.build_table()
+        # Periodically invoke `refresh_table`; the DataTable mutations themselves
+        # trigger a screen repaint, so no extra flag is needed.
         self.set_interval(self.interval, self.refresh_table)
         self.refresh_table()
 
@@ -202,9 +202,19 @@ class MonitorApp(App):
         """Reload data, apply sorting, and repopulate the DataTable."""
         if not self.table:
             return
-        # Reload data if no sort and no filters
-        if self.sort_column is None and self.current_entries == self.original_entries:
-            self.current_entries = list(self.original_entries)
+        # Always reload the YAML log file so new runs appear
+        new_original = load_runs(self.log_file)
+        if new_original != self.original_entries:
+            self.original_entries = new_original
+
+        # Re-apply any active row filters
+        base_entries = list(self.original_entries)
+        for col, op, val in self.row_filters:
+            if op == "hide":
+                base_entries = [e for e in base_entries if str(self.get_cell(e, col)) != val]
+            elif op == "keep":
+                base_entries = [e for e in base_entries if str(self.get_cell(e, col)) == val]
+        self.current_entries = base_entries
         # Apply sort
         if self.sort_column is not None:
             self.apply_bubble_sort()
@@ -304,7 +314,7 @@ class MonitorApp(App):
             self.current_entries = [
                 e for e in self.current_entries if str(self.get_cell(e, col)) != val
             ]
-            self.row_filters = getattr(self, "row_filters", []) + [(col, "hide", val)]
+            self.row_filters = self.row_filters + [(col, "hide", val)]
             self.refresh_table(new_cursor=r)
         elif key == "i":
             # Inverse filter (keep only matching)
@@ -313,7 +323,7 @@ class MonitorApp(App):
             self.current_entries = [
                 e for e in self.current_entries if str(self.get_cell(e, col)) == val
             ]
-            self.row_filters = getattr(self, "row_filters", []) + [(col, "keep", val)]
+            self.row_filters = self.row_filters + [(col, "keep", val)]
             self.refresh_table(new_cursor=0)
         elif key == "O":
             # Reset row filters
