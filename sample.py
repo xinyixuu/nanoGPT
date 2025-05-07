@@ -721,7 +721,7 @@ def main():
         print(f"Obtained vector saved to {args.save_avg_vector}")
 
     if args.interactive:
-        interactive_generation(model, start_ids, args.device, args.max_new_tokens, args.temperature, args.top_k, args.stop_string, decode, encode)
+        interactive_generation(model, start_ids, args.device, args.max_new_tokens, args.temperature, args.top_k, args.stop_strings, decode, encode)
     else:
         sample_with_existing_model(
                 model,
