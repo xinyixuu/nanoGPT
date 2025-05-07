@@ -40,7 +40,7 @@ def parse_args():
     parser.add_argument("--num_samples", type=int, default=3, help="Number of inference streams to draw")
     parser.add_argument("--max_new_tokens", type=int, default=500, help="Number of tokens to generate in each sample")
     parser.add_argument("--temperature", type=float, default=0.8, help="Temperature for predictions (1.0 = no change, < 1.0 = less random, > 1.0 = more random)")
-    parser.add_argument("--top_k", type=int, nargs='+', default=[1,200], help="Retain only the top_k most likely tokens")
+    parser.add_argument("--top_k", type=int, nargs='+', default=[1, 200], help="Retain only the top_k most likely tokens")
     parser.add_argument("--seed", type=int, default=1337, help="Seed for pseudorandom number generator")
     parser.add_argument("--dtype", type=str, default="bfloat16", choices=["bfloat16", "float16", "float32"], help="Torch data type for inference")
     parser.add_argument('--compile', action=argparse.BooleanOptionalAction, help="Compile the model (requires PyTorch 2.0)")
@@ -253,13 +253,14 @@ def sample_with_existing_model(
     model: torch.nn.Module,
     start_ids: torch.Tensor,
     decode: Callable[[Sequence[int]], str],
-    *,
     device: str = "cuda",
     max_new_tokens: int = 200,
     temperature: float = 0.8,
     top_k: Union[int, Sequence[int], None] = 200,  # list allowed
     start_tokens: Optional[Sequence[int]] = None,
     num_samples: int = 1,
+    # Additional Args
+    args=None,
     # ── visual / logging flags ────────────────────────────────────────────
     colorize_output: bool = False,
     colorize_mode: str = "minmax",         # "rank" & "all" supported
@@ -279,8 +280,8 @@ def sample_with_existing_model(
     Parameters
     ----------
     top_k : int | list[int] | None
-        • int   – sample from top-k.  
-        • None  – no truncation.  
+        • int   – sample from top-k.
+        • None  – no truncation.
         • list  – run once per k in the list (duplicates filtered).
     colorize_mode :
         "minmax" | "softmax" | "softmax_top_k" | **"rank"** | "all"
@@ -299,9 +300,27 @@ def sample_with_existing_model(
     modes_to_apply = valid_modes if colorize_mode == "all" else [colorize_mode]
 
     for current_k in k_values:
-        k_tag = "no_topk" if current_k is None else f"topk{current_k}"
+        k_tag = "no_topk" if current_k is None else f"{current_k}"
 
-        for _ in range(num_samples):
+        for sample_idx in range(num_samples):
+            # ------------- LSV per-sample section -------------------
+            if args is not None:
+                if args.use_lsv:
+                    model.set_lsv_index(sample_idx % args.lsv_size)
+                    print("vector", sample_ikdx % args.lsv_size)
+                    if args.lsv_scaling_factor is not None:
+                        model.set_lsv_scaling_factor(args.lsv_scaling_factor)
+                    if args.lsv_mixture is not None:
+                        model.set_lsv_mode(2)
+                        model.set_lsv_mixture(args.lsv_mixture)
+                    else:
+                        model.set_lsv_mode(1)
+
+                    print(f"[green]LSV[/green]  idx={sample_idx % args.lsv_size} "
+                          f"scale={args.lsv_scaling_factor} "
+                          f"mixture={args.lsv_mixture}")
+            # ------------- END LSV per-sample section -------------------
+
             x = start_ids.clone()
 
             # storage for colouring
@@ -391,7 +410,9 @@ def sample_with_existing_model(
                             tokens_for_color, ranks_list, decode, current_k
                         )
 
-                    console.print(f"\n[bold orange]--- {k_tag} ({cm}) ---[/bold orange]")
+                    fgcolor="bold light_slate_blue"
+                    bgcolor="bold cyan"
+                    console.print(f"\n\n[{bgcolor}]--- tokens=[/{bgcolor}][{fgcolor}]{max_new_tokens}[/{fgcolor}][{bgcolor}], top_k=[/{bgcolor}][{fgcolor}]{k_tag}[/{fgcolor}][{bgcolor}], colorization=[/{bgcolor}][{fgcolor}]{cm}[/{fgcolor}][{bgcolor}] ---[/{bgcolor}]\n")
                     console.print(coloured)
 
                     if sample_file:
@@ -687,12 +708,6 @@ def main():
         print(f"Validation Loss: {val_loss:.4f}")
         return
 
-    # Prepare to store tokens/logits for optional colorization
-    tokens_for_color = []
-    logits_for_color = []
-    all_logits_for_softmax = []
-    saved_logits = None
-
     x = torch.tensor(start_ids, dtype=torch.long, device=args.device)[None, ...]
     # Obtain vector from the specified layer and save it to a file if required
     if args.save_avg_vector:
@@ -705,83 +720,28 @@ def main():
                 logits, _ = model(idx_cond)
         print(f"Obtained vector saved to {args.save_avg_vector}")
 
-
-
     if args.interactive:
         interactive_generation(model, start_ids, args.device, args.max_new_tokens, args.temperature, args.top_k, args.stop_string, decode, encode)
     else:
-        # Run generation
-        with torch.no_grad():
-            with ctx:
-                for k in range(args.num_samples):
-                    if args.use_lsv:
-                        model.set_lsv_index(k % args.lsv_size)
-                        print("vector", k % args.lsv_size)
-                        if args.lsv_scaling_factor is not None:
-                            model.set_lsv_scaling_factor(args.lsv_scaling_factor)
-                        if args.lsv_mixture is not None:
-                            model.set_lsv_mode(2)
-                            model.set_lsv_mixture(args.lsv_mixture)
-                        else:
-                            model.set_lsv_mode(1)
-                    if args.colorize_output:
-                        tokens_for_color.clear(); logits_for_color.clear(); all_logits_for_softmax.clear()
-                    x = torch.tensor(start_ids, dtype=torch.long, device=args.device)[None, ...]
-                    block_size = args.block_size if args.block_size else model.config.block_size
-                    for step in range(args.max_new_tokens):
-                        idx_cond = x if x.size(1) <= block_size else x[:, -block_size:]
-                        logits, _ = model(idx_cond)
-                        logits = logits[:, -1, :] / args.temperature
-                        if args.colorize_mode == 'softmax':
-                            saved_logits = logits.clone()
-                        if args.top_k is not None:
-                            v, _ = torch.topk(logits, min(args.top_k, logits.size(-1)))
-                            logits[logits < v[:, [-1]]] = -float('Inf')
-                        probs = F.softmax(logits, dim=-1)
-                        idx_next = torch.multinomial(probs, num_samples=1)
-                        x = torch.cat((x, idx_next), dim=1)
-
-                        if args.show_heatmaps:
-                            selected_token = decode([idx_next[0].item()])
-                            save_chart(probs, x, decode, step, out_dir, args.last_k_tokens, args.chart_type, selected_token)
-
-                        # Collect data for colorization:
-                        if args.colorize_output:
-                            if args.colorize_mode == 'softmax':
-                                # softmax over entire vocab
-                                tokens_for_color.append(idx_next.item())
-                                logits_for_color.append(saved_logits[0].clone())
-                            elif args.colorize_mode == 'softmax_top_k':
-                                # softmax over only top k vocab
-                                tokens_for_color.append(idx_next.item())
-                                logits_for_color.append(logits[0].clone())
-                            elif args.colorize_mode == 'minmax':
-                                # We'll do min-max normalization over chosen-token logits
-                                tokens_for_color.append(idx_next.item())
-                                logits_for_color.append(logits[0, idx_next.item()])
-
-                    output_line = decode(x[0].tolist()).replace(separator_token, " ") if separator_token else decode(x[0].tolist())
-                    if args.apply_vector_file1:
-                        print(f"Scaling factor: {args.steering_vector_scaling_factor}")
-                    print('[bold blue]---------------')
-                    print(f"[bold orange] Sample [bold orange]{k+1}")
-                    print('[bold blue]---------------')
-                    # Perform colorized printing if requested
-                    if args.colorize_output:
-                        console = Console()
-                        colored_text = colorize_text(
-                            tokens_for_color,
-                            logits_for_color,   # <--- do NOT wrap in torch.tensor(...)
-                            decode,
-                            colorize_mode=args.colorize_mode
-                        )
-                        console.print(colored_text)
-                    else:
-                        print("[bold green]" + output_line)
-
-                    if args.sample_file:
-                        append_to_sample_file(args.sample_file, output_line, args.start_token, iter_num=None)
-
+        sample_with_existing_model(
+                model,
+                torch.tensor(start_ids, dtype=torch.long, device=args.device)[None, ...],
+                decode,
+                device=args.device,
+                max_new_tokens=args.max_new_tokens,
+                temperature=args.temperature,
+                top_k=args.top_k,
+                num_samples=args.num_samples,
+                colorize_output=args.colorize_output,
+                colorize_mode=args.colorize_mode,
+                token_boundary=args.token_boundary,
+                show_heatmaps=args.show_heatmaps,
+                chart_type=args.chart_type,
+                last_k_tokens=args.last_k_tokens,
+                out_dir=out_dir,
+                sample_file=args.sample_file,
+                args=args,
+                )
 
 if __name__ == "__main__":
     main()
