@@ -648,7 +648,7 @@ def parse_args():
 
     # Logging args
     logging_group.add_argument('--log_project', default='out-test', type=str)
-    logging_group.add_argument('--log_run_name', default='logs-test', type=str)
+    logging_group.add_argument('--log_run_name', default=None, type=str)
     logging_group.add_argument('--timestamp', default='', type=str)
 
     # Module And Parameter Logging and Plots of Summary Statistics
@@ -666,7 +666,7 @@ def parse_args():
     # Tensorboard args
     logging_group.add_argument('--tensorboard_log', default=True, action=argparse.BooleanOptionalAction)
     logging_group.add_argument('--tensorboard_log_dir', type=str, default='logs')
-    logging_group.add_argument('--tensorboard_run_name', type=str, default='logs-test')
+    logging_group.add_argument('--tensorboard_run_name', type=str, default=None)
     logging_group.add_argument('--tensorboard_graph', default=True, action=argparse.BooleanOptionalAction)
 
     ## Export Model graph
