@@ -937,7 +937,7 @@ class Trainer:
             csv_full_dir = f"{self.args.csv_dir}/{self.args.csv_ckpt_dir}"
         else:
             if self.args.tensorboard_log:
-                csv_full_dir = f"{self.args.csv_dir}/{self.args.tensorboard_run_name.split('-')[0]}-{self.args.dataset}"
+                csv_full_dir = f"{self.args.csv_dir}/{self.args.tensorboard_run_name}-{self.args.dataset}"
         os.makedirs(csv_full_dir, exist_ok=True)
         csv_path = os.path.join(csv_full_dir, prefix + self.args.csv_name + ".csv")
         with open(csv_path, 'a', newline='') as file:
