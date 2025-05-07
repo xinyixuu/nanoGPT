@@ -307,7 +307,7 @@ def sample_with_existing_model(
             if args is not None:
                 if args.use_lsv:
                     model.set_lsv_index(sample_idx % args.lsv_size)
-                    print("vector", sample_ikdx % args.lsv_size)
+                    print("vector", sample_idx % args.lsv_size)
                     if args.lsv_scaling_factor is not None:
                         model.set_lsv_scaling_factor(args.lsv_scaling_factor)
                     if args.lsv_mixture is not None:
