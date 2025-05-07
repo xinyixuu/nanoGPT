@@ -344,6 +344,7 @@ def parse_args():
 
     ## Flash Lobo
     model_group.add_argument("--use_flash_lobo",   type=bool, default=False, action=argparse.BooleanOptionalAction)
+    model_group.add_argument("--use_flash_lobo_per_head",   type=bool, default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument("--use_flash_obo_const",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="if set, will make the flash lobo _not_ a learned value")
     model_group.add_argument("--flash_lobo_log_const",   type=float, default=0.0, help="initialized value for the lobo log constant")
 

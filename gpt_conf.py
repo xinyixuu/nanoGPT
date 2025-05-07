@@ -46,6 +46,7 @@ class GPTConfig:
 
     ## Flash Lobo
     use_flash_lobo: bool = False
+    use_flash_lobo_per_head: bool = False
     use_flash_obo_const: bool = False
     flash_lobo_log_const: float = 0.0
 
