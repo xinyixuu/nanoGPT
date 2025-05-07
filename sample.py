@@ -153,7 +153,6 @@ def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
                    the *full* distribution at each step. We extract the chosen
                    token's probability for each step, then min-max normalize.
     """
-    from rich.text import Text
     text = Text()
 
     norm_values = None
@@ -216,41 +215,38 @@ def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, sel
     plt.savefig(out_path)
     plt.close()
 
-
 def _colorize_rank(
     token_ids: List[int],
     ranks: List[int],
     decode: Callable[[Sequence[int]], str],
     k: Optional[int],
-) -> str:
+) -> Text:
     """
-    Colour tokens by rank.
-    • rank == 1  → white
-    • rank  2..k → green → yellow → red gradient
-    Anything outside the 1‥k range (shouldn't occur when sampling with top-k)
-    is printed with no colour.
-    """
-    coloured: List[str] = []
+    Return a Rich Text object whose colours encode rank:
 
-    # fallback: if k is None or < 2 we can't build a gradient
-    max_rank = max(k or 0, 2)
+    • rank == 1  → no colour (default terminal fg)
+    • rank  2..k → gradient green -> yellow -> red
+    • rank > k   → no colour
+    """
+    text = Text()
+    max_rank = max(k or 0, 2)      # guarantees divisor ≥ 1
 
     for tid, rnk in zip(token_ids, ranks):
-        text = decode([tid])
+        token_str = decode([tid])
 
         if rnk == 1:
-            coloured.append(f"{text}")
+            # best-rank token: leave unstyled
+            text.append(token_str)
         elif 2 <= rnk <= max_rank:
-            # ratio 0 → green, 1 → red
             ratio = (rnk - 2) / (max_rank - 2) if max_rank > 2 else 1.0
-            red   = int(255 * ratio)
-            green = int(255 * (1 - ratio))
-            colour_hex = f"#{red:02x}{green:02x}00"
-            coloured.append(f"[{colour_hex}]{text}[/{colour_hex}]")
+            r = int(255 * ratio)          # 0 → green, 1 → red
+            g = int(255 * (1 - ratio))
+            # style string identical to your colorize_text template
+            text.append(token_str, style=f"bold #{r:02x}{g:02x}00")
         else:
-            coloured.append(text)  # out-of-range ranks
+            text.append(token_str)        # ranks outside 1..k
 
-    return "".join(coloured)
+    return text
 
 
 def sample_with_existing_model(
