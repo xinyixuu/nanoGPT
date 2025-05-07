@@ -109,9 +109,15 @@ class CausalSelfAttention(nn.Module):
 
         # Flash Lobo
         self.use_flash_lobo = config.use_flash_lobo
+        self.use_flash_lobo_per_head = config.use_flash_lobo_per_head
         if self.use_flash_lobo:
             if config.use_flash_obo_const:
                 self.flash_lobo_log_const = config.flash_lobo_log_const # log C (0 -> C = 1)
+            elif config.use_flash_lobo_per_head:
+                # learnable parameter, one scalar per head
+                self.flash_lobo_log_const = nn.Parameter(
+                    torch.full( (self.n_head,), config.flash_lobo_log_const)
+                )
             else:
                 self.flash_lobo_log_const = nn.Parameter(torch.tensor(config.flash_lobo_log_const))  # log C  (0 → C = 1)
 
@@ -295,7 +301,11 @@ class CausalSelfAttention(nn.Module):
 
                 # 2-b  Bias only that column with log C
                 attn_bias = q.new_zeros(1, self.n_head, 1, k.size(2))
-                attn_bias[..., 0] = self.flash_lobo_log_const    # first column only
+                if self.use_flash_lobo_per_head:
+                    attn_bias[..., 0] = self.flash_lobo_log_const.view(1, self.n_head, 1)
+                else:
+                    attn_bias[..., 0] = self.flash_lobo_log_const    # first column only
+
 
             # Efficient attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(

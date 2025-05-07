@@ -126,7 +126,7 @@ def parse_args():
     training_group.add_argument('--interactive', default=False, action=argparse.BooleanOptionalAction, help="Enable interactive generation at the end of training (similar to sample.py --interactive).")
     training_group.add_argument('--stop_string', type=str, default='~W', help="String to stop generation and allow user input (used when --interactive).")
     training_group.add_argument('--colorize_output', default=True, action=argparse.BooleanOptionalAction, help="Colorize tokens based on predicted probabilities.")
-    training_group.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k'], help="Colorization mode for tokens (see sample.py).")
+    training_group.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k', 'rank', 'all'], help="Colorization mode for tokens (see sample.py).")
     training_group.add_argument('--show_heatmaps', default=False, action=argparse.BooleanOptionalAction, help="Show heatmaps (or bar charts) of top-k token probabilities.")
     training_group.add_argument('--chart_type', type=str, default='heatmap', choices=['heatmap', 'barchart'], help="Type of chart to display if --show_heatmaps is set.")
     training_group.add_argument('--last_k_tokens', type=int, default=10, help="Number of last tokens to display in heatmaps or bar charts.")
@@ -134,7 +134,7 @@ def parse_args():
     training_group.add_argument('--token_boundary', type=str, default=None, help="Optional separator string between emitted tokens (for decode).")
     training_group.add_argument('--num_samples', type=int, default=1, help="Number of generated samples during sampling.")
     training_group.add_argument('--temperature', type=float, default=0.8, help="Temperature for predictions (1.0 = normal, < 1.0 = less random).")
-    training_group.add_argument('--top_k', type=int, default=200, help="Retain only the top_k most likely tokens (used in sample.py).")
+    training_group.add_argument('--top_k', type=int, nargs='+', default=[2,200], help="Retain only the top_k most likely tokens (used in sample.py).")
     training_group.add_argument('--eval_dataset', type=str, default=None, help="Optional dataset name for custom evaluation splits.")
     training_group.add_argument('--quantization_data_file', type=str, default=None, help="If set, export quantized weights/activations to a specified file (pkl).")
 
@@ -344,6 +344,7 @@ def parse_args():
 
     ## Flash Lobo
     model_group.add_argument("--use_flash_lobo",   type=bool, default=False, action=argparse.BooleanOptionalAction)
+    model_group.add_argument("--use_flash_lobo_per_head",   type=bool, default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument("--use_flash_obo_const",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="if set, will make the flash lobo _not_ a learned value")
     model_group.add_argument("--flash_lobo_log_const",   type=float, default=0.0, help="initialized value for the lobo log constant")
 
@@ -648,7 +649,7 @@ def parse_args():
 
     # Logging args
     logging_group.add_argument('--log_project', default='out-test', type=str)
-    logging_group.add_argument('--log_run_name', default='logs-test', type=str)
+    logging_group.add_argument('--log_run_name', default=None, type=str)
     logging_group.add_argument('--timestamp', default='', type=str)
 
     # Module And Parameter Logging and Plots of Summary Statistics
@@ -666,7 +667,7 @@ def parse_args():
     # Tensorboard args
     logging_group.add_argument('--tensorboard_log', default=True, action=argparse.BooleanOptionalAction)
     logging_group.add_argument('--tensorboard_log_dir', type=str, default='logs')
-    logging_group.add_argument('--tensorboard_run_name', type=str, default='logs-test')
+    logging_group.add_argument('--tensorboard_run_name', type=str, default=None)
     logging_group.add_argument('--tensorboard_graph', default=True, action=argparse.BooleanOptionalAction)
 
     ## Export Model graph

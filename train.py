@@ -306,13 +306,13 @@ class Trainer:
 
         # Tensorboard
         if self.args.tensorboard_log:
-            if self.ddp:
-                timestamped_run_name = f"{self.model.module.num_param:.2e}_{timestamp_prefix}_{self.args.tensorboard_run_name}"
+            if self.args.tensorboard_run_name is None:
+                run_name = f"{timestamp_prefix}"
             else:
-                timestamped_run_name = f"{self.model.num_param:.2e}_{timestamp_prefix}_{self.args.tensorboard_run_name}"
+                run_name = self.args.tensorboard_run_name
             if self.args.csv_log:
-                self.args.csv_name = timestamped_run_name
-            log_subpath = os.path.join(self.args.tensorboard_log_dir, timestamped_run_name)
+                self.args.csv_name = run_name
+            log_subpath = os.path.join(self.args.tensorboard_log_dir, run_name)
             self.writer = SummaryWriter(log_subpath)
 
         # Wandb
@@ -436,8 +436,10 @@ class Trainer:
                     token_boundary=(self.args.token_boundary or None),
                     show_heatmaps=self.args.show_heatmaps,
                     sample_file=self.args.sample_file,
+                    num_samples=self.args.num_samples,
                     iter_num=self.iter_num,
-                    num_samples=self.args.num_samples
+                    best_val_loss=self.best_val_loss,
+                    run_name=self.args.tensorboard_run_name,
                 )
 
         self.model.train()
@@ -935,7 +937,7 @@ class Trainer:
             csv_full_dir = f"{self.args.csv_dir}/{self.args.csv_ckpt_dir}"
         else:
             if self.args.tensorboard_log:
-                csv_full_dir = f"{self.args.csv_dir}/{self.args.tensorboard_run_name.split('-')[0]}-{self.args.dataset}"
+                csv_full_dir = f"{self.args.csv_dir}/{self.args.tensorboard_run_name}-{self.args.dataset}"
         os.makedirs(csv_full_dir, exist_ok=True)
         csv_path = os.path.join(csv_full_dir, prefix + self.args.csv_name + ".csv")
         with open(csv_path, 'a', newline='') as file:
@@ -1094,7 +1096,7 @@ class Trainer:
                         if self.args.sample_each_eval:
                             # Try model inference (e.g. exploring inference from overfitting)
                             if self.args.max_sample_tokens:
-                                self.sample_and_print(self.args.max_sample_tokens, start_tokens=self.args.sample_start_tokens)
+                                self.sample_and_print()
                         if self.args.export_wte_each_eval:
                             # export wte table to npy file
                             if self.args.export_wte_npy:

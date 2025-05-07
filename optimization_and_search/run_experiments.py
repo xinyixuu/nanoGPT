@@ -210,6 +210,9 @@ def run_experiment(
     out_dir_name = f"{timestamp}_{run_name}" if timestamp else run_name
     combo['out_dir'] = os.path.join(args.output_dir, out_dir_name)
 
+    # Prepare tensorboard run name
+    combo['tensorboard_run_name'] = run_name
+
     # Show parameters
     console = Console()
     table = Table("Parameters", show_header=False)
