@@ -126,7 +126,7 @@ def parse_args():
     training_group.add_argument('--interactive', default=False, action=argparse.BooleanOptionalAction, help="Enable interactive generation at the end of training (similar to sample.py --interactive).")
     training_group.add_argument('--stop_string', type=str, default='~W', help="String to stop generation and allow user input (used when --interactive).")
     training_group.add_argument('--colorize_output', default=True, action=argparse.BooleanOptionalAction, help="Colorize tokens based on predicted probabilities.")
-    training_group.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k'], help="Colorization mode for tokens (see sample.py).")
+    training_group.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k', 'all'], help="Colorization mode for tokens (see sample.py).")
     training_group.add_argument('--show_heatmaps', default=False, action=argparse.BooleanOptionalAction, help="Show heatmaps (or bar charts) of top-k token probabilities.")
     training_group.add_argument('--chart_type', type=str, default='heatmap', choices=['heatmap', 'barchart'], help="Type of chart to display if --show_heatmaps is set.")
     training_group.add_argument('--last_k_tokens', type=int, default=10, help="Number of last tokens to display in heatmaps or bar charts.")

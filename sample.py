@@ -7,6 +7,9 @@ import time
 from contextlib import nullcontext
 from datetime import datetime
 
+from pathlib import Path
+from typing import Callable, List, Optional
+
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -52,7 +55,7 @@ def parse_args():
     parser.add_argument('--print_model_info', default=True, action=argparse.BooleanOptionalAction, help="print info about model before infernece")
 
     # Output Confidence
-    parser.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k'],
+    parser.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k', 'all'],
                         help="Mode to colorize text: 'minmax' (default), 'softmax', or 'softmax_top_k' for softmax only over the top k vals. "
                         "Requires --colorize_output (enabled by default).")
     parser.add_argument('--colorize_output', default=False, action=argparse.BooleanOptionalAction,
@@ -214,86 +217,159 @@ def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, sel
 
 
 def sample_with_existing_model(
-    model,
-    start_ids,
-    decode,
-    device="cuda",
-    max_new_tokens=200,
-    temperature=0.8,
-    top_k=200,
-    start_tokens=None,
-    colorize_output=False,
-    colorize_mode='minmax',
-    token_boundary=None,
-    show_heatmaps=False,
-    chart_type='heatmap',
-    last_k_tokens=10,
-    out_dir="out",
-    sample_file=None,
-    num_samples=1,
-    iter_num=None,
-    best_val_loss=None,
-    run_name=None,
+    model: torch.nn.Module,
+    start_ids: torch.Tensor,
+    decode: Callable[[List[int]], str],
+    device: str = "cuda",
+    max_new_tokens: int = 200,
+    temperature: float = 0.8,
+    top_k: Optional[int] = 200,
+    start_tokens: Optional[List[int]] = None,
+    colorize_output: bool = False,
+    colorize_mode: str = "minmax",  # "all" → emit every mode
+    token_boundary: Optional[str] = None,
+    show_heatmaps: bool = False,
+    chart_type: str = "heatmap",
+    last_k_tokens: int = 10,
+    out_dir: str | Path = "out",
+    sample_file: Optional[str] = None,
+    num_samples: int = 1,
+    iter_num: Optional[int] = None,
+    best_val_loss: Optional[float] = None,
+    run_name: Optional[str] = None,
 ):
     """
-    A helper function to generate text from an *already-loaded* GPT model,
-    reusing the same checkpoint and device from train.py, or any other script.
-    """
-    from rich.console import Console
-    from torch.nn import functional as F
+    Generate text from an *already-loaded* GPT model and optionally colourise
+    logits for inspection.
 
+    Parameters
+    ----------
+    colorize_mode :
+        • ``"minmax"`` – colour using the min-max-scaled *selected-token* logit  
+        • ``"softmax"`` – colour using soft-max over the *full* vocabulary  
+        • ``"softmax_top_k"`` – colour using soft-max over the *top-k mask*  
+        • ``"all"`` – print / append each of the three modes above
+    Notes
+    -----
+    * ``softmax`` mode **ignores** any top-k filtering; it visualises the full
+      distribution even when sampling was restricted to top-k.
+    * ``softmax_top_k`` always reflects the *post-mask* distribution.
+    * Plain (un-colourised) text is appended exactly once no matter what.
+    """
     console = Console()
     model.eval()
 
+    valid_modes: List[str] = ["minmax", "softmax", "softmax_top_k"]
+    modes_to_apply = valid_modes if colorize_mode == "all" else [colorize_mode]
+
     for _ in range(num_samples):
         x = start_ids.clone()
-        tokens_for_color = []
-        logits_for_color = []
+
+        tokens_for_color: List[int] = []
+        logits_rows_full: List[torch.Tensor] = []   # full vocab row each step
+        logits_rows_topk: List[torch.Tensor] = []   # post-mask row each step
+        logits_scalars: List[torch.Tensor] = []     # chosen-token scalar each step
 
         with torch.no_grad():
             for step in range(max_new_tokens):
-                idx_cond = x if x.size(1) <= model.config.block_size else x[:, -model.config.block_size:]
-                logits, _ = model(idx_cond)
-                logits = logits[:, -1, :] / temperature
+                idx_cond = (
+                    x
+                    if x.size(1) <= model.config.block_size
+                    else x[:, -model.config.block_size :]
+                )
+
+                logits, _ = model(idx_cond)             # (B, T, V)
+                logits = logits[:, -1, :] / temperature # (B, V)
+                logits_full_row = logits[0].clone()     # BEFORE any masking
+
+                # ------------------------------------------------------------
+                # Apply top-k mask for sampling, *but keep both versions*
+                # ------------------------------------------------------------
                 if top_k is not None:
                     v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                    logits[logits < v[:, [-1]]] = -float('Inf')
-                probs = F.softmax(logits, dim=-1)
-                idx_next = torch.multinomial(probs, num_samples=1)
+                    logits[logits < v[:, [-1]]] = -float("inf")
+
+                logits_topk_row = logits[0].clone()     # AFTER masking
+                probs = F.softmax(logits, dim=-1)       # distribution used for draw
+
+                idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
                 x = torch.cat((x, idx_next), dim=1)
 
                 if colorize_output:
-                    if colorize_mode in ('softmax', 'softmax_top_k'):
-                        # store the entire logits row or top-k row for colorization
-                        logits_for_color.append(logits[0].clone())
-                    else:
-                        # store only chosen-token logit
-                        logits_for_color.append(logits[0, idx_next.item()])
-                    tokens_for_color.append(idx_next.item())
+                    chosen_id = idx_next.item()
 
+                    logits_rows_full.append(logits_full_row)
+                    logits_rows_topk.append(logits_topk_row)
+                    logits_scalars.append(logits_full_row[chosen_id])
+                    tokens_for_color.append(chosen_id)
+
+                # optional visual chart
                 if show_heatmaps:
-                    # Demonstration of saving a chart for each step if needed:
-                    selected_token = decode([idx_next[0].item()])
-                    save_chart(probs, x, decode, step, out_dir, last_k_tokens, chart_type, selected_token)
+                    selected_text = decode([idx_next[0].item()])
+                    save_chart(        # type: ignore  (assumed helper exists)
+                        probs,
+                        x,
+                        decode,
+                        step,
+                        out_dir,
+                        last_k_tokens,
+                        chart_type,
+                        selected_text,
+                    )
 
-        # Now decode
+        # ---------------------------------------------------------------------
+        # Decode entire generated sequence
+        # ---------------------------------------------------------------------
         output_text = decode(x[0].tolist())
-        if token_boundary:
-            # Optionally replace boundary tokens
+        if token_boundary is not None:
             output_text = output_text.replace(token_boundary, " ")
 
-        colored_text = ""
+        # ---------------------------------------------------------------------
+        # Colourised visualisations
+        # ---------------------------------------------------------------------
         if colorize_output:
-            colored_text = colorize_text(tokens_for_color, logits_for_color, decode, colorize_mode=colorize_mode)
-            console.print("[bold orange]--- Sample Below ---[/bold orange]")
-            console.print(colored_text)
+            for cm in modes_to_apply:
+                if cm == "minmax":
+                    logits_for_color = logits_scalars
+                elif cm == "softmax":
+                    logits_for_color = logits_rows_full
+                else:  # "softmax_top_k"
+                    logits_for_color = logits_rows_topk
+
+                coloured_text = colorize_text(   # type: ignore (helper exists)
+                    tokens_for_color,
+                    logits_for_color,
+                    decode,
+                    colorize_mode=cm,
+                )
+
+                console.print(f"[bold orange]--- Sample ({cm}) ---[/bold orange]")
+                console.print(coloured_text)
+
+                if sample_file:
+                    append_to_sample_file(       # type: ignore (helper exists)
+                        sample_file,
+                        coloured_text,
+                        start_tokens,
+                        iter_num,
+                        best_val_loss,
+                        f"{run_name}_{cm}" if run_name else cm,
+                    )
         else:
             console.print("[bold green]" + output_text + "[/bold green]")
 
+        # ---------------------------------------------------------------------
+        # Always append plain (non-colourised) text once
+        # ---------------------------------------------------------------------
         if sample_file:
-            append_to_sample_file(sample_file, output_text, start_tokens, iter_num, best_val_loss, run_name)
-        if colorize_output:
-            append_to_sample_file(sample_file, colored_text, start_tokens, iter_num, best_val_loss, run_name)
+            append_to_sample_file(               # type: ignore (helper exists)
+                sample_file,
+                output_text,
+                start_tokens,
+                iter_num,
+                best_val_loss,
+                run_name,
+            )
 
 
 
