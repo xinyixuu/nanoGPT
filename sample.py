@@ -7,8 +7,9 @@ import time
 from contextlib import nullcontext
 from datetime import datetime
 
+# from __future__ import annotations
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Sequence, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -39,7 +40,7 @@ def parse_args():
     parser.add_argument("--num_samples", type=int, default=3, help="Number of inference streams to draw")
     parser.add_argument("--max_new_tokens", type=int, default=500, help="Number of tokens to generate in each sample")
     parser.add_argument("--temperature", type=float, default=0.8, help="Temperature for predictions (1.0 = no change, < 1.0 = less random, > 1.0 = more random)")
-    parser.add_argument("--top_k", type=int, default=200, help="Retain only the top_k most likely tokens")
+    parser.add_argument("--top_k", type=int, nargs='+', default=[1,200], help="Retain only the top_k most likely tokens")
     parser.add_argument("--seed", type=int, default=1337, help="Seed for pseudorandom number generator")
     parser.add_argument("--dtype", type=str, default="bfloat16", choices=["bfloat16", "float16", "float32"], help="Torch data type for inference")
     parser.add_argument('--compile', action=argparse.BooleanOptionalAction, help="Compile the model (requires PyTorch 2.0)")
@@ -215,161 +216,158 @@ def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, sel
     plt.savefig(out_path)
     plt.close()
 
-
 def sample_with_existing_model(
     model: torch.nn.Module,
     start_ids: torch.Tensor,
-    decode: Callable[[List[int]], str],
+    decode: Callable[[Sequence[int]], str],
+    *,
     device: str = "cuda",
     max_new_tokens: int = 200,
     temperature: float = 0.8,
-    top_k: Optional[int] = 200,
-    start_tokens: Optional[List[int]] = None,
+    top_k: Union[int, Sequence[int], None] = 200,  # ← can be list
+    start_tokens: Optional[Sequence[int]] = None,
+    num_samples: int = 1,
+    # ── visual / logging flags ────────────────────────────────────────────
     colorize_output: bool = False,
-    colorize_mode: str = "minmax",  # "all" → emit every mode
+    colorize_mode: str = "minmax",         # "all" ⇒ every mode
     token_boundary: Optional[str] = None,
     show_heatmaps: bool = False,
     chart_type: str = "heatmap",
     last_k_tokens: int = 10,
-    out_dir: str | Path = "out",
+    out_dir: Union[str, Path] = "out",
     sample_file: Optional[str] = None,
-    num_samples: int = 1,
     iter_num: Optional[int] = None,
     best_val_loss: Optional[float] = None,
     run_name: Optional[str] = None,
 ):
     """
-    Generate text from an *already-loaded* GPT model and optionally colourise
-    logits for inspection.
+    Generate text from an already-loaded GPT model.
 
     Parameters
     ----------
+    top_k :
+        • **int**  – restrict sampling to the `k` most likely tokens.  
+        • **None** – no truncation (classic soft-max).  
+        • **list/tuple of ints** – run *once per value*; produces
+          `num_samples × len(top_k)` outputs (and colourisations if enabled).
     colorize_mode :
-        • ``"minmax"`` – colour using the min-max-scaled *selected-token* logit  
-        • ``"softmax"`` – colour using soft-max over the *full* vocabulary  
-        • ``"softmax_top_k"`` – colour using soft-max over the *top-k mask*  
-        • ``"all"`` – print / append each of the three modes above
-    Notes
-    -----
-    * ``softmax`` mode **ignores** any top-k filtering; it visualises the full
-      distribution even when sampling was restricted to top-k.
-    * ``softmax_top_k`` always reflects the *post-mask* distribution.
-    * Plain (un-colourised) text is appended exactly once no matter what.
+        "minmax" | "softmax" | "softmax_top_k" | "all"
     """
+
+    # Normalise `top_k` to a list so we can iterate uniformly
+    if top_k is None or isinstance(top_k, int):
+        k_values: List[Optional[int]] = [top_k]
+    else:
+        # Filter out duplicates while preserving order
+        k_values = list(dict.fromkeys(top_k))
+
     console = Console()
     model.eval()
 
-    valid_modes: List[str] = ["minmax", "softmax", "softmax_top_k"]
+    valid_modes = ["minmax", "softmax", "softmax_top_k"]
     modes_to_apply = valid_modes if colorize_mode == "all" else [colorize_mode]
 
-    for _ in range(num_samples):
-        x = start_ids.clone()
+    for current_k in k_values:
+        k_tag = "no_topk" if current_k is None else f"topk{current_k}"
 
-        tokens_for_color: List[int] = []
-        logits_rows_full: List[torch.Tensor] = []   # full vocab row each step
-        logits_rows_topk: List[torch.Tensor] = []   # post-mask row each step
-        logits_scalars: List[torch.Tensor] = []     # chosen-token scalar each step
+        for _ in range(num_samples):
+            x = start_ids.clone()
 
-        with torch.no_grad():
-            for step in range(max_new_tokens):
-                idx_cond = (
-                    x
-                    if x.size(1) <= model.config.block_size
-                    else x[:, -model.config.block_size :]
-                )
+            tokens_for_color: List[int] = []
+            full_rows: List[torch.Tensor] = []
+            topk_rows: List[torch.Tensor] = []
+            scalar_rows: List[torch.Tensor] = []
 
-                logits, _ = model(idx_cond)             # (B, T, V)
-                logits = logits[:, -1, :] / temperature # (B, V)
-                logits_full_row = logits[0].clone()     # BEFORE any masking
+            with torch.no_grad():
+                for _step in range(max_new_tokens):
+                    idx_cond = (
+                        x
+                        if x.size(1) <= model.config.block_size
+                        else x[:, -model.config.block_size :]
+                    )
 
-                # ------------------------------------------------------------
-                # Apply top-k mask for sampling, *but keep both versions*
-                # ------------------------------------------------------------
-                if top_k is not None:
-                    v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                    logits[logits < v[:, [-1]]] = -float("inf")
+                    logits, _ = model(idx_cond)
+                    logits = logits[:, -1, :] / temperature
+                    full_row = logits[0].clone()          # BEFORE masking
 
-                logits_topk_row = logits[0].clone()     # AFTER masking
-                probs = F.softmax(logits, dim=-1)       # distribution used for draw
+                    if current_k is not None:             # apply k-mask
+                        v, _ = torch.topk(logits, min(current_k, logits.size(-1)))
+                        logits[logits < v[:, [-1]]] = -float("inf")
 
-                idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
-                x = torch.cat((x, idx_next), dim=1)
+                    topk_row = logits[0].clone()          # AFTER masking
+                    probs = F.softmax(logits, dim=-1)
+                    idx_next = torch.multinomial(probs, num_samples=1)
+                    x = torch.cat((x, idx_next), dim=1)
 
-                if colorize_output:
-                    chosen_id = idx_next.item()
+                    if colorize_output:
+                        chosen = idx_next.item()
+                        tokens_for_color.append(chosen)
+                        full_rows.append(full_row)
+                        topk_rows.append(topk_row)
+                        scalar_rows.append(full_row[chosen])
 
-                    logits_rows_full.append(logits_full_row)
-                    logits_rows_topk.append(logits_topk_row)
-                    logits_scalars.append(logits_full_row[chosen_id])
-                    tokens_for_color.append(chosen_id)
+                    if show_heatmaps:
+                        selected_text = decode([idx_next.item()])
+                        save_chart(                       # type: ignore
+                            probs,
+                            x,
+                            decode,
+                            _step,
+                            out_dir,
+                            last_k_tokens,
+                            chart_type,
+                            selected_text,
+                        )
 
-                # optional visual chart
-                if show_heatmaps:
-                    selected_text = decode([idx_next[0].item()])
-                    save_chart(        # type: ignore  (assumed helper exists)
-                        probs,
-                        x,
+            # ─── decode sequence ──────────────────────────────────────────
+            plain_text = decode(x[0].tolist())
+            if token_boundary is not None:
+                plain_text = plain_text.replace(token_boundary, " ")
+
+            # ─── coloured views  (optional) ───────────────────────────────
+            if colorize_output:
+                for cm in modes_to_apply:
+                    if cm == "minmax":
+                        logits_for_color = scalar_rows
+                    elif cm == "softmax":
+                        logits_for_color = full_rows
+                    else:  # "softmax_top_k"
+                        logits_for_color = topk_rows
+
+                    coloured = colorize_text(              # type: ignore
+                        tokens_for_color,
+                        logits_for_color,
                         decode,
-                        step,
-                        out_dir,
-                        last_k_tokens,
-                        chart_type,
-                        selected_text,
+                        colorize_mode=cm,
                     )
 
-        # ---------------------------------------------------------------------
-        # Decode entire generated sequence
-        # ---------------------------------------------------------------------
-        output_text = decode(x[0].tolist())
-        if token_boundary is not None:
-            output_text = output_text.replace(token_boundary, " ")
+                    console.print(f"[bold orange]--- {k_tag} ({cm}) ---[/bold orange]")
+                    console.print(coloured)
 
-        # ---------------------------------------------------------------------
-        # Colourised visualisations
-        # ---------------------------------------------------------------------
-        if colorize_output:
-            for cm in modes_to_apply:
-                if cm == "minmax":
-                    logits_for_color = logits_scalars
-                elif cm == "softmax":
-                    logits_for_color = logits_rows_full
-                else:  # "softmax_top_k"
-                    logits_for_color = logits_rows_topk
+                    if sample_file:
+                        append_to_sample_file(             # type: ignore
+                            sample_file,
+                            coloured,
+                            start_tokens,
+                            iter_num,
+                            best_val_loss,
+                            f"{run_name}_{k_tag}_{cm}" if run_name else f"{k_tag}_{cm}",
+                        )
+            else:
+                console.print(f"[bold cyan]--- {k_tag} ---[/bold cyan]")
+                console.print("[bold green]" + plain_text + "[/bold green]")
 
-                coloured_text = colorize_text(   # type: ignore (helper exists)
-                    tokens_for_color,
-                    logits_for_color,
-                    decode,
-                    colorize_mode=cm,
+            # ─── always store the plain text once ────────────────────────
+            if sample_file:
+                append_to_sample_file(                     # type: ignore
+                    sample_file,
+                    plain_text,
+                    start_tokens,
+                    iter_num,
+                    best_val_loss,
+                    f"{run_name}_{k_tag}" if run_name else k_tag,
                 )
 
-                console.print(f"[bold orange]--- Sample ({cm}) ---[/bold orange]")
-                console.print(coloured_text)
-
-                if sample_file:
-                    append_to_sample_file(       # type: ignore (helper exists)
-                        sample_file,
-                        coloured_text,
-                        start_tokens,
-                        iter_num,
-                        best_val_loss,
-                        f"{run_name}_{cm}" if run_name else cm,
-                    )
-        else:
-            console.print("[bold green]" + output_text + "[/bold green]")
-
-        # ---------------------------------------------------------------------
-        # Always append plain (non-colourised) text once
-        # ---------------------------------------------------------------------
-        if sample_file:
-            append_to_sample_file(               # type: ignore (helper exists)
-                sample_file,
-                output_text,
-                start_tokens,
-                iter_num,
-                best_val_loss,
-                run_name,
-            )
 
 
 
