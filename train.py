@@ -436,8 +436,10 @@ class Trainer:
                     token_boundary=(self.args.token_boundary or None),
                     show_heatmaps=self.args.show_heatmaps,
                     sample_file=self.args.sample_file,
+                    num_samples=self.args.num_samples,
                     iter_num=self.iter_num,
-                    num_samples=self.args.num_samples
+                    best_val_loss=self.best_val_loss,
+                    run_name=self.args.tensorboard_run_name,
                 )
 
         self.model.train()

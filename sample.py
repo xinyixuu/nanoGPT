@@ -114,13 +114,24 @@ def convert_rich_text_to_ansi(rich_text: Text) -> str:
     # 4) Extract the ANSI-encoded string
     return buffer.getvalue()
 
-def append_to_sample_file(sample_file, output_line, start_token, iter_num=None):
-    with open(sample_file, "a") as file:
+def append_to_sample_file(sample_file, output_line, start_token, iter_num=None, best_val_loss=None, run_name=None):
+    to_print = {
+        "run_name":   run_name,
+        "iter_num":   iter_num,
+        "best_val_loss": best_val_loss,
+    }
+    with open(sample_file, "a", encoding="utf-8", errors="replace") as file:
         header = '\n---------------'
+
+        # Print remaining available statistics
+        for name, value in to_print.items():
+            if value is not None:
+                header += f"\n {name}: {value} \n"
+
+        # Handle start token as special case due to special chars
         if start_token is not None:
             header += f"\n start_token: {repr(start_token)} \n"
-        if iter_num is not None:
-            header += f"\n iter_num {iter_num} \n"
+
         header += '---------------\n'
 
         # If it's a Rich Text object, convert it to an ANSI string
@@ -220,7 +231,9 @@ def sample_with_existing_model(
     out_dir="out",
     sample_file=None,
     num_samples=1,
-    iter_num=None
+    iter_num=None,
+    best_val_loss=None,
+    run_name=None,
 ):
     """
     A helper function to generate text from an *already-loaded* GPT model,
@@ -278,9 +291,9 @@ def sample_with_existing_model(
             console.print("[bold green]" + output_text + "[/bold green]")
 
         if sample_file:
-            append_to_sample_file(sample_file, output_text, start_tokens, iter_num)
+            append_to_sample_file(sample_file, output_text, start_tokens, iter_num, best_val_loss, run_name)
         if colorize_output:
-            append_to_sample_file(sample_file, colored_text, start_tokens, iter_num)
+            append_to_sample_file(sample_file, colored_text, start_tokens, iter_num, best_val_loss, run_name)
 
 
 
