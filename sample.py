@@ -56,7 +56,7 @@ def parse_args():
     parser.add_argument('--print_model_info', default=True, action=argparse.BooleanOptionalAction, help="print info about model before infernece")
 
     # Output Confidence
-    parser.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k', 'all'],
+    parser.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k', 'rank', 'all'],
                         help="Mode to colorize text: 'minmax' (default), 'softmax', or 'softmax_top_k' for softmax only over the top k vals. "
                         "Requires --colorize_output (enabled by default).")
     parser.add_argument('--colorize_output', default=False, action=argparse.BooleanOptionalAction,
@@ -142,7 +142,7 @@ def append_to_sample_file(sample_file, output_line, start_token, iter_num=None, 
         if isinstance(output_line, Text):
             output_line = convert_rich_text_to_ansi(output_line)
 
-        file.write(header + output_line + '\n')
+        file.write(header + output_line + '\n\n')
 
 def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
     """
@@ -216,6 +216,43 @@ def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, sel
     plt.savefig(out_path)
     plt.close()
 
+
+def _colorize_rank(
+    token_ids: List[int],
+    ranks: List[int],
+    decode: Callable[[Sequence[int]], str],
+    k: Optional[int],
+) -> str:
+    """
+    Colour tokens by rank.
+    • rank == 1  → white
+    • rank  2..k → green → yellow → red gradient
+    Anything outside the 1‥k range (shouldn't occur when sampling with top-k)
+    is printed with no colour.
+    """
+    coloured: List[str] = []
+
+    # fallback: if k is None or < 2 we can't build a gradient
+    max_rank = max(k or 0, 2)
+
+    for tid, rnk in zip(token_ids, ranks):
+        text = decode([tid])
+
+        if rnk == 1:
+            coloured.append(f"{text}")
+        elif 2 <= rnk <= max_rank:
+            # ratio 0 → green, 1 → red
+            ratio = (rnk - 2) / (max_rank - 2) if max_rank > 2 else 1.0
+            red   = int(255 * ratio)
+            green = int(255 * (1 - ratio))
+            colour_hex = f"#{red:02x}{green:02x}00"
+            coloured.append(f"[{colour_hex}]{text}[/{colour_hex}]")
+        else:
+            coloured.append(text)  # out-of-range ranks
+
+    return "".join(coloured)
+
+
 def sample_with_existing_model(
     model: torch.nn.Module,
     start_ids: torch.Tensor,
@@ -224,12 +261,12 @@ def sample_with_existing_model(
     device: str = "cuda",
     max_new_tokens: int = 200,
     temperature: float = 0.8,
-    top_k: Union[int, Sequence[int], None] = 200,  # ← can be list
+    top_k: Union[int, Sequence[int], None] = 200,  # list allowed
     start_tokens: Optional[Sequence[int]] = None,
     num_samples: int = 1,
     # ── visual / logging flags ────────────────────────────────────────────
     colorize_output: bool = False,
-    colorize_mode: str = "minmax",         # "all" ⇒ every mode
+    colorize_mode: str = "minmax",         # "rank" & "all" supported
     token_boundary: Optional[str] = None,
     show_heatmaps: bool = False,
     chart_type: str = "heatmap",
@@ -245,26 +282,24 @@ def sample_with_existing_model(
 
     Parameters
     ----------
-    top_k :
-        • **int**  – restrict sampling to the `k` most likely tokens.  
-        • **None** – no truncation (classic soft-max).  
-        • **list/tuple of ints** – run *once per value*; produces
-          `num_samples × len(top_k)` outputs (and colourisations if enabled).
+    top_k : int | list[int] | None
+        • int   – sample from top-k.  
+        • None  – no truncation.  
+        • list  – run once per k in the list (duplicates filtered).
     colorize_mode :
-        "minmax" | "softmax" | "softmax_top_k" | "all"
+        "minmax" | "softmax" | "softmax_top_k" | **"rank"** | "all"
     """
 
-    # Normalise `top_k` to a list so we can iterate uniformly
+    # 1. normalise `top_k` into a deduplicated list
     if top_k is None or isinstance(top_k, int):
         k_values: List[Optional[int]] = [top_k]
     else:
-        # Filter out duplicates while preserving order
         k_values = list(dict.fromkeys(top_k))
 
     console = Console()
     model.eval()
 
-    valid_modes = ["minmax", "softmax", "softmax_top_k"]
+    valid_modes = ["minmax", "softmax", "softmax_top_k", "rank"]
     modes_to_apply = valid_modes if colorize_mode == "all" else [colorize_mode]
 
     for current_k in k_values:
@@ -273,10 +308,12 @@ def sample_with_existing_model(
         for _ in range(num_samples):
             x = start_ids.clone()
 
+            # storage for colouring
             tokens_for_color: List[int] = []
             full_rows: List[torch.Tensor] = []
             topk_rows: List[torch.Tensor] = []
             scalar_rows: List[torch.Tensor] = []
+            ranks_list: List[int] = []  # NEW
 
             with torch.no_grad():
                 for _step in range(max_new_tokens):
@@ -288,27 +325,31 @@ def sample_with_existing_model(
 
                     logits, _ = model(idx_cond)
                     logits = logits[:, -1, :] / temperature
-                    full_row = logits[0].clone()          # BEFORE masking
+                    full_row = logits[0].clone()               # pre-mask
 
-                    if current_k is not None:             # apply k-mask
+                    if current_k is not None:
                         v, _ = torch.topk(logits, min(current_k, logits.size(-1)))
                         logits[logits < v[:, [-1]]] = -float("inf")
 
-                    topk_row = logits[0].clone()          # AFTER masking
+                    topk_row = logits[0].clone()               # post-mask
                     probs = F.softmax(logits, dim=-1)
                     idx_next = torch.multinomial(probs, num_samples=1)
                     x = torch.cat((x, idx_next), dim=1)
 
                     if colorize_output:
                         chosen = idx_next.item()
+                        # rank: 1 = best
+                        rank = (full_row > full_row[chosen]).sum().item() + 1
+
                         tokens_for_color.append(chosen)
                         full_rows.append(full_row)
                         topk_rows.append(topk_row)
                         scalar_rows.append(full_row[chosen])
+                        ranks_list.append(rank)
 
                     if show_heatmaps:
-                        selected_text = decode([idx_next.item()])
-                        save_chart(                       # type: ignore
+                        sel_txt = decode([idx_next.item()])
+                        save_chart(                             # type: ignore
                             probs,
                             x,
                             decode,
@@ -316,36 +357,49 @@ def sample_with_existing_model(
                             out_dir,
                             last_k_tokens,
                             chart_type,
-                            selected_text,
+                            sel_txt,
                         )
 
-            # ─── decode sequence ──────────────────────────────────────────
+            # ---------- decode plain text -----------------------------------
             plain_text = decode(x[0].tolist())
             if token_boundary is not None:
                 plain_text = plain_text.replace(token_boundary, " ")
 
-            # ─── coloured views  (optional) ───────────────────────────────
+            # ---------- colourised outputs ----------------------------------
             if colorize_output:
                 for cm in modes_to_apply:
                     if cm == "minmax":
                         logits_for_color = scalar_rows
+                        coloured = colorize_text(              # type: ignore
+                            tokens_for_color,
+                            logits_for_color,
+                            decode,
+                            colorize_mode=cm,
+                        )
                     elif cm == "softmax":
-                        logits_for_color = full_rows
-                    else:  # "softmax_top_k"
-                        logits_for_color = topk_rows
+                        coloured = colorize_text(              # type: ignore
+                            tokens_for_color,
+                            full_rows,
+                            decode,
+                            colorize_mode=cm,
+                        )
+                    elif cm == "softmax_top_k":
+                        coloured = colorize_text(              # type: ignore
+                            tokens_for_color,
+                            topk_rows,
+                            decode,
+                            colorize_mode=cm,
+                        )
+                    else:  # "rank"
+                        coloured = _colorize_rank(
+                            tokens_for_color, ranks_list, decode, current_k
+                        )
 
-                    coloured = colorize_text(              # type: ignore
-                        tokens_for_color,
-                        logits_for_color,
-                        decode,
-                        colorize_mode=cm,
-                    )
-
-                    console.print(f"[bold orange]--- {k_tag} ({cm}) ---[/bold orange]")
+                    console.print(f"\n[bold orange]--- {k_tag} ({cm}) ---[/bold orange]")
                     console.print(coloured)
 
                     if sample_file:
-                        append_to_sample_file(             # type: ignore
+                        append_to_sample_file(                 # type: ignore
                             sample_file,
                             coloured,
                             start_tokens,
@@ -357,9 +411,9 @@ def sample_with_existing_model(
                 console.print(f"[bold cyan]--- {k_tag} ---[/bold cyan]")
                 console.print("[bold green]" + plain_text + "[/bold green]")
 
-            # ─── always store the plain text once ────────────────────────
+            # ---------- always store plain text once ------------------------
             if sample_file:
-                append_to_sample_file(                     # type: ignore
+                append_to_sample_file(                         # type: ignore
                     sample_file,
                     plain_text,
                     start_tokens,

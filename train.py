@@ -1096,7 +1096,7 @@ class Trainer:
                         if self.args.sample_each_eval:
                             # Try model inference (e.g. exploring inference from overfitting)
                             if self.args.max_sample_tokens:
-                                self.sample_and_print(self.args.max_sample_tokens, start_tokens=self.args.sample_start_tokens)
+                                self.sample_and_print()
                         if self.args.export_wte_each_eval:
                             # export wte table to npy file
                             if self.args.export_wte_npy:
