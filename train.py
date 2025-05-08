@@ -57,7 +57,7 @@ from train_args import parse_args
 
 # TODO: bring optimizer into own train_variations file
 class OrthoAdam(Optimizer):
-    """OrtoAdam: transforms grads via orthogonal Q before Adam updates."""
+    """OrthoAdam: transforms grads via orthogonal Q before Adam updates."""
     def __init__(self, params, lr=1e-3, betas=(0.9,0.999), eps=1e-8, weight_decay=0):
         defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
         super().__init__(params, defaults)
