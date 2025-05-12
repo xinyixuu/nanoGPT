@@ -640,6 +640,7 @@ class InfiniteHeadAttention(nn.Module):
         self.n_qk_head_dim = config.n_qk_head_dim
         self.n_v_head_dim = config.n_v_head_dim
 
+
         # Concat Heads
         self.use_concat_heads = config.use_concat_heads
         self.n_cproj         = config.n_cproj
@@ -649,10 +650,25 @@ class InfiniteHeadAttention(nn.Module):
         self.use_qk_norm_scale  = config.use_qk_norm_scale
 
         # Flash Lobo
-        self.use_flash_lobo         = config.use_flash_lobo
-        self.use_flash_lobo_per_head= config.use_flash_lobo_per_head
-        self.disable_flash_attention = config.disable_flash_attention
+        self.use_flash_lobo          = config.use_flash_lobo
+        self.use_flash_lobo_per_head = config.use_flash_lobo_per_head
+        self.use_flash_obo_const     = config.use_flash_obo_const
 
+        # Set Flash Lobo_const
+        if self.use_flash_lobo:
+            if self.use_flash_obo_const:
+                # constant of this value for all heads in this layer
+                self.flash_lobo_log_const = config.flash_lobo_log_const # log C (0 -> C = 1)
+            elif self.use_flash_lobo_per_head:
+                # learnable parameter, one scalar per head
+                self.flash_lobo_log_const = nn.Parameter(
+                    torch.full( (self.n_head,), config.flash_lobo_log_const)
+                )
+            else:
+                # single learnable parameter per layer
+                self.flash_lobo_log_const = nn.Parameter(torch.tensor(config.flash_lobo_log_const))  # log C  (0 → C = 1)
+
+        # Set nn.Linear Types for Wk, Wq, Wv and c_proj
         self.linear_variant_q = linear_dictionary[config.linear_variant_attn]
         self.linear_variant_k = linear_dictionary[config.linear_variant_attn]
         self.linear_variant_v = linear_dictionary[config.linear_variant_attn]
@@ -674,6 +690,9 @@ class InfiniteHeadAttention(nn.Module):
                     for _ in range(self.n_cproj)
                 ]
             )
+
+        # option to turn off flash attention
+        self.disable_flash_attention = config.disable_flash_attention
 
         # Regularization
         self.attn_dropout = nn.Dropout(config.dropout)
@@ -735,7 +754,7 @@ class InfiniteHeadAttention(nn.Module):
         y = None
         att = None
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        if self.flash:
+        if self.use_flash_lobo:
             # Flash QK Norm
             if self.use_qk_norm_scale:
                 # pre-scale Q so that built-in √dₕ division becomes our g scaling
@@ -791,22 +810,24 @@ class InfiniteHeadAttention(nn.Module):
             else:
                 att = F.softmax(att, dim=-1)
 
-        att = self.attn_dropout(att)
+            att = self.attn_dropout(att)
+
+            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
 
         # Concat Heads or Inf Concat Heads
         if self.use_concat_heads:
             # (B, nh, T, v_dim) → (B, T, nh*v_dim); avoid extra .contiguous()
-            y = att.transpose(1, 2).reshape(B, T, -1)
+            y = att.transpose(1, 2).reshape(B, T, C)
             y = self.c_proj(y)
         else:
             # Sum heads first: (B, nh, T, v_dim) → (B, T, v_dim)
-            y_sum = att.sum(dim=1)
+            y_sum = y.sum(dim=1)
 
             # Parallel small projections then fuse; avoids Python-level loop
             y = torch.stack([proj(y_sum) for proj in self.c_proj_list ], dim=0).sum(dim=0)
 
         # output projection
-        y = self.resid_dropout(self.c_proj(y))
+        y = self.resid_dropout(y)
 
         return y
 
