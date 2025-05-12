@@ -817,7 +817,8 @@ class InfiniteHeadAttention(nn.Module):
         # Concat Heads or Inf Concat Heads
         if self.use_concat_heads:
             # (B, nh, T, v_dim) → (B, T, nh*v_dim); avoid extra .contiguous()
-            y = att.transpose(1, 2).reshape(B, T, C)
+            # flatten heads → (B, T, n_head * n_v_head_dim)
+            y = y.transpose(1, 2).contiguous().view( B, T, self.n_head * self.n_v_head_dim)
             y = self.c_proj(y)
         else:
             # Sum heads first: (B, nh, T, v_dim) → (B, T, v_dim)
