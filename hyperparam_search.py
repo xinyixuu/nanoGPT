@@ -223,7 +223,6 @@ def main():
                 avg_loss = -math.log(avg_score)
                 d_score = avg_score - base_score
                 d_param = nparam - base_params
-                # eff = d_score / d_param if d_param else 0.0
                 # Handle zero-cost changes:
                 if d_param != 0:
                      eff = d_score / d_param
