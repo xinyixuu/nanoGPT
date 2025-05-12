@@ -9,4 +9,4 @@ if [ ! -z "$1" ]; then
   PORT="$1"
 fi
 
-tensorboard --logdir=./logs --port="$PORT" || python3 -m tensorboard.main --logdir=./logs --port="$PORT"
+tensorboard --logdir=./logs --port="$PORT" --bind_all | python3 -m tensorboard.main --logdir=./logs --port="$PORT" --bind_all

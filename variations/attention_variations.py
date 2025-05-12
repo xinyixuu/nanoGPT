@@ -1,14 +1,17 @@
 # variations/attention_variations.py
 
 import math
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from variations.linear_variations import linear_dictionary
+
+from quantization.quant_utils import create_activation_buffers, set_variant
 from quantization.quantize import fake_quantize_act
-from quantization.quant_utils import set_variant, create_activation_buffers
+from variations.linear_variations import linear_dictionary
+from variations.position_encoding_variations import (
+    FIRE, RotaryEmbedding, SymmetricalOverlapAngularPositions)
 from variations.softmax_variations import softmax_dictionary
-from variations.position_encoding_variations import RotaryEmbedding, SymmetricalOverlapAngularPositions, FIRE
 
 # Mamba related imports
 # if torch.cuda.is_available():
@@ -625,10 +628,47 @@ class InfiniteHeadAttention(nn.Module):
         super().__init__()
 
         self.n_head = config.n_head
+
+        # group query attention and fallback
+        if (config.n_kv_group is None):
+            self.n_kv_group = config.n_head
+        else:
+            assert config.n_embd % config.n_kv_group == 0
+            self.n_kv_group = config.n_kv_group
+
         self.n_embd = config.n_embd
         self.n_qk_head_dim = config.n_qk_head_dim
         self.n_v_head_dim = config.n_v_head_dim
 
+
+        # Concat Heads
+        self.use_concat_heads = config.use_concat_heads
+        self.n_cproj         = config.n_cproj
+
+        # QK Norm
+        self.use_qk_norm        = config.use_qk_norm
+        self.use_qk_norm_scale  = config.use_qk_norm_scale
+
+        # Flash Lobo
+        self.use_flash_lobo          = config.use_flash_lobo
+        self.use_flash_lobo_per_head = config.use_flash_lobo_per_head
+        self.use_flash_obo_const     = config.use_flash_obo_const
+
+        # Set Flash Lobo_const
+        if self.use_flash_lobo:
+            if self.use_flash_obo_const:
+                # constant of this value for all heads in this layer
+                self.flash_lobo_log_const = config.flash_lobo_log_const # log C (0 -> C = 1)
+            elif self.use_flash_lobo_per_head:
+                # learnable parameter, one scalar per head
+                self.flash_lobo_log_const = nn.Parameter(
+                    torch.full( (self.n_head,), config.flash_lobo_log_const)
+                )
+            else:
+                # single learnable parameter per layer
+                self.flash_lobo_log_const = nn.Parameter(torch.tensor(config.flash_lobo_log_const))  # log C  (0 → C = 1)
+
+        # Set nn.Linear Types for Wk, Wq, Wv and c_proj
         self.linear_variant_q = linear_dictionary[config.linear_variant_attn]
         self.linear_variant_k = linear_dictionary[config.linear_variant_attn]
         self.linear_variant_v = linear_dictionary[config.linear_variant_attn]
@@ -638,7 +678,21 @@ class InfiniteHeadAttention(nn.Module):
         self.c_attn_q = self.linear_variant_q(self.n_embd, self.n_head * self.n_qk_head_dim, config, bias=config.bias)
         self.c_attn_k = self.linear_variant_k(self.n_embd, self.n_head * self.n_qk_head_dim, config, bias=config.bias)
         self.c_attn_v = self.linear_variant_v(self.n_embd, self.n_head * self.n_v_head_dim, config, bias=config.bias)
-        self.c_proj = self.linear_variant_attn_proj(self.n_v_head_dim, self.n_embd, config, bias=config.bias)
+
+        if self.use_concat_heads:
+            self.c_proj = self.linear_variant_attn_proj(
+                self.n_head * self.n_v_head_dim, self.n_embd, config, bias=config.bias
+            )
+        else:
+            self.c_proj_list = nn.ModuleList(
+                [
+                    self.linear_variant_attn_proj(self.n_v_head_dim, self.n_embd, config, bias=config.bias)
+                    for _ in range(self.n_cproj)
+                ]
+            )
+
+        # option to turn off flash attention
+        self.disable_flash_attention = config.disable_flash_attention
 
         # Regularization
         self.attn_dropout = nn.Dropout(config.dropout)
@@ -647,11 +701,26 @@ class InfiniteHeadAttention(nn.Module):
 
         # Embedding
         self.n_embd = config.n_embd
-        self.dropout = config.dropout
 
         # Rotary Positional Embeddings
         self.rotary_emb_q = None
         self.rotary_emb_k = None
+
+        if config.use_rotary_embeddings:
+            # Note: size is the size of the head dimension
+            if config.rope_variant == "soap":
+                self.sym_rot_num_angles = config.sym_rot_num_angles
+                self.rotary_emb_q = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
+                self.rotary_emb_k = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
+            elif config.rope_variant == "rope":
+                self.rotary_emb_q = RotaryEmbedding(config, size=config.n_embd // self.n_head)
+                self.rotary_emb_k = RotaryEmbedding(config, size=config.n_embd // self.n_head)
+
+        # qk norm factor
+        if self.use_qk_norm_scale:
+            L = config.block_size
+            g0 = math.log2(L*L - L)
+            self.qk_norm_factor = nn.Parameter(torch.tensor(g0))
 
         # Softmax Variant Selection
         self.softmax_variant_attn = config.softmax_variant_attn
@@ -672,27 +741,94 @@ class InfiniteHeadAttention(nn.Module):
         k = k.view(B, T, self.n_head, self.n_qk_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
         v = v.view(B, T, self.n_head, self.n_v_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
 
+        # Apply Rotary Position Encodings
+        if (self.rotary_emb_q is not None) and (self.rotary_emb_k is not None):
+            q = self.rotary_emb_q(q)
+            k = self.rotary_emb_k(k)
+
+        # Apply QK Norm
+        if self.use_qk_norm:
+            q = q / (q.norm(dim=-1, keepdim=True) + 1e-6)
+            k = k / (k.norm(dim=-1, keepdim=True) + 1e-6)
+
         y = None
         att = None
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        # manual implementation of attention
-        att = (q @ k.transpose(-2, -1)) * (1.0 / torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device)))
+        if self.use_flash_lobo:
+            # Flash QK Norm
+            if self.use_qk_norm_scale:
+                # pre-scale Q so that built-in √dₕ division becomes our g scaling
+                head_dim = math.sqrt(k.size(-1))
+                qk_scaling_factor = self.qk_norm_factor * math.sqrt(head_dim)
+                q = q * qk_scaling_factor
 
-        # apply lower triangle attention mask
-        att = att.masked_fill(self.bias[:,:,:T,:T].to(x.device) == 0, float('-inf'))
+            # Flash Lobo
+            attn_bias = None
+            if self.use_flash_lobo:
+                # 2-a  Make dummy key/value column of zeros
+                dummy_k = q.new_zeros(B, self.n_kv_group, 1, q.size(-1))
+                dummy_v = q.new_zeros(B, self.n_kv_group, 1, v.size(-1))
 
-        # softmax variation
-        if self.softmax_variant_attn != 'softmax':
-            att = self.softmax_layer_attn(att)
+                k = torch.cat([dummy_k, k], dim=2)   # prepend → causal mask still valid
+                v = torch.cat([dummy_v, v], dim=2)
+
+                # 2-b  Bias only that column with log C
+                attn_bias = q.new_zeros(1, self.n_head, 1, k.size(2))
+                if self.use_flash_lobo_per_head:
+                    attn_bias[..., 0] = self.flash_lobo_log_const.view(1, self.n_head, 1)
+                else:
+                    attn_bias[..., 0] = self.flash_lobo_log_const    # first column only
+
+
+            # Efficient attention using Flash Attention CUDA kernels
+            y = torch.nn.functional.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_bias,
+                dropout_p=self.dropout if self.training else 0,
+                is_causal=True,
+            )
+
         else:
-            att = F.softmax(att, dim=-1)
+            # manual implementation of attention
+            att = (q @ k.transpose(-2, -1)) * (1.0 / torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device)))
 
-        att = self.attn_dropout(att)
+            if self.use_qk_norm_scale:
+                # utilize learned qk_norm_scaling factor
+                att = att * self.qk_norm_factor
+            else:
+                # divide by head dimension if not
+                att = att / torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device))
 
-        y = (att @ v).sum(dim=1)  # Sum over all heads instead of concatenation
+            # apply lower triangle attention mask
+            att = att.masked_fill(self.bias[:,:,:T,:T].to(x.device) == 0, float('-inf'))
+
+            # softmax variation
+            if self.softmax_variant_attn != 'softmax':
+                att = self.softmax_layer_attn(att)
+            else:
+                att = F.softmax(att, dim=-1)
+
+            att = self.attn_dropout(att)
+
+            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+
+        # Concat Heads or Inf Concat Heads
+        if self.use_concat_heads:
+            # (B, nh, T, v_dim) → (B, T, nh*v_dim); avoid extra .contiguous()
+            # flatten heads → (B, T, n_head * n_v_head_dim)
+            y = y.transpose(1, 2).contiguous().view( B, T, self.n_head * self.n_v_head_dim)
+            y = self.c_proj(y)
+        else:
+            # Sum heads first: (B, nh, T, v_dim) → (B, T, v_dim)
+            y_sum = y.sum(dim=1)
+
+            # Parallel small projections then fuse; avoids Python-level loop
+            y = torch.stack([proj(y_sum) for proj in self.c_proj_list ], dim=0).sum(dim=0)
 
         # output projection
-        y = self.resid_dropout(self.c_proj(y))
+        y = self.resid_dropout(y)
 
         return y
 
