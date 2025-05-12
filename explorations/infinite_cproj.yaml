@@ -2,13 +2,14 @@
 ---
 
 # base hyperparameters
-max_iters: [10000]
+max_iters: [20000]
 # n_layer: [6]
 # n_head: [6]
 # n_embd: [384]
 # block_size: [256]
+eval_interval: [500]
 device: ["cuda"]
-dataset: ["cosmopedia_100k"]
+dataset: ["minipile"]
 
 # uses rotary embeddings, no abs pos embeddings
 use_rotary_embeddings: [true]
@@ -33,13 +34,14 @@ flash_lobo_log_const:
 # --- END FLASH LOBO OPTIONS ------
 
 # --- BEGIN CONCAT HEADS OPTIONS -----
+attention_variant: "infinite"
 
 # check if mantissa or exp improves
 dtype: ["bfloat16", "float16"]
 
 # inf head allowed, test if this scales better with lobo
 n_head: [6, 12, 18]
-use_concat_heads: [true, false]
+use_concat_heads: [false, true]
 n_cproj:
   conditions:
     - ["use_concat_heads", false]
