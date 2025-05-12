@@ -223,7 +223,15 @@ def main():
                 avg_loss = -math.log(avg_score)
                 d_score = avg_score - base_score
                 d_param = nparam - base_params
-                eff = d_score / d_param if d_param else 0.0
+                # eff = d_score / d_param if d_param else 0.0
+                # Handle zero-cost changes:
+                if d_param != 0:
+                     eff = d_score / d_param
+                elif d_score > 0:
+                    eff = math.inf # Positive improvement at zero cost is infinitely efficient
+                else:
+                     eff = 0.0      # No improvement (or a loss) at zero cost
+
 
                 cand = {
                     "param": pname,
@@ -240,8 +248,15 @@ def main():
                 }
                 candidates.append(cand)
 
-                if eff > 0 and (best_choice is None or eff > best_choice[0]):
-                    best_choice = (eff, cand)
+                if eff > 0:
+                    if best_choice is None:
+                        best_choice = (eff, cand)
+                    else:
+                        # Replace if eff is strictly better, OR if eff is Inf and equal, use delta_score as a tie-breaker.
+                        old_eff, old_cand = best_choice
+                        if (eff > old_eff) or (math.isinf(eff) and eff == old_eff and cand['delta_score'] > old_cand['delta_score']):
+                             best_choice = (eff, cand)
+
 
         # -- pick or stop ---------------------------------------
         if best_choice is None:
