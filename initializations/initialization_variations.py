@@ -1,6 +1,5 @@
-# initialization_variations.py
-
 import torch
+import numpy as np
 
 def direct_init(vocab_size: int, n_embd: int):
     """
@@ -34,10 +33,25 @@ def one_hot_init(vocab_size: int, n_embd: int):
         weight[i, i] = 1.0
     return weight
 
+def numpy_import_init(vocab_size: int, n_embd: int, file_path: str = "wte.npy"):
+    """
+    Loads a pre-trained embedding matrix from a NumPy file.
+    The file_path will be handled by the GPT class.
+    """
+    try:
+        embedding_data = np.load(file_path)
+        embedding_tensor = torch.from_numpy(embedding_data).float()
+        if embedding_tensor.shape != (vocab_size, n_embd):
+            raise ValueError(f"Numpy embedding shape {embedding_tensor.shape} does not match expected shape ({vocab_size}, {n_embd}).")
+        return embedding_tensor
+    except FileNotFoundError:
+        raise FileNotFoundError(f"NumPy embedding file not found at {file_path}")
+    except Exception as e:
+        raise RuntimeError(f"Error loading NumPy embedding file: {e}")
 
 init_dictionary = {
-    "gaussian": None,   # fall back to the default Gaussian in model.py
+    "gaussian": None,    # fall back to the default Gaussian in model.py
     "hypercube": direct_init,
     "onehot": one_hot_init,
+    "numpy_import": numpy_import_init, # New entry
 }
-

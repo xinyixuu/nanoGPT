@@ -372,7 +372,13 @@ def parse_args():
     model_group.add_argument( "--linear_std_init", type=float, default=0.02)
 
     ## Embedding Weight Initialization Options
-    embedding_init_variations = ["gaussian", "onehot", "hypercube"]
+    embedding_init_variations = [
+            "gaussian",
+            "onehot",
+            "hypercube",
+            "numpy_import",
+            ]
+
     model_group.add_argument( "--init_variant", choices=embedding_init_variations, default="gaussian", help="options for embedding initializations")
 
     # Quantization
