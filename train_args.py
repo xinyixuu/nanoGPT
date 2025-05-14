@@ -380,6 +380,8 @@ def parse_args():
             ]
 
     model_group.add_argument( "--init_variant", choices=embedding_init_variations, default="gaussian", help="options for embedding initializations")
+    model_group.add_argument( "--init_scale", type=float, default=0.01, help="initialization scaling factor with non-gaussian variations")
+    model_group.add_argument( "--init_wte_npy", type=str, default="wte.npy", help="npy file for initialization of wte files")
 
     # Quantization
     model_group.add_argument("--full_quant_iteration", type=int, default=None,

@@ -2,24 +2,28 @@
 ---
 # parameter_groups: define sets of overrides to apply on top of base params
 parameter_groups:
-  - use_rotary_embeddings: [true]
-    use_abs_pos_embeddings: [false]
+  - init_variant: ["onehot", "hypercube", "numpy_import"]
+    init_scale: [0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001]
+  - init_variant: ["gaussian"]
+    embedding_std_init: [0.001, 0.005, 0.01, 0.02, 0.05, 0.1]
+
+use_rotary_embeddings: [true]
+use_abs_pos_embeddings: [false]
 
 # base hyperparameters
-max_iters: [3000]
-eval_interval: [5000]
+max_iters: [5000]
+eval_interval: [250]
 n_layer: [6]
 n_head: [6]
 n_embd: [384]
 block_size: [256]
 device: ["cuda"]
-dtype: ["float16"]
-dataset: ["shakespeare_char"]
-init_variant: ["gaussian","onehot", "hypercube","numpy_import"]
+dtype: ["bfloat16","float16"]
+dataset: ["minipile"]
 
 # boolean flags
 compile: [true]
 
 # tensorboard run name
-tensorboard_run_name: ["init_variants"]
+tensorboard_run_name: ["init_scale_variations"]
 
