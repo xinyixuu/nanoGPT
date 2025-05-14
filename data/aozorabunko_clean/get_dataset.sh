@@ -31,3 +31,8 @@ python3 ./utils/get_json_dataset.py \
   --direct_json_input "${filename%%.gz}" \
   --include_keys "text" \
   --value_prefix ""
+
+python3 extract_jsonl.py
+
+# Optional
+# python3 hiragana_converter.py
