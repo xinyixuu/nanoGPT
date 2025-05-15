@@ -1,4 +1,4 @@
-# inits.yaml.yaml
+# inits.yaml
 ---
 # parameter_groups: define sets of overrides to apply on top of base params
 parameter_groups:
