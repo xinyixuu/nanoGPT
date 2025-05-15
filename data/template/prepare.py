@@ -41,7 +41,7 @@ def parse_arguments():
     parser.add_argument("--min_token", type=int, default=0, help="Minimum value for numeric tokens")
     parser.add_argument("--max_token", type=int, default=65535, help="Maximum value for numeric tokens")
     # tokenizer counts
-    parser.add_argument("--track_token_counts", action="store_true", help="Track how often each token appears and store in meta.pkl")
+    parser.add_argument("-T", "--track_token_counts", action="store_true", help="Track how often each token appears and store in meta.pkl")
     return parser.parse_args()
 
 
