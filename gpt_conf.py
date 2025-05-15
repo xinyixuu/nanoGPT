@@ -14,6 +14,10 @@ class GPTConfig:
     n_kv_group: int = 12
     n_embd: int = 768
 
+    # For multicontext training
+    multicontext: bool = False
+    vocab_sizes: List[int] = field(default_factory=lambda: []) # Used in place of vocab
+
     ## Inf attention variation
     n_qk_head_dim: int = None
     n_v_head_dim: int = None
