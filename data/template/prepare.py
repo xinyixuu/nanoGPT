@@ -12,8 +12,6 @@ from tokenizers import (
     CustomCharTokenizerWithByteFallback,
 )
 from tqdm import tqdm
-import os
-
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Tokenize text data using different methods.")
@@ -89,10 +87,6 @@ def main():
         tokenizer = TiktokenTokenizer(args)
     elif args.method == "custom":
         tokenizer = CustomTokenizer(args)
-    elif args.method == "replace":
-        tokenizer = ReplaceTokenizer(args)
-    elif args.method == "lines":
-        tokenizer = LinesTokenizer(args)
     elif args.method == "char":
         tokenizer = CharTokenizer(args, train_data, val_data)
     elif args.method == "custom_char_byte_fallback":
