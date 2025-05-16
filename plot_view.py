@@ -65,6 +65,7 @@ def plot_rows(
     y: str,
     label: str = "formatted_name",
     connect_by: str | None = None,
+    connect_label: str | None = None,
 ) -> None:
     """
     Scatter-plot *y* vs *x*.
@@ -107,7 +108,7 @@ def plot_rows(
     if not xs:
         raise ValueError("No plottable data in supplied rows")
 
-    plt.figure()
+    fig = plt.figure(figsize=(12, 8))
 
     seen: Set[str] = set()
     if not connect_by:
@@ -139,17 +140,23 @@ def plot_rows(
                     color=col,
                     linewidth=1,
                     alpha=0.7,
-                    label=f"{connect_by}={gid}",
+                    label=f"{(connect_label or connect_by)}={gid}",   # NEW
                 )
 
     plt.xlabel(x)
     plt.ylabel(y)
     title = f"{y} vs {x}"
     if connect_by:
-        title += f"  (lines grouped by '{connect_by}')"
+        disp = connect_label or connect_by   # NEW
+        title += f"  (lines grouped by '{disp}')"
     plt.title(title)
     plt.legend(loc="best", fontsize=8)
     plt.tight_layout()
+    plt.show()
+    safe_title = "".join(
+        ch if ch.isalnum() or ch in "-_." else "_" for ch in title
+    )
+    fig.savefig(f"{safe_title}.png", dpi=300)
     plt.show()
 
 
