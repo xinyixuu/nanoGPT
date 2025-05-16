@@ -152,6 +152,9 @@ class GPT(nn.Module):
         shared_mlp_array = spg_creator.create_shared_param_group("mlp")
         shared_attn_array = spg_creator.create_shared_param_group("attn")
 
+        # General weight tying
+        self.wte_weight_tying = config.wte_weight_tying
+
         # Factorization Parameters
         self.n_embd_wte = config.n_embd_wte
         self.n_embd_wte_scale_tying = config.n_embd_wte_scale_tying
@@ -252,11 +255,12 @@ class GPT(nn.Module):
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        if config.multicontext:
-            for i, vocab_size in enumerate(self.config.vocab_sizes):
-                self.transformer[f'lm_head_{i}'].weight = self.transformer[f'wte_{i}'].weight
-        else:
-            self.lm_head.weight = self.transformer.wte.weight # https://paperswithcode.com/method/weight-tying
+        if self.wte_weight_tying:
+            if config.multicontext:
+                for i, vocab_size in enumerate(self.config.vocab_sizes):
+                    self.transformer[f'lm_head_{i}'].weight = self.transformer[f'wte_{i}'].weight
+            else:
+                self.lm_head.weight = self.transformer.wte.weight # https://paperswithcode.com/method/weight-tying
 
         # import wte
         if self.config.import_wte_npy:

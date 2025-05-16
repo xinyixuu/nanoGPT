@@ -76,6 +76,7 @@ class GPTConfig:
 
     # weight tying
     n_embd_wte_scale_tying: bool = True
+    wte_weight_tying: bool = True # Non-factorized wte weight tying
 
     # wte import/export
     import_wte_freeze: bool = False
