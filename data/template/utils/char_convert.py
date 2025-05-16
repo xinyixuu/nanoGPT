@@ -3,6 +3,7 @@ import argparse
 import re
 import spacy
 from tqdm import tqdm
+from pathlib import Path
 
 nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
 
@@ -141,66 +142,87 @@ def transform_part_of_speech(text):
 
     return transformed_text
 
-# def transform_pos(text):
-#     """
-#     Naive POS-based transformation:
-#       - Split the text into 'chunks' (words vs. whitespace) using a regex that preserves delimiters.
-#       - For each non-whitespace chunk, run nltk.pos_tag([chunk]) to get a single (token, tag) pair.
-#       - Convert the tag's first letter to lowercase (e.g. 'NN' -> 'n', 'VB' -> 'v') and
-#         repeat it for each character in the chunk.
-#       - For whitespace chunks, output underscores.
-#       - Example: " dog cat" -> "_nnn_nnn"
-#     """
-#     # Split so that whitespace is kept as separate chunks
-#     chunks = re.split(r'(\s+)', text)
-#     transformed = []
 
-#     for chunk in chunks:
-#         if not chunk:
-#             # Empty string (beginning or end) – skip or turn into ''
-#             continue
-#         if chunk.isspace():
-#             # Turn each whitespace character into '_'
-#             transformed.append('_' * len(chunk))
-#         else:
-#             # Tag this chunk as a single token (naive approach)
-#             # If the chunk includes punctuation, pos_tag might label it differently,
-#             # but we'll keep it simple here.
-#             tagged = nltk.pos_tag([chunk])[0]  # returns (word, POS)
-#             word, pos = tagged
-#             # Take the first letter of the POS tag in lowercase
-#             letter_for_pos = pos[0].lower()
-#             # Repeat for each character in the chunk
-#             transformed.append(letter_for_pos * len(chunk))
-
-#     return ''.join(transformed)
-
-
-def transform_position(text):
+# Helper for transform_in_word_position
+def build_position_chars(max_positions: int = 64) -> str:
     """
-    Positional transformation:
-      - For each 'word' chunk (non-whitespace), replace each character with its 1-based position in that chunk.
-      - Whitespace becomes underscores.
-      - Example: " dog cat" -> "_123_123"
+    Return exactly *max_positions* distinct characters suitable for one-char
+    positional placeholders.
+
+    Starts with:
+        1–9, A–Z, a–z  (total 61)
+    then continues through the Unicode range beginning at U+00A1, adding every
+    printable, non-whitespace code point until the requested length is met.
     """
-    chunks = re.split(r'(\s+)', text)
-    transformed = []
+    base = list("123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+    if max_positions <= len(base):
+        return "".join(base[:max_positions])
+
+    cp = 0x00A1  # first printable char after Latin-1 controls/space
+    while len(base) < max_positions:
+        ch = chr(cp)
+        if ch.isprintable() and not ch.isspace():
+            base.append(ch)
+        cp += 1
+    return "".join(base)
+
+
+def transform_in_word_position(
+    text: str,
+    max_positions: int = 64,
+    token_file: str | Path = "tokenlist.txt",
+) -> str:
+    """
+    Encode every non-whitespace “word” in *text* by replacing its characters with
+    a single symbol that indicates 1-based position (wrapping modulo
+    *max_positions*).  Whitespace characters are mapped to '_' so the original
+    spacing remains visually evident.
+
+    A file named *token_file* is (re)written containing the full set of possible
+    symbols—one per line—in the exact order used for encoding.
+
+    Parameters
+    ----------
+    text : str
+        The source text to transform.
+    max_positions : int, default 64
+        The size of the lookup table before positions wrap.
+    token_file : str or Path, default "tokenlist.txt"
+        Destination path for the emitted token list.
+
+    Returns
+    -------
+    str
+        The transformed text.
+    """
+    # Build (or retrieve cached) lookup string
+    position_chars: str = build_position_chars(max_positions)
+    max_idx: int = len(position_chars)  # might differ if user supplied low N
+
+    # ── Emit tokenlist.txt ────────────────────────────────────────────────────
+    #   Each symbol → its own line, final newline added for POSIX friendliness.
+    Path(token_file).write_text("\n".join(position_chars) + "\n", encoding="utf-8")
+
+    # ── Transform the input text ─────────────────────────────────────────────
+    # Split so that whitespace chunks are preserved and re-encoded explicitly.
+    chunks = re.split(r"(\s+)", text)
+    encoded: list[str] = []
 
     for chunk in chunks:
-        if not chunk:
-            continue
+        if chunk == "":
+            continue  # artefact of split
         if chunk.isspace():
-            # Replace each space with an underscore
-            transformed.append('_' * len(chunk))
+            # Keep spacing, but show as underscores for visibility
+            encoded.append("_" * len(chunk))
         else:
-            # Replace each character by 1-based position
-            out = []
-            for i, _ in enumerate(chunk):
-                out.append(str(i+1))
-            transformed.append(''.join(out))
+            # Replace each char with its position marker
+            out = [
+                position_chars[(i - 1) % max_idx]  # 1-based index, wrap modulo
+                for i, _ in enumerate(chunk, start=1)
+            ]
+            encoded.append("".join(out))
 
-    return ''.join(transformed)
-
+    return "".join(encoded)
 
 def transform_file(filename, method):
     """
@@ -215,8 +237,8 @@ def transform_file(filename, method):
                 transformed_content = transform_cvp(file_content)
             elif method == 'part_of_speech':
                 transformed_content = transform_part_of_speech(file_content)
-            elif method == 'position':
-                transformed_content = transform_position(file_content)
+            elif method == 'in_word_position':
+                transformed_content = transform_in_word_position(file_content)
             else:
                 raise ValueError(f"Unknown method: {method}")
 
@@ -234,7 +256,7 @@ if __name__ == "__main__":
     parser.add_argument("input_file", help="The input text file to transform.")
     parser.add_argument(
         "--method", 
-        choices=["cvp", "part_of_speech", "position"],
+        choices=["cvp", "part_of_speech", "in_word_position"],
         default="cvp",
         help="Which transformation method to use."
     )
