@@ -224,6 +224,41 @@ def transform_in_word_position(
 
     return "".join(encoded)
 
+def transform_position_since_newline(
+    text: str,
+    max_positions: int = 64,
+    token_file: str | Path = "tokenlist.txt",
+) -> str:
+    """
+    Encode every non-newline character with a marker that represents its
+    1-based column index *since the last newline* (wrapping modulo
+    *max_positions*).  Newlines are left as-is and reset the column counter.
+
+    Other whitespace (spaces, tabs) becomes '_' to preserve layout visibility.
+    """
+    position_chars: str = build_position_chars(max_positions)
+    max_idx: int = len(position_chars)
+
+    # Emit (or overwrite) tokenlist.txt
+    Path(token_file).write_text("\n".join(position_chars) + "\n", encoding="utf-8")
+
+    out: list[str] = []
+    col: int = 0  # column index, 0 before first char
+
+    for ch in text:
+        if ch == "\n":
+            out.append("\n")
+            col = 0  # reset at newline
+        elif ch.isspace():
+            out.append("_")
+            col += 1
+        else:
+            col += 1
+            out.append(position_chars[(col - 1) % max_idx])
+
+    return "".join(out)
+
+
 def transform_file(filename, method):
     """
     Transforms a file in-place using the selected method.
@@ -239,6 +274,8 @@ def transform_file(filename, method):
                 transformed_content = transform_part_of_speech(file_content)
             elif method == 'in_word_position':
                 transformed_content = transform_in_word_position(file_content)
+            elif method == 'since_newline':
+                transformed_content = transform_position_since_newline(file_content)
             else:
                 raise ValueError(f"Unknown method: {method}")
 
@@ -256,7 +293,7 @@ if __name__ == "__main__":
     parser.add_argument("input_file", help="The input text file to transform.")
     parser.add_argument(
         "--method", 
-        choices=["cvp", "part_of_speech", "in_word_position"],
+        choices=["cvp", "part_of_speech", "in_word_position", "since_newline"],
         default="cvp",
         help="Which transformation method to use."
     )
