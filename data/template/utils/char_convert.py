@@ -7,6 +7,11 @@ from pathlib import Path
 
 nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
 
+TOKENS_FILE = "tokensfile.txt" # methods will write their alphabet here
+def emit_tokenlist(tokens):
+    """Write *tokens* (iterable of single-char strings) to TOKENS_FILE."""
+    Path(TOKENS_FILE).write_text("\n".join(tokens) + "\n", encoding="utf-8")
+
 def transform_cvp(text):
     """
     The original basic transformation:
@@ -30,7 +35,13 @@ def transform_cvp(text):
         else:
             # Whitespace, digits, etc.
             transformed.append('_')
-    return ''.join(transformed)
+
+    result = ''.join(transformed)
+
+    # Save tokenlist
+    emit_tokenlist(["1", "2", "3", "_"])
+
+    return result
 
 
 def transform_part_of_speech(text):
@@ -133,15 +144,10 @@ def transform_part_of_speech(text):
 
     transformed_text = ''.join(result)
 
-    # # Final sanity check
-    # if len(transformed_text) != text_length:
-    #     raise ValueError(
-    #         f"Length mismatch! Input length={text_length}, "
-    #         f"Output length={len(transformed_text)}"
-    #     )
+    # emit token list for this method
+    emit_tokenlist(sorted(set(pos_map.values()) | {"_", "\\n"}))
 
     return transformed_text
-
 
 # Helper for transform_in_word_position
 def build_position_chars(max_positions: int = 64) -> str:
@@ -170,7 +176,7 @@ def build_position_chars(max_positions: int = 64) -> str:
 def transform_in_word_position(
     text: str,
     max_positions: int = 64,
-    token_file: str | Path = "tokenlist.txt",
+    token_file: str | Path = TOKENS_FILE,
 ) -> str:
     """
     Encode every non-whitespace “word” in *text* by replacing its characters with
@@ -201,7 +207,7 @@ def transform_in_word_position(
 
     # ── Emit tokenlist.txt ────────────────────────────────────────────────────
     #   Each symbol → its own line, final newline added for POSIX friendliness.
-    Path(token_file).write_text("\n".join(position_chars) + "\n", encoding="utf-8")
+    emit_tokenlist(position_chars)
 
     # ── Transform the input text ─────────────────────────────────────────────
     # Split so that whitespace chunks are preserved and re-encoded explicitly.
@@ -227,7 +233,7 @@ def transform_in_word_position(
 def transform_position_since_newline(
     text: str,
     max_positions: int = 64,
-    token_file: str | Path = "tokenlist.txt",
+    token_file: str | Path = TOKENS_FILE,
 ) -> str:
     """
     Encode every non-newline character with a marker that represents its
@@ -240,7 +246,7 @@ def transform_position_since_newline(
     max_idx: int = len(position_chars)
 
     # Emit (or overwrite) tokenlist.txt
-    Path(token_file).write_text("\n".join(position_chars) + "\n", encoding="utf-8")
+    emit_tokenlist(position_chars)
 
     out: list[str] = []
     col: int = 0  # column index, 0 before first char
@@ -259,7 +265,7 @@ def transform_position_since_newline(
     return "".join(out)
 
 
-def transform_file(filename, method):
+def transform_file(filename, method, max_positions):
     """
     Transforms a file in-place using the selected method.
     """
@@ -273,9 +279,13 @@ def transform_file(filename, method):
             elif method == 'part_of_speech':
                 transformed_content = transform_part_of_speech(file_content)
             elif method == 'in_word_position':
-                transformed_content = transform_in_word_position(file_content)
+                transformed_content = transform_in_word_position(
+                    file_content, max_positions=max_positions
+                )
             elif method == 'since_newline':
-                transformed_content = transform_position_since_newline(file_content)
+                transformed_content = transform_position_since_newline(
+                    file_content, max_positions=max_positions
+                )
             else:
                 raise ValueError(f"Unknown method: {method}")
 
@@ -297,7 +307,13 @@ if __name__ == "__main__":
         default="cvp",
         help="Which transformation method to use."
     )
+    args = parser.add_argument(
+        "--max-positions",
+        type=int,
+        default=64,
+        help="Maximum distinct position markers before wrapping (used by "
+             "`in_word_position` and `since_newline`).",
+    )
     args = parser.parse_args()
-
-    transform_file(args.input_file, args.method)
+    transform_file(args.input_file, args.method, args.max_positions)
 
