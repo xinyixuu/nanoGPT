@@ -8,9 +8,16 @@ from pathlib import Path
 nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
 
 TOKENS_FILE = "tokensfile.txt" # methods will write their alphabet here
+
 def emit_tokenlist(tokens):
-    """Write *tokens* (iterable of single-char strings) to TOKENS_FILE."""
-    Path(TOKENS_FILE).write_text("\n".join(tokens) + "\n", encoding="utf-8")
+    """
+    Write *tokens* (iterable of single-char strings) to *TOKENS_FILE*.
+    """
+
+    Path(TOKENS_FILE).write_text(
+        ''.join(tokens),
+        encoding="utf-8",
+    )
 
 def transform_cvp(text):
     """
@@ -145,7 +152,7 @@ def transform_part_of_speech(text):
     transformed_text = ''.join(result)
 
     # emit token list for this method
-    emit_tokenlist(sorted(set(pos_map.values()) | {"_", "\\n"}))
+    emit_tokenlist(sorted(set(pos_map.values()) | {"_", "\n"}))
 
     return transformed_text
 
@@ -207,7 +214,7 @@ def transform_in_word_position(
 
     # ── Emit tokenlist.txt ────────────────────────────────────────────────────
     #   Each symbol → its own line, final newline added for POSIX friendliness.
-    emit_tokenlist(position_chars)
+    emit_tokenlist(["_"] + list(position_chars))
 
     # ── Transform the input text ─────────────────────────────────────────────
     # Split so that whitespace chunks are preserved and re-encoded explicitly.
@@ -246,7 +253,7 @@ def transform_position_since_newline(
     max_idx: int = len(position_chars)
 
     # Emit (or overwrite) tokenlist.txt
-    emit_tokenlist(position_chars)
+    emit_tokenlist(["_", "\n"] + list(position_chars))
 
     out: list[str] = []
     col: int = 0  # column index, 0 before first char

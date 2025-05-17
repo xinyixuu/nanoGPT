@@ -16,4 +16,8 @@ python3 ./utils/char_convert.py input.txt --method cvp
 echo "after conversion"
 wc -c input.txt
 
-python3 prepare.py --method char -t input.txt
+python3 prepare.py --method char -t tokensfile.txt
+
+cat tokensfile.txt
+
+python3 prepare.py --method char -t input.txt --reuse_chars
