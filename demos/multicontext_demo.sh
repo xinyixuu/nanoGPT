@@ -1,40 +1,61 @@
 #!/bin/bash
 # multicontext_demo.sh
 
+pushd data/shakespeare_char
+bash get_dataset.py
+popd
+
+pushd data/shakespeare_char_cvp/
+bash get_dataset.py
+popd
+
+pushd data/shakespeare_char_in_word_position/
+bash get_dataset.py
+popd
+
+pushd data/shakespeare_char_part_of_speech/
+bash get_dataset.py
+popd
+
+pushd data/shakespeare_char_since_newline/
+bash get_dataset.py
+popd
+
 python3 train.py \
   --training_mode multicontext \
   --multicontext \
+  --use_flash_lobo \
+  --use_flash_lobo_per_head \
   --multicontext_datasets \
-      ./data/shakespeare_char \
-      ./data/shakespeare_char_mobius \
-      ./data/shakespeare_char_pos_2 \
-      ./data/shakespeare_char_punct \
-      ./data/shakespeare_char_order \
-   --vocab_sizes 65 256 20 4 24 \
+      shakespeare_char \
+      shakespeare_char_cvp \
+      shakespeare_char_in_word_position \
+      shakespeare_char_part_of_speech \
+      shakespeare_char_since_newline \
+   --vocab_sizes 65 4 65 20 20 \
    --max_iters 3000 \
    --dropout 0.2 \
-   --save_major_ckpt_interval 250 \
    --use_rotary_embeddings \
+   --wte_weight_tying \
+   --out_dir ./fl_out_weight_tying \
    --compile
 
 python3 sample.py \
---out_dir ./out \
+--out_dir ./fl_out_weight_tying \
 --multicontext \
 --multicontext_datasets \
-    shakespeare_char \
-    shakespeare_char_mobius \
-    shakespeare_char_pos_2 \
-    shakespeare_char_punct \
-    shakespeare_char_order \
+  shakespeare_char \
+  shakespeare_char_cvp \
+  shakespeare_char_in_word_position \
+  shakespeare_char_part_of_speech \
+  shakespeare_char_since_newline \
 --multicontext_start \
-    "Second " \
-    "1234567" \
-    "aaaaaa " \
-    "212122_" \
-    "123456_" \
+    "Hello " \
+    "21221_" \
+    "12345_" \
+    "aaaaa " \
+    "123456" \
 --max_new_tokens \
-    256 \
---top_k \
-    1 10 \
+   --vocab_sizes 65 4 65 21 67 \
+--top_k 1 \
 --num_samples 1
-python3 sample.py --out_dir ./out --multicontext --multicontext_datasets  shakespeare_char shakespeare_char_mobius shakespeare_char_pos_2 shakespeare_char_punct shakespeare_char_order  --multicontext_start  "Second " "1234567" "aaaaaa " "212122_" "123456_" --max_new_tokens 512 --top_k 1 --num_samples 1
