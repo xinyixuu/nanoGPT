@@ -493,8 +493,18 @@ class Trainer:
                 # Here we use np.uint16 for most datasets:
                 self.train_data_dict[dataset] = np.memmap(os.path.join('data', dataset, 'train.bin'), dtype=np.uint16, mode='r')
                 self.val_data_dict[dataset]   = np.memmap(os.path.join('data', dataset, 'val.bin'), dtype=np.uint16, mode='r')
+
             # Also store total token counts per dataset.
             self.dataset_size_tokens = {d: len(self.train_data_dict[d]) for d in self.args.multicontext_datasets}
+            # tell the model we are in “multicontext” mode and pass
+            #         the (ordered) list of vocab sizes it needs.
+            self.model_args['multicontext'] = True
+            self.model_args['vocab_sizes'] = [
+                self.vocab_sizes[d] for d in self.args.multicontext_datasets
+            ]
+
+            # Let the first of the vocab sizes be used for calculation of btc
+            self.model_args['vocab_size'] = self.model_args['vocab_sizes'][0]
         if self.args.training_mode == 'multidataset':
             self.train_data_dict = {}
             self.val_data_dict = {}
@@ -1327,7 +1337,7 @@ class Trainer:
                     log_message+= f", {self.model.num_param}"
                     if self.args.multicontext_datasets:
                         for i, mc_dataset in enumerate(self.args.multicontext_datasets):
-                            self.mc_btc_train[mc_dataset] = self.vocab_sizes[dataset] / math.exp(training_losses[i].item())
+                            self.mc_btc_train[mc_dataset] = self.vocab_sizes[mc_dataset] / math.exp(training_losses[i].item())
                             log_message+= f", {self.underscore_abbr(mc_dataset)}"
                             log_message+= f" btc {self.mc_btc_train[mc_dataset]:.4f}"
                             log_message+= f", {self.underscore_abbr(mc_dataset)}"
