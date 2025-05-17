@@ -152,7 +152,7 @@ def transform_part_of_speech(text):
     transformed_text = ''.join(result)
 
     # emit token list for this method
-    emit_tokenlist(sorted(set(pos_map.values()) | {"_", "\n"}))
+    emit_tokenlist(sorted(set(pos_map.values()) | {" ", "_", "\n"}))
 
     return transformed_text
 
