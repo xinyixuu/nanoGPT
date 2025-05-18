@@ -1,0 +1,41 @@
+# optimizers.yaml
+---
+
+optimizer:
+- sgd
+- adam
+- adamw
+- adamax
+- radam
+- nadam
+- adagrad
+- rmsprop
+- rprop
+- sparseadam
+- asgd
+- lbfgs
+- orthoadam
+
+# conditional options
+sgd_nesterov:
+  conditions:
+    - ["optimizer", "sgd"]
+  options: [true, false]
+
+# Position encodings
+use_rotary_embeddings: [true]
+use_abs_pos_embeddings: [false]
+
+# base hyperparameters
+max_iters: [2500]
+n_layer: [6]
+n_head: [6]
+n_embd: [384]
+block_size: [256]
+device: ["cuda"]
+dtype: ["float16"]
+dataset: ["shakespeare_char"]
+
+# boolean flags
+compile: [true]
+

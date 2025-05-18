@@ -1,10 +1,11 @@
 # train_variations/optimizer_variants.py
 from __future__ import annotations
 
-import math
-
 import torch
-from torch.optim import SGD, Adagrad, AdamW, NAdam, RMSprop
+from torch.optim import (
+    Adam, AdamW, Adamax, Adagrad, ASGD, LBFGS, NAdam,
+    RAdam, RMSprop, SGD, SparseAdam
+)
 from torch.optim.optimizer import Optimizer
 
 
@@ -162,53 +163,101 @@ class OrthoAdam(Optimizer):
 
         return loss
 
+# Momentum / SGD family
+def _sgd(param_groups, args):
+    return SGD(param_groups,
+               lr=args.learning_rate,
+               momentum=args.sgd_momentum,
+               nesterov=args.sgd_nesterov,
+               weight_decay=args.weight_decay)
+
+# Adam family
+def _adam(param_groups, args):
+    return Adam(param_groups,
+                lr=args.learning_rate,
+                betas=(args.beta1, args.beta2),
+                eps=args.adamw_eps,
+                weight_decay=args.weight_decay)
 
 def _adamw(param_groups, args):
-    return AdamW(
-        param_groups,
-        lr=args.learning_rate,
-        betas=tuple(args.adamw_betas),
-        eps=args.adamw_eps,
-        weight_decay=args.adamw_weight_decay,
-    )
+    return AdamW(param_groups,
+                 lr=args.learning_rate,
+                 betas=(args.beta1, args.beta2),
+                 eps=args.adamw_eps,
+                 weight_decay=args.adamw_weight_decay)
 
+def _radam(param_groups, args):
+    return RAdam(param_groups,
+                 lr=args.learning_rate,
+                 betas=(args.beta1, args.beta2),
+                 eps=args.adamw_eps,
+                 weight_decay=args.weight_decay)
 
-def _sgd(param_groups, args):
-    return SGD(
-        param_groups,
-        lr=args.learning_rate,
-        momentum=args.sgd_momentum,
-        weight_decay=args.weight_decay,
-    )
-
-
-def _rmsprop(param_groups, args):
-    return RMSprop(
-        param_groups,
-        lr=args.learning_rate,
-        alpha=args.rmsprop_alpha,
-        weight_decay=args.weight_decay,
-    )
-
-
-def _adagrad(param_groups, args):
-    return Adagrad(
-        param_groups,
-        lr=args.learning_rate,
-        lr_decay=args.adagrad_lr_decay,
-        weight_decay=args.weight_decay,
-    )
-
+def _adamax(param_groups, args):
+    return Adamax(param_groups,
+                  lr=args.learning_rate,
+                  betas=(args.beta1, args.beta2),
+                  eps=args.adamw_eps,
+                  weight_decay=args.weight_decay)
 
 def _nadam(param_groups, args):
-    return NAdam(
+    return NAdam(param_groups,
+                 lr=args.learning_rate,
+                 betas=(args.beta1, args.beta2),
+                 eps=args.nadam_eps,
+                 weight_decay=args.weight_decay)
+
+# RMS / Ada family
+def _rmsprop(param_groups, args):
+    return RMSprop(param_groups,
+                   lr=args.learning_rate,
+                   alpha=args.rmsprop_alpha,
+                   eps=args.adamw_eps,
+                   weight_decay=args.weight_decay)
+
+def _rprop(param_groups, args):
+    """
+    Plain PyTorch Rprop.  We expose the multiplicative factors (etas) and
+    re‑use them for step‑size bounds for simplicity.
+    """
+    return torch.optim.Rprop(
         param_groups,
         lr=args.learning_rate,
-        betas=tuple(args.nadam_betas),
-        eps=args.nadam_eps,
-        weight_decay=args.weight_decay,
+        etas=(args.rprop_eta_min, args.rprop_eta_max),
+        step_sizes=(args.rprop_eta_min, args.rprop_eta_max),
     )
 
+def _adagrad(param_groups, args):
+    return Adagrad(param_groups,
+                   lr=args.learning_rate,
+                   lr_decay=args.adagrad_lr_decay,
+                   eps=args.adamw_eps,
+                   weight_decay=args.weight_decay)
+
+def _sparseadam(param_groups, args):
+    return SparseAdam(param_groups,
+                      lr=args.learning_rate,
+                      betas=(args.beta1, args.beta2),
+                      eps=args.adamw_eps)
+
+# Second-order / others
+def _asgd(param_groups, args):
+    return ASGD(param_groups,
+                lr=args.learning_rate,
+                lambd=args.asgd_lambda,
+                alpha=args.asgd_alpha,
+                t0=args.asgd_t0,
+                weight_decay=args.weight_decay)
+
+def _lbfgs(param_groups, args):
+    return LBFGS(param_groups,
+                 lr=args.learning_rate,
+                 max_iter=args.lbfgs_max_iter,
+                 max_eval=args.lbfgs_max_eval,
+                 tolerance_grad=args.lbfgs_tol_grad,
+                 tolerance_change=args.lbfgs_tol_change,
+                 history_size=args.lbfgs_history,
+                 line_search_fn=args.lbfgs_line_search)
 
 # ---- Ortho optimisers ------------------------------------------------
 def _orthoadam(param_groups, args):
@@ -225,11 +274,20 @@ def _orthoadam(param_groups, args):
 
 
 optimizer_dictionary: dict[str, callable] = {
-    "adamw": _adamw,
+    # From pytorch
     "sgd": _sgd,
-    "rmsprop": _rmsprop,
-    "adagrad": _adagrad,
+    "adam": _adam,
+    "adamw": _adamw,
+    "adamax": _adamax,
+    "radam": _radam,
     "nadam": _nadam,
+    "adagrad": _adagrad,
+    "rmsprop": _rmsprop,
+    "rprop": _rprop,
+    "sparseadam": _sparseadam,
+    "asgd": _asgd,
+    "lbfgs": _lbfgs,
+    # paper-driven implementations
     "orthoadam": _orthoadam,
 }
 
