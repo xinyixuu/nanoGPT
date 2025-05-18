@@ -90,10 +90,32 @@ def parse_args():
             "nadam",
             "adagrad",
             "rmsprop",
+            "rprop",
             "sparseadam",
             "asgd",
             "lbfgs",
+            "adabelief",
             "orthoadam",
+            "adan",
+            "apollo_adamw",
+            "qhadam",
+            "yogi",
+            "adamp",
+            "lion",
+            "adafactor",
+            "accsgd",
+            "adabound",
+            "adamod",
+            "aggmo",
+            "diffgrad",
+            "lamb",
+            "novograd",
+            "pid",
+            "qhm",
+            "sgdp",
+            "sgdw",
+            "shampoo",
+            "swats",
             ]
 
     training_group.add_argument("--optimizer", type=str, default="adamw",
@@ -134,8 +156,49 @@ def parse_args():
     training_group.add_argument("--adadelta_rho", type=float, default=0.9, help="Coefficient used for computing running averages of gradients in Adadelta.")
     # --------  Adamax  ------------------------------------------------
     training_group.add_argument("--adamax_betas", type=float, nargs=2, default=[0.9, 0.999], help="Betas for Adamax optimizer.")
+    # ---------- More Modern research optimisers ----------
+    # AdaFactor -----------------------------------------------------------
+    training_group.add_argument("--adafactor_decay_rate", type=float, default=-0.8, help="AdaFactor: decay-rate power (−0.8 is paper default).")
+    training_group.add_argument("--adafactor_relative_step", action=argparse.BooleanOptionalAction, default=True, help="AdaFactor: use relative-step schedule.")
+    # AdaBelief -----------------------------------------------------------
+    training_group.add_argument("--adabelief_eps", type=float, default=1e-16, help="AdaBelief epsilon.")
+    # Adan ---------------------------------------------------------------
+    training_group.add_argument("--adan_wd", type=float, default=0.0, help="Adan weight decay.")
+    training_group.add_argument("--adan_eps", type=float, default=1e-8, help="Adan epsilon.")
+    # Apollo-Adamw low-rank specific knobs
+    training_group.add_argument("--apollo_rank", type=int, default=2, help="Low-rank adaptor rank (k).")
+    training_group.add_argument("--apollo_proj", type=str, default="random", choices=["random", "hadamard", "learned"], help="Type of projection matrix used by Apollo.")
+    training_group.add_argument("--apollo_scale", type=int, default=128, help="Scale constant applied to projection (see paper).")
+    training_group.add_argument("--apollo_update_proj_gap", type=int, default=200, help="# of optimisation steps between projector refresh.")
+    training_group.add_argument("--apollo_proj_type", type=str, default="std", choices=["std", "gaussian", "rademacher"], help="Distribution for generating the projection matrix.")
+    training_group.add_argument("--apollo_apply_to_all", action=argparse.BooleanOptionalAction, default=False, help="If set, apply low-rank Apollo updates to *all* " "parameters instead of only tensors tagged with " "`.lowrank = True`.")
 
 
+    # from torch-optimizer (common)
+    training_group.add_argument("--opt_betas", type=float, nargs=2, default=[0.9, 0.999],
+                                help="Betas used by Adam-family / etc.")
+    training_group.add_argument("--opt_eps",   type=float, default=1e-8)
+    training_group.add_argument("--opt_weight_decay", type=float, default=0.0)
+
+    # AdaBound / AdaMod
+    training_group.add_argument("--adabound_final_lr", type=float, default=0.1)
+    training_group.add_argument("--adabound_gamma",    type=float, default=1e-3)
+    training_group.add_argument("--adamod_beta3",      type=float, default=0.999)
+
+    # Lamb
+    training_group.add_argument("--lamb_clamp",  type=float, default=10.0)
+    training_group.add_argument("--lamb_adam",   action=argparse.BooleanOptionalAction, default=False)
+    training_group.add_argument("--lamb_debias", action=argparse.BooleanOptionalAction, default=False)
+
+    # Shampoo
+    training_group.add_argument("--shampoo_momentum", type=float, default=0.0)
+    training_group.add_argument("--shampoo_eps", type=float, default=1e-4)
+    training_group.add_argument("--shampoo_update_freq", type=int, default=1)
+
+    # ASGD-like PID
+    training_group.add_argument("--pid_momentum",  type=float, default=0.0)
+    training_group.add_argument("--pid_integral",  type=float, default=5.0)
+    training_group.add_argument("--pid_derivative",type=float, default=10.0)
 
     # Learning rate scheduler-specific arguments
     scheduler_variations = ["none",
