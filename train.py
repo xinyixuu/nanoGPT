@@ -13,6 +13,8 @@ import time
 from train_variations.optimizer_variants import optimizer_dictionary
 
 from utils.gpu_monitoring import get_gpu_memory_info
+from torch.cuda import reset_peak_memory_stats, max_memory_allocated
+
 from utils.model_info import (
     print_summary,
     print_module_structure,
@@ -70,6 +72,7 @@ class Trainer:
         self.grad_norm = None
         self.grad_std = None
         self.tokens_trained = 0
+        self.peak_gpu_usage = 0.0
 
         # If using multiple datasets, track tokens trained per dataset.
         if self.args.dataset_list is not None:
@@ -136,6 +139,9 @@ class Trainer:
         torch.backends.cudnn.allow_tf32 = True
 
         self.device_type = 'cuda' if 'cuda' in self.args.device else 'cpu'
+        if self.device_type == 'cuda':
+            reset_peak_memory_stats(self.device)
+
         self.ptdtype = {"bfloat16" : torch.bfloat16, "float16" : torch.float16, "float32" : torch.float32}[self.args.dtype]
         self.ctx = nullcontext() if self.device_type == 'cpu' else torch.amp.autocast(device_type=self.device_type, dtype=self.ptdtype)
 
@@ -946,6 +952,8 @@ class Trainer:
             args.append(self.lr)
             args.append(self.args.batch_size)
             args.append(self.tokens_trained)
+            if hasattr(self, "peak_gpu_usage"):
+                args.append(self.peak_gpu_usage / (1024 ** 2))
             if self.args.gns_type is not None:
                 args.append(self.gns)
             writer.writerow(args)
@@ -1017,6 +1025,12 @@ class Trainer:
                         self.gns = self.gns_ema.get_gns()
 
 
+                    if self.device_type == 'cuda':
+                        self.peak_gpu_usage = max(
+                            self.peak_gpu_usage,
+                            max_memory_allocated(self.device)
+                        )
+
                     self.vram_allocated = get_gpu_memory_info(info_type='used') if self.args.device != "cpu" else 0
                     if self.args.dataset_list is not None:
                         # Print loss for each dataset if multiple datasets are used
@@ -1073,9 +1087,17 @@ class Trainer:
                             self.iter_num_best_val_loss = self.iter_num
                             self.best_val_loss = losses['val']
                             # Save best validation loss
+                            peak_mb = self.peak_gpu_usage / (1024 ** 2)
                             with open(os.path.join(self.args.out_dir, 'best_val_loss_and_iter.txt'), "w") as best_loss_file:
                                 chance_ratio = self.model_args['vocab_size']/math.exp(self.best_val_loss.item())
-                                best_loss_file.write(f"{self.best_val_loss.item()}, {self.iter_num}, {self.model.num_param}, {chance_ratio:.3e}, {chance_ratio/self.model.num_param:.3e}")
+                                best_loss_file.write(
+                                    f"{self.best_val_loss.item()},"
+                                    f" {self.iter_num},"
+                                    f" {self.model.num_param},"
+                                    f" {chance_ratio:.3e},"
+                                    f" {chance_ratio/self.model.num_param:.3e},"
+                                    f" {peak_mb:.1f}"
+                                )
                             # Reset early exit counter
                             num_steps_with_worse_loss = 0
                         if self.iter_num > 0:

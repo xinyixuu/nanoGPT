@@ -15,6 +15,14 @@ from rich.table import Table
 LOG_DIR = Path("exploration_logs")
 LOG_DIR.mkdir(exist_ok=True)
 METRICS_FILENAME = "best_val_loss_and_iter.txt"
+METRIC_KEYS = [
+    "best_val_loss",
+    "best_val_iter",
+    "num_params",
+    "better_than_chance",
+    "btc_per_param",
+    "peak_gpu_mb",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -143,14 +151,14 @@ def read_metrics(out_dir: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Metrics file not found: {path}")
     line = path.read_text().strip()
-    loss, iteration, params, btc, btc_pp = [p.strip() for p in line.split(',')]
-    return {
-        'best_val_loss': float(loss),
-        'best_val_iter': int(iteration),
-        'num_params': int(params),
-        'better_than_chance': float(btc),
-        'btc_per_param': float(btc_pp),
-    }
+    parts = [p.strip() for p in line.split(',')]
+    if len(parts) not in (5, 6):
+        raise ValueError(f"Unexpected metrics format in {path}: {line}")
+    if len(parts) == 5:                 # old run → pad missing GPU column
+        parts.append("nan")
+
+    casts = [float, int, int, float, float, float]
+    return {k: typ(v) for k, typ, v in zip(METRIC_KEYS, casts, parts)}
 
 
 def completed_runs(log_file: Path) -> set[str]:
@@ -232,10 +240,7 @@ def run_experiment(
     try:
         metrics = read_metrics(str(combo['out_dir']))
     except Exception:
-        metrics = {k: float('nan') for k in (
-            'best_val_loss','best_val_iter','num_params',
-            'better_than_chance','btc_per_param'
-        )}
+        metrics = {k: float("nan") for k in METRIC_KEYS}
 
     append_log(log_file, run_name, combo, metrics)
 
