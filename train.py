@@ -73,6 +73,8 @@ class Trainer:
         self.grad_std = None
         self.tokens_trained = 0
         self.peak_gpu_usage = 0.0
+        self.total_time_ms: float = 0.0   # cumulative run-time (ms)
+        self.iter_latency_avg: float = 0  # running mean ms / iteration
 
         # If using multiple datasets, track tokens trained per dataset.
         if self.args.dataset_list is not None:
@@ -956,6 +958,7 @@ class Trainer:
                 args.append(self.peak_gpu_usage / (1024 ** 2))
             if self.args.gns_type is not None:
                 args.append(self.gns)
+            args.append(self.iter_latency_avg)
             writer.writerow(args)
 
 
@@ -1096,7 +1099,8 @@ class Trainer:
                                     f" {self.model.num_param},"
                                     f" {chance_ratio:.3e},"
                                     f" {chance_ratio/self.model.num_param:.3e},"
-                                    f" {peak_mb:.1f}"
+                                    f" {peak_mb:.1f}",
+                                    f" {self.iter_latency_avg:.1f}",
                                 )
                             # Reset early exit counter
                             num_steps_with_worse_loss = 0
@@ -1195,6 +1199,9 @@ class Trainer:
                 t1 = time.time()
                 dt = t1 - t0
                 t0 = t1
+
+                self.total_time_ms += dt * 1000.0
+                self.iter_latency_avg = self.total_time_ms / (self.iter_num + 1)
 
 
                 self.iter_num += 1

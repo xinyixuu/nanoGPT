@@ -22,6 +22,7 @@ METRIC_KEYS = [
     "better_than_chance",
     "btc_per_param",
     "peak_gpu_mb",
+    "iter_latency_avg",
 ]
 
 
