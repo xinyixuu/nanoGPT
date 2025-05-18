@@ -158,8 +158,15 @@ def parse_args():
     training_group.add_argument("--adamax_betas", type=float, nargs=2, default=[0.9, 0.999], help="Betas for Adamax optimizer.")
     # ---------- More Modern research optimisers ----------
     # AdaFactor -----------------------------------------------------------
-    training_group.add_argument("--adafactor_decay_rate", type=float, default=-0.8, help="AdaFactor: decay-rate power (−0.8 is paper default).")
-    training_group.add_argument("--adafactor_relative_step", action=argparse.BooleanOptionalAction, default=True, help="AdaFactor: use relative-step schedule.")
+    training_group.add_argument("--adafactor_eps_row", type=float, default=1e-30, help="Row-wise ε₂ for Adafactor.")
+    training_group.add_argument("--adafactor_eps_col", type=float, default=1e-3, help="Column-wise ε₂ for Adafactor.")
+    training_group.add_argument("--adafactor_clip", type=float, default=1.0, help="Gradient clipping threshold (χ) for Adafactor.")
+    training_group.add_argument("--adafactor_decay", type=float, default=-0.8, help="Running-average decay rate (φ) in Adafactor.")
+    training_group.add_argument("--adafactor_beta1", type=float, default=-1.0, help="β₁ for momentum in Adafactor (<0 to disable momentum).")
+    training_group.add_argument("--adafactor_scale_param", action=argparse.BooleanOptionalAction, default=True, help="Enable parameter-scale adaptive LR.")
+    training_group.add_argument("--adafactor_relative_step", action=argparse.BooleanOptionalAction, default=True, help="Use relative-step schedule if learning rate is not supplied.")
+    training_group.add_argument("--adafactor_warmup_init", action=argparse.BooleanOptionalAction, default=False, help="Use warm-up initialisation of learning rate.")
+
     # AdaBelief -----------------------------------------------------------
     training_group.add_argument("--adabelief_eps", type=float, default=1e-16, help="AdaBelief epsilon.")
     # Adan ---------------------------------------------------------------

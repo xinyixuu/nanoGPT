@@ -460,12 +460,23 @@ def _adamp(param_groups, args):
 
 def _adafactor(param_groups, args):
     _needs_topt()
+    # When lr is None Adafactor uses the “relative step” schedule from
+    # the paper (√t scaling + warm-up).  If the user provided
+    # --learning_rate we forward it, otherwise stay in the default mode.
+    lr_kw = {} if args.learning_rate is None else {"lr": args.learning_rate}
     return topt.Adafactor(
-        param_groups,  # lr=None ⇒ relative step
-        eps=(1e-30, 1e-3),
-        clip_threshold=1.0,
+        param_groups,
+        **lr_kw,
+        eps2=(args.adafactor_eps_row, args.adafactor_eps_col),
+        clip_threshold=args.adafactor_clip,
+        decay_rate=args.adafactor_decay,
+        beta1=(None if args.adafactor_beta1 < 0 else args.adafactor_beta1),
         weight_decay=args.opt_weight_decay,
+        scale_parameter=args.adafactor_scale_param,
+        relative_step=args.adafactor_relative_step,
+        warmup_init=args.adafactor_warmup_init,
     )
+
 
 
 def _aggmo(param_groups, args):
