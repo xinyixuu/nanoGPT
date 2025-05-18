@@ -45,6 +45,154 @@ def _needs_topt():
             "➡  pip install torch-optimizer"
         )
 
+# -------------------------------------------------------------------------
+#  Lamb-DiffGrad  — layer-wise trust-ratio  ×  element-wise diff-friction
+# -------------------------------------------------------------------------
+class LambDiffGrad(Optimizer):
+    r"""
+    Implementation notes
+    --------------------
+    • Updates are Adam-style first/second moments  m, v
+    • diffGrad friction  ξ = 1 / (1 + exp(-|g_t - g_{t-1}|))   (AbsSig)
+      — element-wise:  big change ⇒ ξ≈1  (free step) ;
+                       small change ⇒ ξ→0.5 (high friction)
+    • Layer trust-ratio   τ = clamp(‖w‖ / (‖Δ‖ + 1e-12),  0,  clamp_value)
+
+        Δ = ξ * m̂ / (√v̂ + eps)
+
+      The final step is   w ← w  − lr * τ * Δ
+    • AdamW-style decoupled weight decay (before trust-ratio)
+    """
+    def __init__(
+        self,
+        params,
+        *,
+        lr: float = 1e-3,
+        betas: tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-6,
+        weight_decay: float = 0.0,
+        clamp_value: float = 10.0,
+        debias: bool = True,
+    ):
+        if lr <= 0:
+            raise ValueError("lr must be positive")
+        if clamp_value <= 0:
+            raise ValueError("clamp_value must be positive")
+
+        defaults = dict(
+            lr=lr,
+            betas=betas,
+            eps=eps,
+            weight_decay=weight_decay,
+            clamp_value=clamp_value,
+            debias=debias,
+        )
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            beta1, beta2 = group["betas"]
+            lr = group["lr"]
+            eps = group["eps"]
+            wd = group["weight_decay"]
+            clamp_value = group["clamp_value"]
+            debias = group["debias"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+
+                state = self.state[p]
+                # State init -------------------------------------------------
+                if not state:
+                    state["step"] = 0
+                    # Adam moments (float32 for numerical stability)
+                    state["exp_avg"] = torch.zeros_like(p, dtype=torch.float32)
+                    state["exp_avg_sq"] = torch.zeros_like(p, dtype=torch.float32)
+                    # diffGrad needs previous gradient
+                    state["prev_grad"] = torch.zeros_like(p)
+
+                exp_avg: torch.Tensor = state["exp_avg"]
+                exp_avg_sq: torch.Tensor = state["exp_avg_sq"]
+                prev_g: torch.Tensor = state["prev_grad"]
+
+                state["step"] += 1
+                t = state["step"]
+
+                # Cast grads to float32 for the moment math
+                g_fp32 = g.float()
+                # diffGrad friction coefficient  ξ  -------------------------
+                diff = (prev_g - g_fp32).abs()
+                xi = 1.0 / (1.0 + torch.exp(-diff))          # range (0.5, 1)
+
+                # Adam moments ---------------------------------------------
+                exp_avg.mul_(beta1).addcmul_(g_fp32, xi, value=1 - beta1)
+                exp_avg_sq.mul_(beta2).addcmul_(g_fp32, g_fp32, value=1 - beta2)
+
+                if debias:
+                    bias_c1 = 1 - beta1**t
+                    bias_c2 = 1 - beta2**t
+                    m_hat = exp_avg / bias_c1
+                    v_hat = exp_avg_sq / bias_c2
+                else:
+                    m_hat, v_hat = exp_avg, exp_avg_sq
+
+                update = m_hat / (v_hat.sqrt().add(eps))      # Adam step
+                update.mul_(xi)                               # ← diffGrad term
+
+                # Decoupled weight-decay *before* trust ratio
+                if wd != 0.0:
+                    p.data.mul_(1.0 - lr * wd)
+
+                # Layer-wise trust ratio -----------------------------------
+                w_norm = p.data.norm(p=2)
+                u_norm = update.norm(p=2)
+                trust_ratio = (
+                    w_norm / (u_norm + 1e-12)
+                    if (w_norm > 0 and u_norm > 0)
+                    else 1.0
+                )
+                trust_ratio = trust_ratio.clamp(max=clamp_value)
+
+                p.data.add_(update, alpha=-lr * trust_ratio)
+
+                # store current grad for next diffGrad step
+                state["prev_grad"].copy_(g_fp32)
+
+        return loss
+
+
+# --- factory -------------------------------------------------------------
+def _lambdiff(param_groups, args):
+    """
+    Instantiate the hybrid LambDiffGrad optimiser.
+
+    Re-uses generic CLI flags:
+        --learning_rate
+        --opt_betas
+        --opt_eps
+        --opt_weight_decay
+        --lamb_clamp         (max trust-ratio, default 10)
+        --lamb_debias        (store bias-corr moments)
+    """
+    betas = tuple(args.opt_betas) if hasattr(args, "opt_betas") else (args.beta1, args.beta2)
+    return LambDiffGrad(
+        param_groups,
+        lr=args.learning_rate,
+        betas=betas,
+        eps=args.opt_eps,
+        weight_decay=args.opt_weight_decay,
+        clamp_value=args.lamb_clamp,
+        debias=args.lamb_debias,
+    )
+
 
 class OrthoAdam(Optimizer):
     """
@@ -703,6 +851,8 @@ optimizer_dictionary: dict[str, callable] = {
     "lbfgs": _lbfgs,
     # paper-driven implementations
     "orthoadam": _orthoadam,
+    # hybrids
+    "lambdiff": _lambdiff,
     # community contributed
     "lion": _lion,
     # from adabelief_pytorch

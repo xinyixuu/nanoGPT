@@ -109,6 +109,7 @@ def parse_args():
             "aggmo",
             "diffgrad",
             "lamb",
+            "lambdiff",
             "novograd",
             "pid",
             "qhm",

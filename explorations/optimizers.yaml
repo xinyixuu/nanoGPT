@@ -19,6 +19,8 @@ optimizer:
 - adabelief
 # paper-driven implementations
 - orthoadam
+# hybrids
+- lambdiff
 # pytorch optimizer
 - qhadam
 - yogi
