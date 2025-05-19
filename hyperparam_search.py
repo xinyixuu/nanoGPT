@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Tuple
 import torch
 import yaml
 
+import ast
+
 
 # ───────────────────────── helpers ──────────────────────────
 def dict_to_cli(d: Dict[str, Any]) -> List[str]:
@@ -124,6 +126,13 @@ def main():
     )
     ap.add_argument("--results_file", default="sweep_log.yaml")
     ap.add_argument("--spawn_subprocess", action="store_true")
+    ap.add_argument(
+            "--override_cfg",
+            nargs="*", # Allows zero or more KEY=VALUE strings
+            metavar="KEY=VALUE",
+            default=[],
+            help="Override baseline config settings from orig_settings before starting the search. Example: --override_cfg max_iters=10000 learning_rate=0.0005 flag=True name='my_exp' path=data/run")
+
     args = ap.parse_args()
 
     # match increments to param list
@@ -139,6 +148,39 @@ def main():
     log_path = Path(args.results_file)
     log = load_log(log_path)
 
+    # Helper function to apply overrides to a given config dictionary
+    def _apply_overrides_to_active_config(config_dict: Dict[str, Any], overrides: List[str], context_msg: str):
+        if not overrides: # No overrides to apply
+            return
+
+        print(f"[CONFIG_OVERRIDE] Checking {len(overrides)} overrides for {context_msg}...")
+        effective_overrides = 0
+        for item in args.override_cfg:
+            try:
+                key, value_str = item.split("=", 1)
+            except ValueError:
+                sys.exit(f"Error: Invalid override format '{item}'. Expected KEY=VALUE.")
+
+            try:
+                # Safely evaluate the value string as a Python literal.
+                # Handles numbers (int, float), booleans (True, False), strings (e.g., 'text', "text"),
+                # lists (e.g., "[1, 2]"), dicts (e.g., "{'a': 1}").
+                value = ast.literal_eval(value_str)
+            except (ValueError, SyntaxError):
+                # If ast.literal_eval fails (e.g., for an unquoted string like 'cpu' or 'data/my_path'),
+                # treat the value as a plain string.
+                value = value_str
+
+            original_value = config_dict.get(key)
+            if key not in config_dict or original_value != value:
+                print(f"  Applying to active config: {key} = {repr(value)} (was: {repr(original_value) if key in config_dict else 'N/A (new key)'}, type: {type(value).__name__})")
+                config_dict[key] = value
+                effective_overrides += 1
+            else:
+                print(f"  Skipping (no change): {key} = {repr(value)}")
+        if effective_overrides > 0:
+            print(f"[CONFIG_OVERRIDE] Applied {effective_overrides} effective overrides to {context_msg}.")
+
     # Initialise log structure if new
     log.setdefault("baseline_config", deepcopy(baseline_cfg_master))
     log.setdefault("iterations", [])
@@ -151,9 +193,17 @@ def main():
         base_score = last["baseline_metrics"]["score"]
         base_params = last["baseline_metrics"]["params"]
         cur_iter = last["iter"] + 1
+        # Apply overrides to the resumed configuration for the current session
+        _apply_overrides_to_active_config(baseline_cfg, args.override_cfg, "resumed baseline_cfg")
     else:
+        # For a new sweep, start with baseline_config (which is a copy of baseline_cfg_master)
         baseline_cfg = deepcopy(log["baseline_config"])
+        # Apply overrides to this initial config before the first measurement
+        _apply_overrides_to_active_config(baseline_cfg, args.override_cfg, "initial baseline_cfg for new sweep")
+
         print("[BASELINE] measuring initial config …")
+        # run_fn receives a deepcopy of the (potentially overridden) baseline_cfg
+
         base_loss, base_params, base_best_iter = run_fn(deepcopy(baseline_cfg))
         base_score = 1 / math.exp(base_loss)
         log["iterations"].append(
@@ -223,7 +273,14 @@ def main():
                 avg_loss = -math.log(avg_score)
                 d_score = avg_score - base_score
                 d_param = nparam - base_params
-                eff = d_score / d_param if d_param else 0.0
+                # Handle zero-cost changes:
+                if d_param != 0:
+                     eff = d_score / d_param
+                elif d_score > 0:
+                    eff = math.inf # Positive improvement at zero cost is infinitely efficient
+                else:
+                     eff = 0.0      # No improvement (or a loss) at zero cost
+
 
                 cand = {
                     "param": pname,
@@ -240,8 +297,15 @@ def main():
                 }
                 candidates.append(cand)
 
-                if eff > 0 and (best_choice is None or eff > best_choice[0]):
-                    best_choice = (eff, cand)
+                if eff > 0:
+                    if best_choice is None:
+                        best_choice = (eff, cand)
+                    else:
+                        # Replace if eff is strictly better, OR if eff is Inf and equal, use delta_score as a tie-breaker.
+                        old_eff, old_cand = best_choice
+                        if (eff > old_eff) or (math.isinf(eff) and eff == old_eff and cand['delta_score'] > old_cand['delta_score']):
+                             best_choice = (eff, cand)
+
 
         # -- pick or stop ---------------------------------------
         if best_choice is None:

@@ -680,10 +680,15 @@ class InfiniteHeadAttention(nn.Module):
         self.c_attn_v = self.linear_variant_v(self.n_embd, self.n_head * self.n_v_head_dim, config, bias=config.bias)
 
         if self.use_concat_heads:
+            print("use_concat_heads")
             self.c_proj = self.linear_variant_attn_proj(
                 self.n_head * self.n_v_head_dim, self.n_embd, config, bias=config.bias
             )
+        elif self.n_cproj==1:
+            print("use n_cproj 1", self.n_v_head_dim, self.n_embd)
+            self.c_proj = self.linear_variant_attn_proj(self.n_v_head_dim, self.n_embd, config, bias=config.bias)
         else:
+            print("use_cproj_list")
             self.c_proj_list = nn.ModuleList(
                 [
                     self.linear_variant_attn_proj(self.n_v_head_dim, self.n_embd, config, bias=config.bias)
@@ -707,14 +712,14 @@ class InfiniteHeadAttention(nn.Module):
         self.rotary_emb_k = None
 
         if config.use_rotary_embeddings:
-            # Note: size is the size of the head dimension
+            # Note: "size" here is the size of the qk head dimension
             if config.rope_variant == "soap":
                 self.sym_rot_num_angles = config.sym_rot_num_angles
-                self.rotary_emb_q = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
-                self.rotary_emb_k = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
+                self.rotary_emb_q = SymmetricalOverlapAngularPositions(config, size=self.n_qk_head_dim, num_angles=self.sym_rot_num_angles)
+                self.rotary_emb_k = SymmetricalOverlapAngularPositions(config, size=self.n_qk_head_dim, num_angles=self.sym_rot_num_angles)
             elif config.rope_variant == "rope":
-                self.rotary_emb_q = RotaryEmbedding(config, size=config.n_embd // self.n_head)
-                self.rotary_emb_k = RotaryEmbedding(config, size=config.n_embd // self.n_head)
+                self.rotary_emb_q = RotaryEmbedding(config, size=self.n_qk_head_dim)
+                self.rotary_emb_k = RotaryEmbedding(config, size=self.n_qk_head_dim)
 
         # qk norm factor
         if self.use_qk_norm_scale:
@@ -819,6 +824,10 @@ class InfiniteHeadAttention(nn.Module):
             # (B, nh, T, v_dim) → (B, T, nh*v_dim); avoid extra .contiguous()
             # flatten heads → (B, T, n_head * n_v_head_dim)
             y = y.transpose(1, 2).contiguous().view( B, T, self.n_head * self.n_v_head_dim)
+            y = self.c_proj(y)
+        elif self.n_cproj == 1:
+            # Sum heads first: (B, nh, T, v_dim) → (B, T, v_dim)
+            y = y.sum(dim=1)
             y = self.c_proj(y)
         else:
             # Sum heads first: (B, nh, T, v_dim) → (B, T, v_dim)

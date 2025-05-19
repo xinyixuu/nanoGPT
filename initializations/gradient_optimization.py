@@ -8,7 +8,7 @@ from tqdm import tqdm
 import argparse
 
 # --------------------------------------------------------------------
-# 1. Measure Crowding: compute the minimum angle distribution 
+# 1. Measure Crowding: compute the minimum angle distribution
 #    after each vector is added, using radians internally.
 # --------------------------------------------------------------------
 def compute_min_angle_distribution(vectors: torch.Tensor):
@@ -54,7 +54,7 @@ def compute_min_angle_distribution(vectors: torch.Tensor):
 # --------------------------------------------------------------------
 def optimize_angles(vectors: torch.Tensor, iterations=100, lr=0.01, print_frequency=10):
     """
-    Optimizes the angles between vectors to be as close to 90 degrees (π/2 radians) 
+    Optimizes the angles between vectors to be as close to 90 degrees (π/2 radians)
     as possible, with progress bar and time estimates.
 
     Args:
