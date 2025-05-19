@@ -153,12 +153,8 @@ def read_metrics(out_dir: str) -> dict:
         raise FileNotFoundError(f"Metrics file not found: {path}")
     line = path.read_text().strip()
     parts = [p.strip() for p in line.split(',')]
-    if len(parts) not in (5, 6):
-        raise ValueError(f"Unexpected metrics format in {path}: {line}")
-    if len(parts) == 5:                 # old run → pad missing GPU column
-        parts.append("nan")
 
-    casts = [float, int, int, float, float, float]
+    casts = [float, int, int, float, float, float, float]
     return {k: typ(v) for k, typ, v in zip(METRIC_KEYS, casts, parts)}
 
 

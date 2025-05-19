@@ -442,6 +442,7 @@ def _adagrad(param_groups, args):
         lr_decay=args.adagrad_lr_decay,
         eps=args.adamw_eps,
         weight_decay=args.weight_decay,
+        foreach=False,
     )
 
 

@@ -31,6 +31,11 @@ def parse_args():
     training_group.add_argument('--eval_iters', default=200, type=int)
     training_group.add_argument('--eval_only', default=False, action=argparse.BooleanOptionalAction)
 
+    # latency / ETA estimate options
+    training_group.add_argument('--time_remaining_mode', choices=['iteration', 'eval_cycle'], default='eval_cycle', help="iteration - estimates only based on training iterations -- use if doing one eval at the end; eval_cycle -- use if doing multiple evals, will use a single cycle for the estimation.")
+    training_group.add_argument('--iteration_window', default=100, type=int)
+    training_group.add_argument('--eval_cycle_window', default=5, type=int)
+
     # Loss variations
     training_group.add_argument('--focus_on_top1_loss', default=False, action=argparse.BooleanOptionalAction)
 
