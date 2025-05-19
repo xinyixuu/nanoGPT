@@ -64,7 +64,33 @@ python3 "$script_dir"/utils/ko_en_to_ipa.py "$output_file" --input_json_key "sen
 
 output_ipa="ko_ipa.txt"
 echo "export IPA to txt file"
+
+# Download kokoro dataset from huggingface
+ko_dataset="korean_speech_transcription"
+ko_url="https://huggingface.co/datasets/xinyixuu/ko_snac"
+if [[ ! -d "${ko_dataset}" ]]; then
+  mkdir -p "${ko_dataset}"
+fi
+
+# Download transcription files under "transcription" directory.
+pushd "${ko_dataset}"
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac.json" "${ko_url}/resolve/main/json_dir/ko_snac.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac_1.json" "${ko_url}/resolve/main/json_dir/ko_snac_1.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac_3.json" "${ko_url}/resolve/main/json_dir/ko_snac_3.json?download=true" || true
+echo "Korean_Speech_Dataset transcripts downloaded and saved to korean_speech_transcription."
+popd
+
 python3 "$script_dir"/utils/extract_json_values.py "$output_file" "sentence_ipa" "$output_ipa"
+
+for jsonfile in "$ko_dataset"/*.json; do
+    # Check if the .json file exists (handles the case where no .json files are present)
+    if [ -f "$jsonfile" ]; then
+        echo "Processing $jsonfile..."
+        # Get the filename without the extension for output filename
+        filename=$(basename "${jsonfile%.json}")
+        python3 "$script_dir"/utils/extract_json_values.py "$jsonfile" "ipa" "$output_ipa"
+    fi
+done
 
 echo "IPA conversion finished."
 
