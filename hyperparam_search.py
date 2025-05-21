@@ -132,6 +132,12 @@ def main():
             metavar="KEY=VALUE",
             default=[],
             help="Override baseline config settings from orig_settings before starting the search. Example: --override_cfg max_iters=10000 learning_rate=0.0005 flag=True name='my_exp' path=data/run")
+    ap.add_argument(
+        "--max_iters_increase",
+        type=int,
+        default=None,
+        help="If set, and no positive-efficiency candidate is found, increase 'max_iters' by this amount.",
+    )
 
     args = ap.parse_args()
 
@@ -306,9 +312,36 @@ def main():
                         if (eff > old_eff) or (math.isinf(eff) and eff == old_eff and cand['delta_score'] > old_cand['delta_score']):
                              best_choice = (eff, cand)
 
-
         # -- pick or stop ---------------------------------------
         if best_choice is None:
+            if args.max_iters_increase is not None and cur_iter < args.num_iterations:
+                current_max_iters = baseline_cfg.get("max_iters")
+                if current_max_iters is not None:
+                    new_max_iters = current_max_iters + args.max_iters_increase
+                    print(f"[ACTION] No positive-efficiency candidate. Increasing 'max_iters' from {current_max_iters} to {new_max_iters}.")
+                    baseline_cfg["max_iters"] = new_max_iters
+                    # Log the change to the baseline config for this iteration
+                    log["iterations"].append(
+                        {
+                            "iter": cur_iter,
+                            "baseline_metrics": {
+                                "loss": base_loss, # Keep current baseline metrics
+                                "score": base_score,
+                                "params": base_params,
+                                "best_iter": chosen["best_iter"] if chosen else log["iterations"][-1]["baseline_metrics"]["best_iter"],
+                            },
+                            "candidates": candidates, # Log candidates for this unproductive iteration
+                            "chosen": None, # Indicate no candidate was chosen for this iteration
+                            "action": f"max_iters_increased_to_{new_max_iters}", # Custom action field
+                            "baseline_config_after": deepcopy(baseline_cfg),
+                        }
+                    )
+                    save_log(log_path, log)
+                    cur_iter += 1 # Advance iteration as an action was taken
+                    continue # Continue to the next outer loop iteration
+                else:
+                    print(f"Warning: --max_iters_increase specified, but 'max_iters' is not defined in the baseline config. Stopping.")
+
             print("No positive-efficiency candidate — stopping.")
             log["stop_reason"] = "no_positive_efficiency"
             save_log(log_path, log)
