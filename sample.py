@@ -118,11 +118,12 @@ def convert_rich_text_to_ansi(rich_text: Text) -> str:
     # 4) Extract the ANSI-encoded string
     return buffer.getvalue()
 
-def append_to_sample_file(sample_file, output_line, start_token, iter_num=None, best_val_loss=None, run_name=None):
+def append_to_sample_file(sample_file, output_line, start_token, k_tag, iter_num=None, best_val_loss=None, run_name=None):
     to_print = {
         "run_name":   run_name,
         "iter_num":   iter_num,
         "best_val_loss": best_val_loss,
+        "top_k": k_tag,
     }
     with open(sample_file, "a", encoding="utf-8", errors="replace") as file:
         header = '\n---------------'
@@ -420,6 +421,7 @@ def sample_with_existing_model(
                             sample_file,
                             coloured,
                             start_tokens,
+                            k_tag,
                             iter_num,
                             best_val_loss,
                             f"{run_name}_{k_tag}_{cm}" if run_name else f"{k_tag}_{cm}",
@@ -434,6 +436,7 @@ def sample_with_existing_model(
                     sample_file,
                     plain_text,
                     start_tokens,
+                    k_tag,
                     iter_num,
                     best_val_loss,
                     f"{run_name}_{k_tag}" if run_name else k_tag,
