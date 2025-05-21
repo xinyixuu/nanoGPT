@@ -1,0 +1,25 @@
+# sample.yaml
+---
+# parameter_groups: define sets of overrides to apply on top of base params
+parameter_groups:
+  - use_rotary_embeddings: [true]
+    use_abs_pos_embeddings: [false]
+
+# base hyperparameters
+max_iters: [2500]
+n_layer: [6]
+n_head: [6]
+n_embd: [384]
+block_size: [1024]
+device: ["cuda"]
+dtype: ["float16"]
+dataset: ["snac_cvja"]
+
+# boolean flags
+compile: [true]
+use_post_ln: [false]
+
+# tensorboard run name
+tensorboard_run_name: ["stt_demo_new"]
+sample_each_eval: [true]
+max_sample_tokens: [800]
