@@ -10,8 +10,8 @@
 # Run the Python script with the specified arguments
 
 # Add url with dataset here:
-train_url="https://huggingface.co/datasets/rhyliieee/tagalog-filipino-english-translation/resolve/main/test_data.csv?download=true"
-test_url="https://huggingface.co/datasets/rhyliieee/tagalog-filipino-english-translation/resolve/main/train_data.csv?download=true"
+train_url="https://huggingface.co/datasets/rhyliieee/tagalog-filipino-english-translation/resolve/main/train_data.csv?download=true"
+test_url="https://huggingface.co/datasets/rhyliieee/tagalog-filipino-english-translation/resolve/main/test_data.csv?download=true"
 
 train_filename="train.txt"
 
