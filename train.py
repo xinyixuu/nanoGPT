@@ -306,12 +306,18 @@ class Trainer:
 
         # Tensorboard
         if self.args.tensorboard_log:
+            # 1) Give the run a safe default name when the user did not supply one
             if self.args.tensorboard_run_name is None:
-                run_name = f"{timestamp_prefix}"
-            else:
-                run_name = self.args.tensorboard_run_name
+                self.args.tensorboard_run_name = f"{timestamp_prefix}"
+
+            run_name = self.args.tensorboard_run_name
+
+            # 2) Derive a *filename-safe* dataset tag (slashes ⇒ underscores)
+            sanitized_dataset = self.args.dataset.replace("/", "_")
+
+            # 3) Store a matching, safe CSV filename for later use
             if self.args.csv_log:
-                self.args.csv_name = run_name
+                self.args.csv_name = f"{sanitized_dataset}_{run_name}"
             log_subpath = os.path.join(self.args.tensorboard_log_dir, run_name)
             self.writer = SummaryWriter(log_subpath)
 
@@ -937,9 +943,18 @@ class Trainer:
             csv_full_dir = f"{self.args.csv_dir}/{self.args.csv_ckpt_dir}"
         else:
             if self.args.tensorboard_log:
-                csv_full_dir = f"{self.args.csv_dir}/{self.args.tensorboard_run_name}-{self.args.dataset}"
+                sanitized_dataset = self.args.dataset.replace("/", "_")
+                csv_full_dir = (
+                    f"{self.args.csv_dir}/"
+                    f"{self.args.tensorboard_run_name}-{sanitized_dataset}"
+                )
         os.makedirs(csv_full_dir, exist_ok=True)
-        csv_path = os.path.join(csv_full_dir, prefix + self.args.csv_name + ".csv")
+        # Ensure the filename itself never contains path separators
+        safe_csv_name = self.args.csv_name.replace("/", "_")
+        csv_path = os.path.join(csv_full_dir, prefix + safe_csv_name + ".csv")
+
+        # `csv_name` is now safe, but make doubly sure every parent dir exists
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
         with open(csv_path, 'a', newline='') as file:
             writer = csv.writer(file)
             # Write arguments as a new row in the CSV
