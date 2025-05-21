@@ -36,6 +36,11 @@ def parse_args():
     training_group.add_argument('--eval_iters', default=200, type=int)
     training_group.add_argument('--eval_only', default=False, action=argparse.BooleanOptionalAction)
 
+    # latency / ETA estimate options
+    training_group.add_argument('--time_remaining_mode', choices=['iteration', 'eval_cycle'], default='eval_cycle', help="iteration - estimates only based on training iterations -- use if doing one eval at the end; eval_cycle -- use if doing multiple evals, will use a single cycle for the estimation.")
+    training_group.add_argument('--iteration_window', default=100, type=int)
+    training_group.add_argument('--eval_cycle_window', default=5, type=int)
+
     # Loss variations
     training_group.add_argument('--focus_on_top1_loss', default=False, action=argparse.BooleanOptionalAction)
 
@@ -101,25 +106,133 @@ def parse_args():
 
 
     # Optimizer-specific arguments
-    optimizer_variations = ["adamw",
-                            "sgd",
-                            "adagrad",
-                            "rmsprop",
-                            "nadam",
-                            ]
+    optimizer_variations = [
+            "sgd",
+            "adam",
+            "adamw",
+            "adamax",
+            "radam",
+            "nadam",
+            "adagrad",
+            "rmsprop",
+            "rprop",
+            "sparseadam",
+            "asgd",
+            "lbfgs",
+            "adabelief",
+            "orthoadam",
+            "adan",
+            "apollo_adamw",
+            "qhadam",
+            "yogi",
+            "adamp",
+            "lion",
+            "adafactor",
+            "accsgd",
+            "adabound",
+            "adamod",
+            "aggmo",
+            "diffgrad",
+            "lamb",
+            "lambdiff",
+            "adamod_diffgrad",
+            "novograd",
+            "pid",
+            "qhm",
+            "sgdp",
+            "sgdw",
+            "shampoo",
+            "swats",
+            ]
+
     training_group.add_argument("--optimizer", type=str, default="adamw",
                                  choices=optimizer_variations,
                                  help="Optimizer to use for training.")
 
+    # --------  SGD --------------------------------------------------
     training_group.add_argument("--sgd_momentum", type=float, default=0.9, help="Momentum for SGD optimizer.")
+    training_group.add_argument("--sgd_nesterov", type=bool, default=False, action=argparse.BooleanOptionalAction)
+    # --------  ADAMW --------------------------------------------------
     training_group.add_argument("--adamw_betas", type=float, nargs=2, default=[0.9, 0.999], help="Betas for AdamW optimizer.")
     training_group.add_argument("--adamw_eps", type=float, default=1e-8, help="Epsilon for AdamW optimizer.")
     training_group.add_argument("--adamw_weight_decay", type=float, default=0.01, help="Weight decay for AdamW optimizer.")
+    # --------  ADAGRAD --------------------------------------------------
     training_group.add_argument("--adagrad_lr_decay", type=float, default=0, help="Learning rate decay for Adagrad optimizer.")
+    # --------  RMSProp --------------------------------------------------
     training_group.add_argument("--rmsprop_alpha", type=float, default=0.99, help="Smoothing constant for RMSprop.")
+    # --------  NADAM --------------------------------------------------
     training_group.add_argument("--nadam_betas", type=float, nargs=2, default=[0.9, 0.999], help="Betas for Nadam optimizer.")
     training_group.add_argument("--nadam_eps", type=float, default=1e-8, help="Epsilon for Nadam optimizer.")
+    # --------  ASGD --------------------------------------------------
+    training_group.add_argument("--asgd_lambda", type=float, default=1e-4, help="Decay term for ASGD.")
+    training_group.add_argument("--asgd_alpha", type=float, default=0.75, help="Power for eta calculation in ASGD.")
+    training_group.add_argument("--asgd_t0", type=float, default=1e6, help="Point at which to start averaging in ASGD.")
+    # --------  OrthoAdam --------------------------------------------------
+    training_group.add_argument("--ortho_perm_threshold", type=int, default=1_000_000, help="If a tensor has more elements than this, OrthoAdam uses identity rotation for it.")
+    # --------  LBFGS --------------------------------------------------
+    training_group.add_argument("--lbfgs_max_iter", type=int, default=20, help="Maximum iterations per LBFGS step.")
+    training_group.add_argument("--lbfgs_max_eval", type=int, default=None, help="Maximum function evaluations per LBFGS step.")
+    training_group.add_argument("--lbfgs_tol_grad", type=float, default=1e-7, help="Gradient-norm tolerance for LBFGS convergence.")
+    training_group.add_argument("--lbfgs_tol_change", type=float, default=1e-9, help="Parameter-change tolerance for LBFGS convergence.")
+    training_group.add_argument("--lbfgs_history", type=int, default=100, help="History size (m) for LBFGS.")
+    training_group.add_argument("--lbfgs_line_search", type=str, default=None, choices=[None, "strong_wolfe"], help="Line-search algorithm for LBFGS.")
+    # --------  Rprop  -------------------------------------------------
+    training_group.add_argument("--rprop_eta_min", type=float, default=1e-6, help="Minimum step size for Rprop.")
+    training_group.add_argument("--rprop_eta_max", type=float, default=50.0, help="Maximum step size for Rprop.")
+    # --------  Adadelta  ----------------------------------------------
+    training_group.add_argument("--adadelta_rho", type=float, default=0.9, help="Coefficient used for computing running averages of gradients in Adadelta.")
+    # --------  Adamax  ------------------------------------------------
+    training_group.add_argument("--adamax_betas", type=float, nargs=2, default=[0.9, 0.999], help="Betas for Adamax optimizer.")
+    # ---------- More Modern research optimisers ----------
+    # AdaFactor -----------------------------------------------------------
+    training_group.add_argument("--adafactor_eps_row", type=float, default=1e-30, help="Row-wise ε₂ for Adafactor.")
+    training_group.add_argument("--adafactor_eps_col", type=float, default=1e-3, help="Column-wise ε₂ for Adafactor.")
+    training_group.add_argument("--adafactor_clip", type=float, default=1.0, help="Gradient clipping threshold (χ) for Adafactor.")
+    training_group.add_argument("--adafactor_decay", type=float, default=-0.8, help="Running-average decay rate (φ) in Adafactor.")
+    training_group.add_argument("--adafactor_beta1", type=float, default=-1.0, help="β₁ for momentum in Adafactor (<0 to disable momentum).")
+    training_group.add_argument("--adafactor_scale_param", action=argparse.BooleanOptionalAction, default=True, help="Enable parameter-scale adaptive LR.")
+    training_group.add_argument("--adafactor_relative_step", action=argparse.BooleanOptionalAction, default=True, help="Use relative-step schedule if learning rate is not supplied.")
+    training_group.add_argument("--adafactor_warmup_init", action=argparse.BooleanOptionalAction, default=False, help="Use warm-up initialisation of learning rate.")
 
+    # AdaBelief -----------------------------------------------------------
+    training_group.add_argument("--adabelief_eps", type=float, default=1e-16, help="AdaBelief epsilon.")
+    # Adan ---------------------------------------------------------------
+    training_group.add_argument("--adan_wd", type=float, default=0.0, help="Adan weight decay.")
+    training_group.add_argument("--adan_eps", type=float, default=1e-8, help="Adan epsilon.")
+    # Apollo-Adamw low-rank specific knobs
+    training_group.add_argument("--apollo_rank", type=int, default=2, help="Low-rank adaptor rank (k).")
+    training_group.add_argument("--apollo_proj", type=str, default="random", choices=["random", "hadamard", "learned"], help="Type of projection matrix used by Apollo.")
+    training_group.add_argument("--apollo_scale", type=int, default=128, help="Scale constant applied to projection (see paper).")
+    training_group.add_argument("--apollo_update_proj_gap", type=int, default=200, help="# of optimisation steps between projector refresh.")
+    training_group.add_argument("--apollo_proj_type", type=str, default="std", choices=["std", "gaussian", "rademacher"], help="Distribution for generating the projection matrix.")
+    training_group.add_argument("--apollo_apply_to_all", action=argparse.BooleanOptionalAction, default=False, help="If set, apply low-rank Apollo updates to *all* " "parameters instead of only tensors tagged with " "`.lowrank = True`.")
+
+
+    # from torch-optimizer (common)
+    training_group.add_argument("--opt_betas", type=float, nargs=2, default=[0.9, 0.999],
+                                help="Betas used by Adam-family / etc.")
+    training_group.add_argument("--opt_eps",   type=float, default=1e-8)
+    training_group.add_argument("--opt_weight_decay", type=float, default=0.0)
+
+    # AdaBound / AdaMod
+    training_group.add_argument("--adabound_final_lr", type=float, default=0.1)
+    training_group.add_argument("--adabound_gamma",    type=float, default=1e-3)
+    training_group.add_argument("--adamod_beta3",      type=float, default=0.999)
+
+    # Lamb
+    training_group.add_argument("--lamb_clamp",  type=float, default=10.0)
+    training_group.add_argument("--lamb_adam",   action=argparse.BooleanOptionalAction, default=False)
+    training_group.add_argument("--lamb_debias", action=argparse.BooleanOptionalAction, default=False)
+
+    # Shampoo
+    training_group.add_argument("--shampoo_momentum", type=float, default=0.0)
+    training_group.add_argument("--shampoo_eps", type=float, default=1e-4)
+    training_group.add_argument("--shampoo_update_freq", type=int, default=1)
+
+    # ASGD-like PID
+    training_group.add_argument("--pid_momentum",  type=float, default=0.0)
+    training_group.add_argument("--pid_integral",  type=float, default=5.0)
+    training_group.add_argument("--pid_derivative",type=float, default=10.0)
 
     # Learning rate scheduler-specific arguments
     scheduler_variations = ["none",
@@ -154,7 +267,7 @@ def parse_args():
     training_group.add_argument('--token_boundary', type=str, default=None, help="Optional separator string between emitted tokens (for decode).")
     training_group.add_argument('--num_samples', type=int, default=1, help="Number of generated samples during sampling.")
     training_group.add_argument('--temperature', type=float, default=0.8, help="Temperature for predictions (1.0 = normal, < 1.0 = less random).")
-    training_group.add_argument('--top_k', type=int, nargs='+', default=[2,200], help="Retain only the top_k most likely tokens (used in sample.py).")
+    training_group.add_argument('--top_k', type=int, nargs='+', default=[2, 5, 10, 20], help="Retain only the top_k most likely tokens (used in sample.py).")
     training_group.add_argument('--eval_dataset', type=str, default=None, help="Optional dataset name for custom evaluation splits.")
     training_group.add_argument('--quantization_data_file', type=str, default=None, help="If set, export quantized weights/activations to a specified file (pkl).")
 
@@ -393,8 +506,16 @@ def parse_args():
     model_group.add_argument( "--linear_std_init", type=float, default=0.02)
 
     ## Embedding Weight Initialization Options
-    embedding_init_variations = ["gaussian", "onehot", "hypercube"]
+    embedding_init_variations = [
+            "gaussian",
+            "onehot",
+            "hypercube",
+            "numpy_import",
+            ]
+
     model_group.add_argument( "--init_variant", choices=embedding_init_variations, default="gaussian", help="options for embedding initializations")
+    model_group.add_argument( "--init_scale", type=float, default=0.01, help="initialization scaling factor with non-gaussian variations")
+    model_group.add_argument( "--init_wte_npy", type=str, default="wte.npy", help="npy file for initialization of wte files")
 
     # Quantization
     model_group.add_argument("--full_quant_iteration", type=int, default=None,

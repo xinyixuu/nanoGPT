@@ -9,10 +9,15 @@ import pickle
 import shutil
 import sys
 import time
+from collections import deque
+from datetime import datetime, timedelta
 
-import torch.onnx
+from train_variations.optimizer_variants import optimizer_dictionary
+from train_variations.eta_variants import build_eta_estimator, ETAUpdate
 
 from utils.gpu_monitoring import get_gpu_memory_info
+from torch.cuda import reset_peak_memory_stats, max_memory_allocated
+
 from utils.model_info import (
     print_summary,
     print_module_structure,
@@ -31,8 +36,13 @@ from sample import (
     custom_char_with_byte_fallback_decode as ccwb_decode,
 )
 
-
-from rich.progress import Progress
+from rich.progress import (
+        Progress,
+        TextColumn,
+        BarColumn,
+        TimeRemainingColumn,
+        TaskProgressColumn,
+)
 
 # GNS Related
 import utils.gns_monitoring.gns_utils as gns_utils
@@ -40,10 +50,14 @@ from utils.gns_monitoring.hook import (add_hooks_to_model, add_sogns_hooks,
                    add_exact_hooks,  gather_hook_results)
 
 import numpy as np
+
+# Torch
 import torch
+import torch.onnx
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
+
 from variations.model_variations import model_variation_dictionary
 
 from model import GPT, GPTConfig
@@ -52,7 +66,6 @@ from model import GPT, GPTConfig
 import tiktoken
 
 from train_args import parse_args
-
 
 class Trainer:
 
@@ -67,6 +80,18 @@ class Trainer:
         self.grad_norm = None
         self.grad_std = None
         self.tokens_trained = 0
+        self.peak_gpu_usage = 0.0
+        self.total_training_time_ms: float = 0.0   # total run-time from start of training
+        self.time_remaining_ms: float= 0.0
+        self.evaluation_count: int = 0   # cumulative run-time (ns)
+        self.evaluations_remaining: int = 0 # will be updated after the current iter is loaded
+        self.formatted_completion_eta: str = "waiting for calculation"
+        self.iter_latency_avg: float = 0.0  # running mean ms / iteration
+
+        # calculation on end time via eval cycle
+        self.eval_cycle_window = deque(maxlen=self.args.eval_cycle_window)
+        self.eval_cycle_latency_avg: float = 0.0
+        self.eval_cycle_start_mon: bool = False
 
         # If using multiple datasets, track tokens trained per dataset.
         if self.args.dataset_list is not None:
@@ -135,6 +160,9 @@ class Trainer:
         torch.backends.cudnn.allow_tf32 = True
 
         self.device_type = 'cuda' if 'cuda' in self.args.device else 'cpu'
+        if self.device_type == 'cuda':
+            reset_peak_memory_stats(self.device)
+
         self.ptdtype = {"bfloat16" : torch.bfloat16, "float16" : torch.float16, "float32" : torch.float32}[self.args.dtype]
         self.ctx = nullcontext() if self.device_type == 'cpu' else torch.amp.autocast(device_type=self.device_type, dtype=self.ptdtype)
 
@@ -308,12 +336,18 @@ class Trainer:
 
         # Tensorboard
         if self.args.tensorboard_log:
+            # 1) Give the run a safe default name when the user did not supply one
             if self.args.tensorboard_run_name is None:
-                run_name = f"{timestamp_prefix}"
-            else:
-                run_name = self.args.tensorboard_run_name
+                self.args.tensorboard_run_name = f"{timestamp_prefix}"
+
+            run_name = self.args.tensorboard_run_name
+
+            # 2) Derive a *filename-safe* dataset tag (slashes ⇒ underscores)
+            sanitized_dataset = self.args.dataset.replace("/", "_")
+
+            # 3) Store a matching, safe CSV filename for later use
             if self.args.csv_log:
-                self.args.csv_name = run_name
+                self.args.csv_name = f"{sanitized_dataset}_{run_name}"
             log_subpath = os.path.join(self.args.tensorboard_log_dir, run_name)
             self.writer = SummaryWriter(log_subpath)
 
@@ -324,26 +358,23 @@ class Trainer:
             wandb.init(project=self.args.wandb_project, name=self.args.wandb_run_name, config=self.args)
         self.load_tokenizer()
 
+
     def create_optimizer(self):
         param_groups = [
             {"params": self.model.parameters(), "lr": self.args.learning_rate}
         ]
 
-        if self.args.optimizer == "adamw":
-            self.args.adamw_betas = tuple(self.args.adamw_betas)
-            optimizer = torch.optim.AdamW(param_groups, lr=self.args.learning_rate, betas=tuple(self.args.adamw_betas),
-                                          eps=self.args.adamw_eps, weight_decay=self.args.adamw_weight_decay)
-        elif self.args.optimizer == "sgd":
-            optimizer = torch.optim.SGD(param_groups, lr=self.args.learning_rate, momentum=self.args.sgd_momentum, weight_decay=self.args.weight_decay)
-        elif self.args.optimizer == "adagrad":
-            optimizer = torch.optim.Adagrad(param_groups, lr=self.args.learning_rate, lr_decay=self.args.adagrad_lr_decay, weight_decay=self.args.weight_decay)
-        elif self.args.optimizer == "rmsprop":
-            optimizer = torch.optim.RMSprop(param_groups, lr=self.args.learning_rate, alpha=self.args.rmsprop_alpha, weight_decay=self.args.weight_decay)
-        elif self.args.optimizer == "nadam":
-            self.args.nadam_betas = tuple(self.args.nadam_betas)
-            optimizer = torch.optim.NAdam(param_groups, lr=self.args.learning_rate, betas=tuple(self.args.nadam_betas), eps=self.args.nadam_eps, weight_decay=self.args.weight_decay)
-        else:
-            raise ValueError(f"Unknown optimizer: {self.args.optimizer}")
+        optimizer_key = self.args.optimizer
+
+        # obtain builder, and ensure optimizer is in list
+        try:
+            optimizer_builder = optimizer_dictionary[optimizer_key]
+        except KeyError:
+            raise ValueError(f"Unknown optimizer '{optimizer_key}'. "
+                             f"Available: {list(optimizer_dictionary)}")
+
+        # return torch.optim.Optimizer instance
+        optimizer = optimizer_builder(param_groups, self.args)
 
         return optimizer
 
@@ -360,7 +391,6 @@ class Trainer:
             return torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode=self.args.plateau_mode, factor=self.args.plateau_factor, patience=self.args.plateau_patience)
         else:
             raise ValueError(f"Unknown scheduler: {self.args.lr_scheduler}")
-
 
     def load_tokenizer(self):
         meta_path = os.path.join('data', self.args.dataset, 'meta.pkl')
@@ -1039,9 +1069,18 @@ class Trainer:
             csv_full_dir = f"{self.args.csv_dir}/{self.args.csv_ckpt_dir}"
         else:
             if self.args.tensorboard_log:
-                csv_full_dir = f"{self.args.csv_dir}/{self.args.tensorboard_run_name}-{self.args.dataset}"
+                sanitized_dataset = self.args.dataset.replace("/", "_")
+                csv_full_dir = (
+                    f"{self.args.csv_dir}/"
+                    f"{sanitized_dataset}_{self.args.tensorboard_run_name}"
+                )
         os.makedirs(csv_full_dir, exist_ok=True)
-        csv_path = os.path.join(csv_full_dir, prefix + self.args.csv_name + ".csv")
+        # Ensure the filename itself never contains path separators
+        safe_csv_name = self.args.csv_name.replace("/", "_")
+        csv_path = os.path.join(csv_full_dir, prefix + safe_csv_name + ".csv")
+
+        # `csv_name` is now safe, but make doubly sure every parent dir exists
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
         with open(csv_path, 'a', newline='') as file:
             writer = csv.writer(file)
             # Write arguments as a new row in the CSV
@@ -1049,8 +1088,11 @@ class Trainer:
             args.append(self.lr)
             args.append(self.args.batch_size)
             args.append(self.tokens_trained)
+            if hasattr(self, "peak_gpu_usage"):
+                args.append(self.peak_gpu_usage / (1024 ** 2))
             if self.args.gns_type is not None:
                 args.append(self.gns)
+            args.append(self.iter_latency_avg)
             writer.writerow(args)
 
 
@@ -1106,10 +1148,14 @@ class Trainer:
             self.mc_btc_train = {}
         else:
             self.X, self.Y, current_dataset = self.get_batch('train')
-        t0 = time.time()
+        self.X, self.Y, current_dataset = self.get_batch('train')
+        t_start = time.time()
+        t0 = t_start
         local_iter_num = 0
         running_mfu = -1.0
         current_epoch = 0.0
+        self.evaluations_remaining = (self.args.max_iters - self.iter_num) // self.args.eval_interval + 1
+        self.eta = build_eta_estimator(self.args, t_start, self.evaluations_remaining, self.formatted_completion_eta)
         num_steps_with_worse_loss = 0
         # TODO: Move statistics labels to statistics scripts
         graph_y_labels = []
@@ -1117,10 +1163,23 @@ class Trainer:
             for head in range(self.args.n_head):
                 graph_y_labels.append(f"Layer {layer} Head {head}")
 
-        # Create progress bar
-        progress = Progress()
+        # Create progress bar with ETA and remaining time display
+        progress = Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),  # shows n/N iterations
+            TimeRemainingColumn(),  # estimated time column
+            TextColumn("ETA: {task.fields[eta]}"),
+            TextColumn("Remain: {task.fields[ms]} ms")
+        )
         with progress:
-            task_id = progress.add_task("[green]Training...", total=(self.args.max_iters - self.iter_num))
+            task_id = progress.add_task(
+                "[green]Training...",
+                total=((self.args.max_iters - self.iter_num) + self.evaluations_remaining * self.args.eval_iters),
+                eta=self.formatted_completion_eta,
+                ms=f"{self.time_remaining_ms:.0f}"
+            )
+
             while True:
                 if self.scheduler is not None:
                     self.lr = self.get_lr(self.iter_num)
@@ -1134,6 +1193,12 @@ class Trainer:
                     if self.args.gns_type is not None:
                         self.gns = self.gns_ema.get_gns()
 
+
+                    if self.device_type == 'cuda':
+                        self.peak_gpu_usage = max(
+                            self.peak_gpu_usage,
+                            max_memory_allocated(self.device)
+                        )
 
                     self.vram_allocated = get_gpu_memory_info(info_type='used') if self.args.device != "cpu" else 0
                     if self.args.dataset_list is not None:
@@ -1210,15 +1275,25 @@ class Trainer:
                             self.iter_num_best_val_loss = self.iter_num
                             self.best_val_loss = losses['val']
                             # Save best validation loss
+                            peak_mb = self.peak_gpu_usage / (1024 ** 2)
                             with open(os.path.join(self.args.out_dir, 'best_val_loss_and_iter.txt'), "w") as best_loss_file:
                                 chance_ratio = self.model_args['vocab_size']/math.exp(self.best_val_loss.item())
-                                best_loss_file.write(f"{self.best_val_loss.item()}, {self.iter_num}, {self.model.num_param}, {chance_ratio:.3e}, {chance_ratio/self.model.num_param:.3e}")
+                                best_loss_file.write(
+                                    f"{self.best_val_loss.item()},"
+                                    f" {self.iter_num},"
+                                    f" {self.model.num_param},"
+                                    f" {chance_ratio:.3e},"
+                                    f" {chance_ratio/self.model.num_param:.3e},"
+                                    f" {peak_mb:.1f},"
+                                    f" {self.iter_latency_avg:.1f}"
+                                )
                             # Reset early exit counter
                             num_steps_with_worse_loss = 0
                         if self.iter_num > 0:
                             print(f"saving checkpoint to {self.args.out_dir}")
                             # Save checkpoint
                             self.save_checkpoint('ckpt.pt')
+
                         # Sample
                         if self.args.max_sample_tokens:
                             self.sample_and_print()
@@ -1319,6 +1394,21 @@ class Trainer:
                 t1 = time.time()
                 dt = t1 - t0
                 t0 = t1
+                self.total_training_time_ms = (t1 - t_start) * 1000.0
+
+                # Estimate ETA
+                eta_update: ETAUpdate = self.eta.update(
+                    iter_num=self.iter_num,
+                    now=t1,
+                    dt=dt,
+                    is_eval_boundary=(self.iter_num % self.args.eval_interval == 0),
+                )
+
+                progress_advance = eta_update.progress_advance
+                self.iter_latency_avg = eta_update.iter_latency_avg
+                self.time_remaining_ms = eta_update.time_remaining_ms
+                self.formatted_completion_eta = eta_update.formatted_completion_eta
+
 
 
                 self.iter_num += 1
@@ -1386,7 +1476,13 @@ class Trainer:
 
 
                 # Update progress bar
-                progress.update(task_id, advance=1)
+                progress.update(
+                        task_id,
+                        advance=progress_advance,
+                        eta=self.formatted_completion_eta,
+                        ms=f"{self.time_remaining_ms:.0f}",
+                        )
+
                 # End of training actions
                 if self.iter_num > self.args.max_iters:
                     print(self.best_val_loss)

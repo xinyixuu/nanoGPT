@@ -1,8 +1,5 @@
-#!/usr/bin/env python3
+# plot_view.py
 """
-plot_view.py
-============
-
 Utility for visualising the “current view” from the Textual hyper-parameter
 monitor.
 
@@ -35,6 +32,9 @@ CLI usage
 
 from __future__ import annotations
 
+import plotly.express as px
+import numpy as np
+import pandas as pd
 import argparse
 import json
 from collections import defaultdict
@@ -65,6 +65,7 @@ def plot_rows(
     y: str,
     label: str = "formatted_name",
     connect_by: str | None = None,
+    connect_label: str | None = None,
 ) -> None:
     """
     Scatter-plot *y* vs *x*.
@@ -107,7 +108,7 @@ def plot_rows(
     if not xs:
         raise ValueError("No plottable data in supplied rows")
 
-    plt.figure()
+    fig = plt.figure(figsize=(12, 8))
 
     seen: Set[str] = set()
     if not connect_by:
@@ -139,20 +140,99 @@ def plot_rows(
                     color=col,
                     linewidth=1,
                     alpha=0.7,
-                    label=f"{connect_by}={gid}",
+                    label=f"{(connect_label or connect_by)}={gid}",   # NEW
                 )
 
     plt.xlabel(x)
     plt.ylabel(y)
     title = f"{y} vs {x}"
     if connect_by:
-        title += f"  (lines grouped by '{connect_by}')"
+        disp = connect_label or connect_by   # NEW
+        title += f"  (lines grouped by '{disp}')"
     plt.title(title)
     plt.legend(loc="best", fontsize=8)
     plt.tight_layout()
     plt.show()
+    safe_title = "".join(
+        ch if ch.isalnum() or ch in "-_." else "_" for ch in title
+    )
+    fig.savefig(f"{safe_title}.png", dpi=300)
+    plt.show()
 
 
+# ───────────────────────────── plot bars ──────────────────────────────
+def _extract(entry: Dict[str, Any], key: str) -> Any:
+    """Return entry[key] if present, else entry['config'][key], else None."""
+    if key in entry:
+        return entry[key]
+    return entry.get("config", {}).get(key)
+
+
+
+def plot_bars(
+    rows: List[Dict[str, Any]],
+    *,
+    y: str,
+    label_cols: List[str],
+    bar_color: str = "#1f77b4",
+) -> None:
+    if not label_cols:
+        raise ValueError("Need ≥1 label column for bar chart")
+
+    labels, heights = [], []
+    for r in rows:
+        yv = _extract(r, y)
+        if yv is None:
+            continue
+        merged = "-".join(
+            "None" if _extract(r, c) is None else str(_extract(r, c))
+            for c in label_cols
+        )
+        labels.append(merged)
+        heights.append(float(yv))
+
+    if not heights:
+        raise ValueError(f"No numeric values found in column “{y}”")
+
+    order = np.argsort(np.array(heights))
+    df = pd.DataFrame(
+        {"label": np.array(labels)[order], y: np.array(heights)[order]}
+    )
+
+    # pretty title parts
+    pretty = lambda s: s.replace("_", " ").title()
+    title_text = f"{pretty(y)} by {' / '.join(pretty(c) for c in label_cols)}"
+
+    fig = px.bar(
+        df,
+        x=y,
+        y="label",
+        orientation="h",
+        color_discrete_sequence=[bar_color],
+        text=df[y].apply(lambda v: f"{v:.3f}"),
+    )
+    fig.update_traces(textposition="outside")
+    fig.update_layout(
+    title=dict(
+        text=title_text,
+        x=0.5,             # halfway across the plot *area*
+        xref="container",  # ← key line: ignore the margins
+        xanchor="center",
+        yanchor="top",
+    ),
+        # merged column names become the Y-axis title
+    yaxis=dict(
+        title=" / ".join(label_cols),   # e.g. "optimizer / sgd_nesterov"
+        autorange="reversed",           # keep smallest bar on top
+    ),
+    xaxis=dict(title=y),
+    margin=dict(l=120, r=40, t=80, b=40),  # t a bit larger for the centred title
+)
+
+
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in title_text)
+    fig.write_image(f"{safe}.png", scale=2)  # requires kaleido
+    fig.show()
 # ───────────────────────────── CLI wrapper ──────────────────────────
 
 
