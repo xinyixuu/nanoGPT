@@ -1,12 +1,29 @@
-# colorize_dataset.py (patched)
-"""Efficient, no‑training dataset colourisation (min‑max mode).
-<same preamble omitted for brevity>"""
+# colorize_dataset.py  (softmax mode added)
+"""Colourise a dataset split using a trained GPT model.
+
+Modes
+-----
+* **minmax**  – map chosen‑token *logits* to a red→green gradient after
+  min‑max normalisation.
+* **softmax** – map chosen‑token *probabilities* (softmax) the same way.
+
+Example
+-------
+```bash
+python colorize_dataset.py \
+  --out_dir out/my_run \
+  --dataset tiny_shakespeare \
+  --split val \
+  --num_tokens 2048 \
+  --mode softmax
+```
+"""
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import pickle
-import io
 from pathlib import Path
 from typing import Callable, List, Sequence, Tuple
 
@@ -18,33 +35,29 @@ from rich.text import Text
 
 import tiktoken  # type: ignore
 
-from model import GPT, GPTConfig  # project‑local imports
+from model import GPT, GPTConfig
 
 ################################################################################
-# Helpers (convert_rich_text_to_ansi, colour‑map etc.)
+# ---------- helpers --------------------------------------------------------- #
 ################################################################################
 
-def convert_rich_text_to_ansi(rich_text: Text) -> str:
+def convert_rich_text_to_ansi(txt: Text) -> str:
     buf = io.StringIO()
-    Console(file=buf, force_terminal=True, color_system="truecolor").print(rich_text)
+    Console(file=buf, force_terminal=True, color_system="truecolor").print(txt)
     return buf.getvalue()
 
 
-def colorize_text_minmax(
-    token_ids: List[int],
-    logits: List[float],
-    decode: Callable[[Sequence[int]], str],
-) -> Text:
-    vals = torch.tensor(logits, dtype=torch.float32)
+def _colorize(token_ids: List[int], scalars: List[float], decode: Callable[[Sequence[int]], str]) -> Text:
+    vals = torch.tensor(scalars, dtype=torch.float32)
     norm = (vals - vals.min()) / (vals.max() - vals.min() + 1e-6)
-    txt = Text()
+    rich_txt = Text()
     for tid, v in zip(token_ids, norm):
         r = int((1 - v.item()) * 255)
         g = int(v.item() * 255)
-        txt.append(decode([tid]), style=f"bold #{r:02x}{g:02x}00")
-    return txt
+        rich_txt.append(decode([tid]), style=f"bold #{r:02x}{g:02x}00")
+    return rich_txt
 
-# ----- custom‑char‑with‑byte‑fallback helpers -----
+# ----- custom-char-with-byte-fallback helpers -----
 
 def _ccwb_encode(text: str, stoi: dict) -> List[int]:
     out: List[int] = []
@@ -57,29 +70,27 @@ def _ccwb_encode(text: str, stoi: dict) -> List[int]:
 
 
 def _ccwb_decode(ids: List[int], itos: dict) -> str:
-    buf: List[str] = []
+    chars: List[str] = []
     byte_buf: List[bytes] = []
-
     def flush():
         if byte_buf:
-            buf.append(b"".join(byte_buf).decode("utf-8", errors="replace"))
+            chars.append(b"".join(byte_buf).decode("utf-8", errors="replace"))
             byte_buf.clear()
-
     for tok in ids:
         if tok < 256:
             byte_buf.append(itos[tok])  # type: ignore[arg-type]
         else:
             flush()
-            buf.append(itos[tok])  # type: ignore[index]
+            chars.append(itos[tok])  # type: ignore[index]
     flush()
-    return "".join(buf)
+    return "".join(chars)
 
 ################################################################################
-# CLI & I/O helpers
+# --------------------------- CLI / loading --------------------------------- #
 ################################################################################
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser("Colourise a dataset split using a trained GPT model (min‑max mode)")
+    p = argparse.ArgumentParser("Colourise a dataset split with a trained GPT model")
     p.add_argument("--out_dir", required=True)
     p.add_argument("--dataset", required=True)
     p.add_argument("--split", choices=["train", "val"], default="val")
@@ -88,6 +99,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dtype", choices=["bfloat16", "float16", "float32"], default="bfloat16")
     p.add_argument("--num_tokens", type=int, default=1024)
     p.add_argument("--block_size", type=int)
+    p.add_argument("--mode", choices=["minmax", "softmax"], default="minmax")
     p.add_argument("--output_file")
     return p.parse_args()
 
@@ -112,26 +124,22 @@ def load_tokeniser(meta_path: Path):
             lambda s: _ccwb_encode(s, stoi),
             lambda l: _ccwb_decode(l, itos),
         )
-    # default plain char‑level
     return (
         lambda s: [stoi[c] for c in s],
         lambda l: "".join(itos[i] for i in l),
     )
 
 ################################################################################
-# Main logic
+# ---------------------------------- main ------------------------------------ #
 ################################################################################
 
 def main() -> None:
     args = parse_args()
     console = Console()
 
-    ckpt_path = Path(args.out_dir) / args.ckpt_name
-    checkpoint = torch.load(ckpt_path, map_location=args.device)
-
-    gptconf = GPTConfig(**checkpoint["model_args"])
-    model = GPT(gptconf)
-    sd = checkpoint["model"]
+    ckpt = torch.load(Path(args.out_dir) / args.ckpt_name, map_location=args.device)
+    model = GPT(GPTConfig(**ckpt["model_args"]))
+    sd = ckpt["model"]
     for k in list(sd):
         if k.startswith("_orig_mod."):
             sd[k[len("_orig_mod."):]] = sd.pop(k)
@@ -144,42 +152,45 @@ def main() -> None:
 
     encode, decode = load_tokeniser(Path("data") / args.dataset / "meta.pkl")
 
-    # choose dtype for autocast
     ptdtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[args.dtype]
-    ctx_mgr = torch.amp.autocast(device_type="cuda", dtype=ptdtype) if "cuda" in args.device else torch.no_grad()
+    autocast = torch.amp.autocast(device_type="cuda", dtype=ptdtype) if "cuda" in args.device else torch.no_grad()
 
-    # load memmap
-    dtype = np.uint32 if gptconf.vocab_size == 100277 else np.uint16
+    dtype = np.uint32 if model.config.vocab_size == 100277 else np.uint16
     data_mm = np.memmap(Path("data") / args.dataset / f"{args.split}.bin", dtype=dtype, mode="r")
     n_tokens = min(args.num_tokens, len(data_mm) - 1)
 
     block = args.block_size or model.config.block_size
     pos = 0
-    chosen_ids, chosen_logits = [], []
+    ids: List[int] = []
+    scalars: List[float] = []
 
     while pos < n_tokens:
         seq = data_mm[pos : pos + block + 1]
-        ctx = torch.from_numpy(seq[:-1].astype(np.int64))[None].to(args.device)  # (1, ctx_len)
-        with ctx_mgr:
+        ctx = torch.from_numpy(seq[:-1].astype(np.int64))[None].to(args.device)
+        with autocast:
             logits, _ = model(ctx)
         logits = logits.squeeze(0)  # (ctx_len, vocab)
         ctx_len = logits.size(0)
-
-        # model may crop if ctx_len < len(seq)-1 ⇒ align from the *end*
         offset = len(seq) - 1 - ctx_len
         steps = min(ctx_len, n_tokens - pos)
 
+        if args.mode == "softmax":
+            probs = F.softmax(logits, dim=-1)
+
         for j in range(steps):
-            tgt = int(seq[offset + j + 1])  # +1 because next‑token
-            chosen_ids.append(tgt)
-            chosen_logits.append(logits[j, tgt].item())
+            tgt = int(seq[offset + j + 1])
+            ids.append(tgt)
+            if args.mode == "softmax":
+                scalars.append(probs[j, tgt].item())
+            else:  # minmax
+                scalars.append(logits[j, tgt].item())
         pos += steps
 
-    coloured = colorize_text_minmax(chosen_ids, chosen_logits, decode)
+    coloured = _colorize(ids, scalars, decode)
     console.print(coloured)
 
     if args.output_file:
-        Path(args.output_file).write_text(convert_rich_text_to_ansi(coloured), encoding="utf-8", errors="replace")
+        Path(args.output_file).write_text(convert_rich_text_to_ansi(coloured), "utf-8", errors="replace")
         console.print(f"[cyan]Saved → {args.output_file}[/cyan]")
 
 
