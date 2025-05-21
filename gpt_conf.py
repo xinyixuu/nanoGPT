@@ -21,8 +21,8 @@ class GPTConfig:
     use_concat_heads: bool = False
 
     # Softcapping params
-    attn_logit_softcapping: bool = False
-    final_logit_softcapping: bool = False
+    attn_logit_softcapping: float | None = None
+    final_logit_softcapping: float | None = None
 
     # Learned Position Embeddings
     n_lpe: int = 0
