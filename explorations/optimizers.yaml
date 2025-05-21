@@ -21,6 +21,7 @@ optimizer:
 - orthoadam
 # hybrids
 - lambdiff
+- adamod_diffgrad
 # pytorch optimizer
 - qhadam
 - yogi

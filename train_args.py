@@ -115,6 +115,7 @@ def parse_args():
             "diffgrad",
             "lamb",
             "lambdiff",
+            "adamod_diffgrad",
             "novograd",
             "pid",
             "qhm",

@@ -834,6 +834,90 @@ def _apollo_adamw(param_groups, args):
     )
     return opt
 
+class AdaModDiffGrad(Optimizer):
+    def __init__(
+        self,
+        params,
+        lr=1e-3,
+        betas=(0.9, 0.999, 0.9999),  # (beta1, beta2, beta3)
+        eps=1e-8,
+        weight_decay=0.0,
+    ):
+        if lr <= 0.0:
+            raise ValueError("Learning rate must be positive")
+
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            beta1, beta2, beta3 = group["betas"]
+            lr = group["lr"]
+            eps = group["eps"]
+            wd = group["weight_decay"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+
+                grad = p.grad.data
+                state = self.state[p]
+
+                if not state:
+                    state["step"] = 0
+                    state["exp_avg"] = torch.zeros_like(p.data)
+                    state["exp_avg_sq"] = torch.zeros_like(p.data)
+                    state["eta_avg"] = torch.zeros_like(p.data)
+                    state["prev_grad"] = torch.zeros_like(p.data)
+
+                exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
+                eta_avg, prev_grad = state["eta_avg"], state["prev_grad"]
+
+                state["step"] += 1
+
+                # diffGrad friction coefficient ξ
+                diff = (grad - prev_grad).abs()
+                xi = 1.0 / (1.0 + torch.exp(-diff))
+
+                # update moments
+                exp_avg.mul_(beta1).addcmul_(xi, grad, value=1 - beta1)
+                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+
+                bias_c1 = 1 - beta1**state["step"]
+                bias_c2 = 1 - beta2**state["step"]
+
+                m_hat = exp_avg / bias_c1
+                v_hat = exp_avg_sq / bias_c2
+
+                eta = lr / (v_hat.sqrt().add(eps))
+
+                # AdaMod bounding
+                eta_avg.mul_(beta3).add_(eta, alpha=1 - beta3)
+                eta_bound = torch.min(eta, eta_avg)
+
+                if wd != 0:
+                    p.data.mul_(1 - lr * wd)
+
+                p.data.addcmul_(m_hat, eta_bound, value=-1.0)
+
+                prev_grad.copy_(grad)
+
+        return loss
+
+def _adamod_diffgrad(param_groups, args):
+    return AdaModDiffGrad(
+        param_groups,
+        lr=args.learning_rate,
+        betas=(args.beta1, args.beta2, args.adamod_beta3),
+        eps=args.opt_eps,
+        weight_decay=args.opt_weight_decay,
+    )
 
 
 optimizer_dictionary: dict[str, callable] = {
@@ -854,6 +938,7 @@ optimizer_dictionary: dict[str, callable] = {
     "orthoadam": _orthoadam,
     # hybrids
     "lambdiff": _lambdiff,
+    "adamod_diffgrad": _adamod_diffgrad,
     # community contributed
     "lion": _lion,
     # from adabelief_pytorch
