@@ -13,6 +13,7 @@ from collections import deque
 from datetime import datetime, timedelta
 
 from train_variations.optimizer_variants import optimizer_dictionary
+from train_variations.eta_variants import build_eta_estimator, ETAUpdate
 
 from utils.gpu_monitoring import get_gpu_memory_info
 from torch.cuda import reset_peak_memory_stats, max_memory_allocated
@@ -85,11 +86,7 @@ class Trainer:
         self.time_remaining_ms: float= 0.0
         self.evaluation_count: int = 0   # cumulative run-time (ns)
         self.evaluations_remaining: int = 0 # will be updated after the current iter is loaded
-        self.eval_cycle_latency_avg: float = 0.0  # running mean ms / iteration
-        self.eval_cycle_start: float = None  # running mean ms / iteration
         self.formatted_completion_eta: str = "waiting for calculation"
-        # calculation on end time via iteration
-        self.iteration_window = deque(maxlen=self.args.iteration_window)
         self.iter_latency_avg: float = 0.0  # running mean ms / iteration
 
         # calculation on end time via eval cycle
@@ -1026,6 +1023,7 @@ class Trainer:
         running_mfu = -1.0
         current_epoch = 0.0
         self.evaluations_remaining = (self.args.max_iters - self.iter_num) // self.args.eval_interval + 1
+        self.eta = build_eta_estimator(self.args, t_start, self.evaluations_remaining, self.formatted_completion_eta)
         num_steps_with_worse_loss = 0
         # TODO: Move statistics labels to statistics scripts
         graph_y_labels = []
@@ -1238,67 +1236,19 @@ class Trainer:
                 t0 = t1
                 self.total_training_time_ms = (t1 - t_start) * 1000.0
 
-                progress_advance = 1
-                if (self.iter_num % self.args.eval_interval != 0) and (self.iter_num != 1):
-                    # note we skip iter_num == 1, since this is always an outlite
-                    # add current latency (dt in seconds) to window
-                    self.iteration_window.append(dt)
-                    # moving average over the window, convert → ms
-                    self.iter_latency_avg = (
-                        sum(self.iteration_window) / len(self.iteration_window) * 1000.0
-                    )
-                else:
-                    # calculate eval cycle average in ms
-                    self.evaluation_count += 1
-                    progress_advance += self.args.eval_iters
-                    self.evaluations_remaining -= 1
-                    if self.eval_cycle_start is not None:
-                        # completed an eval cycle – update moving-avg window
-                        cycle_time_ms = (t1 - self.eval_cycle_start) * 1000.0
-                        self.eval_cycle_window.append(cycle_time_ms)
-                        self.eval_cycle_latency_avg = (
-                            sum(self.eval_cycle_window) / len(self.eval_cycle_window)
-                        )
-                    self.eval_cycle_start = t1
+                # Estimate ETA
+                eta_update: ETAUpdate = self.eta.update(
+                    iter_num=self.iter_num,
+                    now=t1,
+                    dt=dt,
+                    is_eval_boundary=(self.iter_num % self.args.eval_interval == 0),
+                )
 
-                if self.args.time_remaining_mode == "iteration":
-                    # Estimate that eval iters of validation should take just as long as training iters
+                progress_advance = eta_update.progress_advance
+                self.iter_latency_avg = eta_update.iter_latency_avg
+                self.time_remaining_ms = eta_update.time_remaining_ms
+                self.formatted_completion_eta = eta_update.formatted_completion_eta
 
-                    # calculate cost from remaining training_iters
-                    self.time_remaining_ms = (self.args.max_iters - self.iter_num) * self.iter_latency_avg
-
-                    # add estimate for cost related to the evaluations
-                    self.time_remaining_ms += self.evaluations_remaining*self.args.eval_iters * self.iter_latency_avg
-
-                    # Note: this method does not account for the time to save the checkpoint
-
-                    # Convert to timedelta
-                    delta = timedelta(milliseconds=self.time_remaining_ms)
-                    complete_forecast = datetime.now() + delta
-
-                    # Save for later printing in the progress bar
-                    self.formatted_completion_eta = complete_forecast.strftime("%Y-%m-%d %H:%M:%S")
-
-                if (self.args.time_remaining_mode == "eval_cycle"):
-                    # allow for 1 eval cycle warmup, since first eval_cycle is always much slower.
-                    if (self.iter_num % self.args.eval_interval == 0) and (self.iter_num != 0) and (self.evaluation_count > 3):
-                        self.eval_cycle_start_mon = True
-                        # Use the "training + eval" cycle time estimate to estimate remaining time
-                        # This also incorporates for probability of saving the checkpoint, via averaging
-                        # While more accurate, this is not applicable when we only do eval once at the end, and doesn't update as frequently
-
-                        # estimated time ≈ remaining cycles × moving-avg cycle time
-                        self.time_remaining_ms = self.evaluations_remaining * self.eval_cycle_latency_avg
-
-                        # Convert to timedelta
-                        delta = timedelta(milliseconds=self.time_remaining_ms)
-                        complete_forecast = datetime.now() + delta
-
-                        # Save for later printing in the progress bar
-                        self.formatted_completion_eta = complete_forecast.strftime("%Y-%m-%d %H:%M:%S")
-
-                    if self.eval_cycle_start_mon:
-                        self.time_remaining_ms = self.time_remaining_ms - self.iter_latency_avg
 
 
                 self.iter_num += 1
