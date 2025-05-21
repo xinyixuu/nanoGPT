@@ -67,7 +67,6 @@ import tiktoken
 
 from train_args import parse_args
 
-# TODO: bring optimizer into own train_variations file
 class Trainer:
 
     def __init__(self, args, model_group, training_group, logging_group):
