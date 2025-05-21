@@ -291,7 +291,13 @@ class GPT(nn.Module):
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            if self.config.init_variant == "gaussian" or module is self.transformer['wpe']:
+            if self.config.init_variant == "gaussian":
+                torch.nn.init.normal_(
+                    module.weight,
+                    mean=self.config.embedding_mean_init,
+                    std=self.config.embedding_std_init
+                )
+            elif 'wpe' in self.transformer.keys() and module is self.transformer['wpe']:
                 torch.nn.init.normal_(
                     module.weight,
                     mean=self.config.embedding_mean_init,
@@ -299,12 +305,10 @@ class GPT(nn.Module):
                 )
             else:
                 init_fn = init_dictionary[self.config.init_variant]
+                print(self.config.init_variant)
 
                 # Generate custom init matrix
-                weight_data = init_fn(
-                    vocab_size=self.config.vocab_size,
-                    n_embd=self.config.n_embd
-                )
+                weight_data = init_fn(self.config)
 
                 # Copy into the module's weight
                 with torch.no_grad():

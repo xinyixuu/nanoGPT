@@ -487,7 +487,6 @@ class MonitorApp(App):
 
 
 
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Monitor hyperparameter search results (Textual TUI)."

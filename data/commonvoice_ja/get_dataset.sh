@@ -64,7 +64,31 @@ python3 "$script_dir"/utils/ja2ipa.py  -j "$output_file" "$output_json_with_ipa"
 echo "IPA conversion finished."
 
 output_ipa_txt="ja_ipa.txt"
+
+# Download kokoro dataset from huggingface
+ja_dataset="kokoro_transcription"
+ja_url="https://huggingface.co/datasets/xinyixuu/ja_snac"
+if [[ ! -d "${ja_dataset}" ]]; then
+  mkdir -p "${ja_dataset}"
+fi
+
+# Download transcription files under "transcription" directory.
+pushd "${ja_dataset}"
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "tiny.json" "${ja_url}/resolve/main/json_outs_ja/tiny.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "final.json" "${ja_url}/resolve/main/json_outs_ja/final.json?download=true" || true
+echo "kokoro transcripts downloaded and saved to kokoro_transcription."
+popd
 python3 "$script_dir"/utils/extract_json_values.py "$output_json_with_ipa" "spaced_ipa" "$output_ipa_txt"
+
+for jsonfile in "$ja_dataset"/*.json; do
+    # Check if the .json file exists (handles the case where no .json files are present)
+    if [ -f "$jsonfile" ]; then
+        echo "Processing $jsonfile..."
+        # Get the filename without the extension for output filename
+        filename=$(basename "${jsonfile%.json}")
+        python3 "$script_dir"/utils/extract_json_values.py "$jsonfile" "ipa" "$output_ipa_txt"
+    fi
+done
 echo "IPA extraction finished."
 
 #TODO(gkielian): see if we can fix the parsing of rows instead of deleting

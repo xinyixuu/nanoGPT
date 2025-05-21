@@ -17,6 +17,8 @@ class GPTConfig:
     ## Inf attention variation
     n_qk_head_dim: int = None
     n_v_head_dim: int = None
+    n_cproj: int = None
+    use_concat_heads: bool = False
 
     # Learned Position Embeddings
     n_lpe: int = 0
@@ -309,6 +311,8 @@ class GPTConfig:
 
     ## Embedding initialization options
     init_variant: str = None
+    init_scale: float = 0.01
+    init_wte_npy: str = "wte.npy"
 
     # Quantizations
     start_quant_level: float = 0

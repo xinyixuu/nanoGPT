@@ -12,7 +12,7 @@ def extract_values_by_key(json_file, key, output_file):
         output_file: Path to the output text file.
     """
     try:
-        with open(json_file, 'r', encoding='utf-8') as f_in, open(output_file, 'w', encoding='utf-8') as f_out:
+        with open(json_file, 'r', encoding='utf-8') as f_in, open(output_file, 'a', encoding='utf-8') as f_out:
             data = json.load(f_in)
 
             def extract_values(data, key, f_out):

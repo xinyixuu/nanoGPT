@@ -40,6 +40,8 @@ wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "test.json" "${url}/res
 wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "invalidated.json" "${url}/resolve/main/json_outs_ja/invalidated.json?download=true" || true
 wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "train.json" "${url}/resolve/main/json_outs_ja/train.json?download=true" || true
 wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "validated2_part1.json" "${url}/resolve/main/json_outs_ja/validated2_part1.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "tiny.json" "${url}/resolve/main/json_outs_ja/tiny.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "final.json" "${url}/resolve/main/json_outs_ja/final.json?download=true" || true
 
 echo "snac conversion files downloaded and saved to ${out_dir}."
 popd

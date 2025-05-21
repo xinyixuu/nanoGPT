@@ -247,7 +247,7 @@ def parse_args():
     training_group.add_argument('--token_boundary', type=str, default=None, help="Optional separator string between emitted tokens (for decode).")
     training_group.add_argument('--num_samples', type=int, default=1, help="Number of generated samples during sampling.")
     training_group.add_argument('--temperature', type=float, default=0.8, help="Temperature for predictions (1.0 = normal, < 1.0 = less random).")
-    training_group.add_argument('--top_k', type=int, nargs='+', default=[2,200], help="Retain only the top_k most likely tokens (used in sample.py).")
+    training_group.add_argument('--top_k', type=int, nargs='+', default=[2, 5, 10, 20], help="Retain only the top_k most likely tokens (used in sample.py).")
     training_group.add_argument('--eval_dataset', type=str, default=None, help="Optional dataset name for custom evaluation splits.")
     training_group.add_argument('--quantization_data_file', type=str, default=None, help="If set, export quantized weights/activations to a specified file (pkl).")
 
@@ -450,6 +450,8 @@ def parse_args():
     ## Infinite Attention variation
     model_group.add_argument('--n_qk_head_dim', default=None, type=int)
     model_group.add_argument('--n_v_head_dim', default=None, type=int)
+    model_group.add_argument('--n_cproj', default=None, type=int)
+    model_group.add_argument("--use_concat_heads",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="concat heads instead of adding in infinite attention")
 
     ## qk_norm variations
     model_group.add_argument("--use_qk_norm",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="applies the norm to q and k before attn")
@@ -483,8 +485,16 @@ def parse_args():
     model_group.add_argument( "--linear_std_init", type=float, default=0.02)
 
     ## Embedding Weight Initialization Options
-    embedding_init_variations = ["gaussian", "onehot", "hypercube"]
+    embedding_init_variations = [
+            "gaussian",
+            "onehot",
+            "hypercube",
+            "numpy_import",
+            ]
+
     model_group.add_argument( "--init_variant", choices=embedding_init_variations, default="gaussian", help="options for embedding initializations")
+    model_group.add_argument( "--init_scale", type=float, default=0.01, help="initialization scaling factor with non-gaussian variations")
+    model_group.add_argument( "--init_wte_npy", type=str, default="wte.npy", help="npy file for initialization of wte files")
 
     # Quantization
     model_group.add_argument("--full_quant_iteration", type=int, default=None,
