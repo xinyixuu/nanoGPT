@@ -946,7 +946,7 @@ class Trainer:
                 sanitized_dataset = self.args.dataset.replace("/", "_")
                 csv_full_dir = (
                     f"{self.args.csv_dir}/"
-                    f"{self.args.tensorboard_run_name}-{sanitized_dataset}"
+                    f"{sanitized_dataset}_{self.args.tensorboard_run_name}"
                 )
         os.makedirs(csv_full_dir, exist_ok=True)
         # Ensure the filename itself never contains path separators
