@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# run_exploration_monitor.py
 """
 Textual app to monitor hyperparameter search results from a YAML log file.
 Refreshes every N seconds, showing all runs in a DataTable view.
@@ -10,11 +10,13 @@ Interactive keybindings:
   x     - hide all rows matching current cell in column
   i     - invert filter: keep only rows matching current cell in column
   O     - unhide all rows (clear row filters)
-  e     - export current view to CSV
+  v     - export current view to CSV
   s     - save current layout
   p     - shows help menu
   g     - graphs first two rows
   L     - graph & connect points sharing the 3rd column value
+  1–9   - graph & connect points sharing merged columns 3..(2+N)
+  q–y   - barcharts with labels merged (q=1, y =6)
   c     - toggle colour-map on first column (green → red)
 
 Use `--hotkeys` to print this help and exit.
@@ -64,6 +66,7 @@ HOTKEYS_TEXT = (
     "g: graph first two columns (opens a Plotly window)\n"
     "p: shows help menu\n"
     "L: graph & connect points sharing the 3rd column value\n"
+    "1–9: graph & connect points sharing merged columns 3..(2+N)\n"
     "c: toggle colour-map on first column (green → red)\n"
 )
 
@@ -116,7 +119,7 @@ class MonitorApp(App):
             keys.update(entry.get("config", {}).keys())
         self.param_keys = sorted(keys)
         # Base columns: metrics + parameters
-        base_cols = ["best_val_loss", "best_val_iter", "num_params"] + self.param_keys
+        base_cols = ["best_val_loss", "best_val_iter", "num_params", "peak_gpu_mb", "iter_latency_avg"] + self.param_keys
         self.all_columns = base_cols.copy()
         self.columns = base_cols.copy()
         # Load persisted layout if exists
@@ -158,7 +161,7 @@ class MonitorApp(App):
 
     def get_cell(self, entry: Dict, col_name: str):
         """Retrieve the value for a given column in an entry."""
-        if col_name in ("best_val_loss", "best_val_iter", "num_params"):
+        if col_name in ("best_val_loss", "best_val_iter", "num_params", "peak_gpu_mb", "iter_latency_avg"):
             return entry.get(col_name)
         return entry.get("config", {}).get(col_name)
 
@@ -421,7 +424,66 @@ class MonitorApp(App):
             state = "enabled" if self.colour_first else "disabled"
             self.refresh_table()
             self._msg(f"First-column colour-map {state}")
+        elif key.isdigit() and key != "0":  # keys '1'–'9'
+            n = int(key)
+            try:
+                needed = 2 + n          # 0-based → need at least 2+n columns
+                if len(self.columns) < needed:
+                    raise ValueError(
+                        f"Need at least {needed} visible columns for '{key}'"
+                    )
+                y_col, x_col = self.columns[0], self.columns[1]
+                merge_cols   = self.columns[2 : 2 + n]
 
+                merged_rows = []
+                for e in self.current_entries:
+                    parts = [str(self.get_cell(e, col)) for col in merge_cols]
+                    merge_key = "-".join(parts)
+                    merged_rows.append({**e, "__merge__": merge_key})
+
+                plot_view.plot_rows(
+                    merged_rows,
+                    x=x_col,
+                    y=y_col,
+                    connect_by="__merge__",
+                    connect_label="-".join(merge_cols),   # NEW
+                )
+                self._msg(
+                    f"Plotted {y_col} vs {x_col} grouped by {'-'.join(merge_cols)}",
+                    timeout=3,
+                )
+            except Exception as exc:
+                self._msg(f"Graph error: {exc}", timeout=4)
+
+        shift_map = {
+            "q": 1,
+            "w": 2,
+            "e": 3,
+            "r": 4,
+            "t": 5,
+            "y": 6,
+        }
+        if key in shift_map:
+            n = shift_map[key]
+            try:
+                needed = 1 + n             # leftmost + n label columns
+                if len(self.columns) < needed:
+                    raise ValueError(f"Need at least {needed} visible columns")
+
+                y_col = self.columns[0]
+                lbl_cols = self.columns[1 : 1 + n]
+
+                plot_view.plot_bars(
+                    self.current_entries,
+                    y=y_col,
+                    label_cols=lbl_cols,
+                )
+                self._msg(
+                    f"Bar-chart of {y_col} by {'-'.join(lbl_cols)}",
+                    timeout=3,
+                )
+            except Exception as exc:
+                self._msg(f"Graph error: {exc}", timeout=4)
 
 
 

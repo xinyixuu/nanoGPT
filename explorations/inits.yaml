@@ -1,0 +1,34 @@
+# inits.yaml
+---
+# parameter_groups: define sets of overrides to apply on top of base params
+parameter_groups:
+  - init_variant: ["numpy_import", "onehot", "hypercube"]
+    init_scale: [1.0,0.5,0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 0.0005]
+  - init_variant: ["gaussian"]
+    embedding_std_init: [0.002, 0.005, 0.01, 0.02, 0.05, 0.1]
+
+use_rotary_embeddings: [true]
+use_abs_pos_embeddings: [false]
+
+linear_std_init: [0.1, 0.05, 0.02, 0.01, 0.005]
+
+# base hyperparameters
+max_iters: [5000]
+eval_interval: [500]
+n_layer: [6]
+n_head: [6]
+n_embd: [384]
+block_size: [256]
+max_sample_tokens: [256]
+colorize_output: true
+colorize_mode: all
+device: ["cuda"]
+dtype: ["bfloat16", "float16"]
+dataset: "billsum" # 129 chars in english
+
+# boolean flags
+compile: [true]
+
+# tensorboard run name
+tensorboard_run_name: "init_scale_variations"
+

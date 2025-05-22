@@ -48,14 +48,29 @@ def fnum(val: Any, spec: str) -> str:
     return spec.format(val) if isinstance(val, (int, float)) else str(val)
 
 
-def metrics_panel(m: Dict[str, Any]) -> Panel:
+def metrics_panel(
+        current_iter_baseline_metrics: Dict[str, Any],
+        prev_iter_baseline_loss: Any = "-",       # Baseline loss from prev iter
+        current_avg_candidate_loss: Any = "-",    # Avg Cand Loss for current iter
+        prior_avg_candidate_loss: Any = "-",      # Avg Cand Loss for prior iter
+        delta_avg_candidate_loss: Any = "-",      # Difference in Avg Cand Loss
+        ) -> Panel:
     g = Table.grid(padding=1)
     g.add_column(justify="right")
     g.add_column()
-    g.add_row("Loss", fnum(m.get("best_val_loss", m.get("loss", "-")), "{:.4f}"))
-    g.add_row("Score", fnum(m.get("score", "-"), "{:.4e}"))
-    g.add_row("Params", fnum(m.get("num_params", m.get("params", "-")), "{:.3e}"))
-    g.add_row("Best iter", str(m.get("best_iter", "-")))
+    g.add_row("Prior Loss", fnum(prev_iter_baseline_loss, "{:.4f}"))
+    g.add_row("After Iteration Loss", fnum(current_iter_baseline_metrics.get("loss", current_iter_baseline_metrics.get("best_val_loss", "-")), "{:.4f}"))
+    g.add_row("Best iter", str(current_iter_baseline_metrics.get("best_iter", "-")))
+
+    # Average loss from all candidates explored in the current iteration
+    g.add_row("Avg Cand Loss", fnum(current_avg_candidate_loss, "{:.4f}"))
+    g.add_row("Prior Avg Loss", fnum(prior_avg_candidate_loss, "{:.4f}"))
+    g.add_row("Δ Avg Loss", fnum(delta_avg_candidate_loss, "{:.4f}"))
+
+    # This round statistics
+    g.add_row("Score", fnum(current_iter_baseline_metrics.get("score", "-"), "{:.4e}")) # Baseline score
+    g.add_row("Params", fnum(current_iter_baseline_metrics.get("num_params", current_iter_baseline_metrics.get("params", "-")), "{:.3e}"))
+
     return Panel(g, title="Iteration stats", border_style="green")
 
 
@@ -163,6 +178,20 @@ class SweepViewer(App):
             self.idx = row
         self._refresh_view()
 
+    # ── calculation helpers ───────────────
+    def _calculate_avg_cand_loss(self, blk: Dict[str, Any]) -> float | None:
+        """Calculates the average best_val_loss from candidates in an iteration block."""
+        total_loss = 0.0
+        loss_count = 0
+        for candidate in blk.get("candidates", []):
+            loss = candidate.get("best_val_loss")
+            if isinstance(loss, (int, float)):
+                total_loss += loss
+                loss_count += 1
+        if loss_count > 0:
+            return total_loss / loss_count
+        return None # Return None if no valid candidates/losses
+
     # ── summary helpers ─────────────────────
     def _summary_data(self):
         if not self.iters:
@@ -229,7 +258,43 @@ class SweepViewer(App):
             return
 
         blk = self.iters[self.idx]
-        panel.update(metrics_panel(blk["baseline_metrics"]))
+        current_baseline_metrics = blk["baseline_metrics"]
+
+        prior_loss_val = "-"
+        if self.idx == 0: # Current iteration is the first one (e.g., iter 0)
+            if self.base_metrics: # Use metrics from iter -1 or initial baseline
+                prior_loss_val = self.base_metrics.get("loss", self.base_metrics.get("best_val_loss", "-"))
+        elif self.idx > 0: # Current iteration is not the first one
+            # Use baseline_metrics from the previous iteration in the list
+            prev_iter_baseline_metrics = self.iters[self.idx - 1]["baseline_metrics"]
+            prior_loss_val = prev_iter_baseline_metrics.get("loss", prev_iter_baseline_metrics.get("best_val_loss", "-"))
+
+
+        # Calculate Avg Cand Loss for current and prior iterations
+        current_avg_loss_val = self._calculate_avg_cand_loss(blk) # Returns float or None
+
+        prior_avg_loss_val = None
+        if self.idx > 0:
+            prior_blk = self.iters[self.idx - 1]
+            prior_avg_loss_val = self._calculate_avg_cand_loss(prior_blk) # Returns float or None
+
+        # Calculate Delta Avg Cand Loss
+        delta_avg_loss_val = None
+        if isinstance(current_avg_loss_val, float) and isinstance(prior_avg_loss_val, float):
+            delta_avg_loss_val = current_avg_loss_val - prior_avg_loss_val
+
+        # Format for display
+        current_avg_loss_display = f"{current_avg_loss_val:.4f}" if current_avg_loss_val is not None else "-"
+        prior_avg_loss_display = f"{prior_avg_loss_val:.4f}" if prior_avg_loss_val is not None else "-"
+        delta_avg_loss_display = f"{delta_avg_loss_val:.4f}" if delta_avg_loss_val is not None else "-"
+
+        panel.update(metrics_panel(
+            current_iter_baseline_metrics=current_baseline_metrics,
+            prev_iter_baseline_loss=prior_loss_val,
+            current_avg_candidate_loss=current_avg_loss_display,
+            prior_avg_candidate_loss=prior_avg_loss_display,
+            delta_avg_candidate_loss=delta_avg_loss_display,
+        ))
         self.sub_title = f"Iteration {blk['iter']}  (↑/↓ nav, q quit)"
         table.clear(columns=True)
         table.add_columns(
