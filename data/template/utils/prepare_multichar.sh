@@ -6,7 +6,7 @@ set +x
 arr=(cvp part_of_speech in_word_position since_newline)
 
 for i in ${arr[@]}; do
-  echo "begginning $i"
+  echo "beginning $i"
   # create copy of file
   filename="input_${i}.txt"
   cp input.txt "$filename"
