@@ -147,6 +147,9 @@ class GPT(nn.Module):
 
         self.config = config
 
+        # Final-logit softcapping
+        self.final_logit_softcapping = config.final_logit_softcapping
+
         # Use the new SharedParamGroupCreator for MLP and Attn layers
         spg_creator = SharedParamGroupCreator(config)
         shared_mlp_array = spg_creator.create_shared_param_group("mlp")
@@ -500,7 +503,12 @@ class GPT(nn.Module):
             logits = []
             for i in range(len(token_list)):
                 logits.append(self.transformer[f'lm_head_{i}'](x))
-
+                
+            if self.config.final_logit_softcapping is not None:
+                logits = logits / self.config.final_logit_softcapping
+                logits = torch.tanh(logits)
+                logits = logits * self.config.final_logit_softcapping
+            
             # 6. Compute losses if targets are provided
             # If we only want the last token, adapt the slices as you prefer
             losses = None
@@ -605,6 +613,11 @@ class GPT(nn.Module):
             if self.n_embd_wte:
                 x = F.linear(x, self.transformer.scale_down.weight.t())
 
+            if self.config.final_logit_softcapping is not None:
+                logits = logits / self.config.final_logit_softcapping
+                logits = torch.tanh(logits)
+                logits = logits * self.config.final_logit_softcapping
+            
             if targets is not None:
                 # if we are given some desired targets also calculate the loss
                 logits = self.lm_head(x)
