@@ -196,7 +196,8 @@ class SweepViewer(App):
     def _summary_data(self):
         if not self.iters:
             return ["iter"], [["-1"]]
-        changed = sorted({it["chosen"]["param"] for it in self.iters})
+        # guard against iterations where “chosen” is missing/None
+        changed = sorted({it["chosen"]["param"] for it in self.iters if it.get("chosen")})
         hdrs = ["iter", *changed, "best_loss", "best_iter", "params", "Δparams", "eff."]
         rows: List[List[Any]] = []
 
@@ -215,20 +216,28 @@ class SweepViewer(App):
             ]
         )
         for i, it in enumerate(self.iters):
-            ch, after = it["chosen"], it["baseline_config_after"]
-            vals = [
-                Text(str(after.get(p, "-")), style=HILITE_STYLE)
-                if p == ch["param"]
-                else str(after.get(p, "-"))
-                for p in changed
-            ]
-            vals += [
-                f"{ch['best_val_loss']:.4f}",
-                str(ch.get("best_iter", "-")),
-                f"{int(ch['num_params']):,}",
-                f"{int(ch['delta_params']):,}",
-                f"{ch['efficiency']:.2e}",
-            ]
+            ch = it.get("chosen") or {}                    # could be None
+            after = it["baseline_config_after"]
+
+            # highlight the changed field only if “chosen” is present
+            vals = []
+            for p in changed:
+                if ch and p == ch.get("param"):
+                    vals.append(Text(str(after.get(p, "-")), style=HILITE_STYLE))
+                else:
+                    vals.append(str(after.get(p, "-")))
+
+            # stats columns – fall back to “-” if missing
+            if ch:
+                vals += [
+                    f"{ch['best_val_loss']:.4f}",
+                    str(ch.get("best_iter", "-")),
+                    f"{int(ch['num_params']):,}",
+                    f"{int(ch['delta_params']):,}",
+                    f"{ch['efficiency']:.2e}",
+                ]
+            else:
+                vals += ["-", "-", "-", "-", "-"]
             rows.append([str(i), *vals])
         return hdrs, rows
 
@@ -300,9 +309,14 @@ class SweepViewer(App):
         table.add_columns(
             "param", "value", "best_loss", "best_iter", "Δscore", "Δparams", "eff."
         )
-        chosen = blk["chosen"]
+        # “chosen” may be absent (e.g., no best candidate selected this round)
+        chosen = blk.get("chosen") or {}
         for c in blk["candidates"]:
-            hl = c["param"] == chosen["param"] and c["value"] == chosen["value"]
+            hl = (
+                bool(chosen)
+                and c["param"] == chosen.get("param")
+                and c["value"] == chosen.get("value")
+            )
             st = "bold yellow" if hl else ""
             table.add_row(
                 Text(str(c["param"]), style=st),
