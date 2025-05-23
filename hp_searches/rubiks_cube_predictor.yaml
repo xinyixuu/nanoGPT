@@ -1,0 +1,23 @@
+# static
+dataset: "rubiks_cube"
+use_rotary_embeddings: True
+use_abs_pos_embeddings: False
+use_flash_lobo: true
+use_flash_lobo_per_head: true
+use_concat_heads: False
+attention_variant: "infinite"
+time_remaining_mode: "iteration"
+max_iters: 500
+eval_interval: 500
+compile: True
+batch_size: 32
+block_size: 128
+# changeable things
+n_cproj: 3
+n_layer: 6
+n_head: 6
+n_embd: 32
+mlp_size: 256
+n_qk_head_dim: 64
+n_v_head_dim: 64
+flash_lobo_log_const: 1.0
