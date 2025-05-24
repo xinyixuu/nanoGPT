@@ -1,6 +1,7 @@
 # train_variations/optimizer_variants.py
 from __future__ import annotations
 
+import math
 import torch
 from torch.optim import (ASGD, LBFGS, SGD, Adagrad, Adam, Adamax, AdamW, NAdam,
                          RAdam, RMSprop, SparseAdam)
@@ -284,11 +285,11 @@ class AdEMAMix(Optimizer):
 def _ademamix(param_groups, args):
     return AdEMAMix(
         param_groups,
-        lr=args.lr,
+        lr=args.learning_rate,
         betas=(args.ademamix_beta1, args.ademamix_beta2, args.ademamix_beta3),
         alpha=args.ademamix_alpha,
         T_alpha_beta3=args.ademamix_warmup,
-        eps=args.eps,
+        eps=args.opt_eps,
         weight_decay=args.weight_decay,
     )
 
