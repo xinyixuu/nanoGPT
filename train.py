@@ -1165,19 +1165,25 @@ class Trainer:
 
         # Create progress bar with ETA and remaining time display
         progress = Progress(
-            TextColumn("[progress.description]{task.description}"),
+            TextColumn("[bold white]{task.description}"),
             BarColumn(),
-            TaskProgressColumn(),  # shows n/N iterations
-            TimeRemainingColumn(),  # estimated time column
-            TextColumn("ETA: {task.fields[eta]}"),
-            TextColumn("Remain: {task.fields[ms]} ms")
+            TaskProgressColumn(),
+            TimeRemainingColumn(compact=True),
+            TextColumn("[bright_cyan]ETA:[/bright_cyan] {task.fields[eta]}"),
+            TextColumn("[bright_yellow]Day:[/bright_yellow] {task.fields[day]}"),
+            TextColumn("[bright_yellow]Hr:[/bright_yellow] {task.fields[hour]}"),
+            TextColumn("[bright_yellow]Min:[/bright_yellow] {task.fields[min]}"),
+            TextColumn("[bright_red]BestValLoss:[/bright_red] {task.fields[best_val_loss]}"),
         )
         with progress:
             task_id = progress.add_task(
                 "[green]Training...",
                 total=((self.args.max_iters - self.iter_num) + self.evaluations_remaining * self.args.eval_iters),
                 eta=self.formatted_completion_eta,
-                ms=f"{self.time_remaining_ms:.0f}"
+                day=f"{int(self.time_remaining_ms // (1000*3600*24))}",
+                hour=f"{int((self.time_remaining_ms // (1000*3600)) % 24)}",
+                min=f"{int((self.time_remaining_ms // 60000) % 60)}",
+                best_val_loss=f"{self.best_val_loss:.3f}"
             )
 
             while True:
@@ -1480,8 +1486,11 @@ class Trainer:
                         task_id,
                         advance=progress_advance,
                         eta=self.formatted_completion_eta,
-                        ms=f"{self.time_remaining_ms:.0f}",
-                        )
+                        day=f"{int(self.time_remaining_ms // (1000*3600*24))}",
+                        hour=f"{int((self.time_remaining_ms // (1000*3600)) % 24)}",
+                        min=f"{int((self.time_remaining_ms // 60000) % 60)}",
+                        best_val_loss=f"{self.best_val_loss:.3f}",
+                )
 
                 # End of training actions
                 if self.iter_num > self.args.max_iters:
