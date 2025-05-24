@@ -4,6 +4,8 @@ import sys
 import torch
 import torch.nn as nn
 
+import copy
+
 from variations.attention_variations import attention_dictionary
 from variations.mlp_variations import get_mlp_instance
 from variations.moe_variations import MoELayer
@@ -69,14 +71,71 @@ class SharedParamGroupCreator:
 
         for i in range(self.config.n_layer):
 
+            # ------------------------------------------------------------------
+            # Build a per-layer clone of the config and apply any *layerlist
+            # overrides.  Example:  --mlp_size_layerlist 100 200 300
+            # → layer 0→100, 1→200, 2→300, 3→100, 4→200, ...
+            # ------------------------------------------------------------------
+            layer_config = copy.deepcopy(self.config)
+
+            for attr in dir(self.config):
+                if attr.endswith("_layerlist"):
+                    lst = getattr(self.config, attr)
+                    if not lst:          # [], None, or empty → ignore
+                        continue
+                    core_attr = attr[:-10]         # strip "_layerlist"
+                    raw_val   = lst[i % len(lst)]  # cyclic selection
+
+                    # Cast to the same type as the original value if it exists
+                    if hasattr(self.config, core_attr):
+                        ref_val = getattr(self.config, core_attr)
+                        # --------------------------------------------------
+                        # 1.  If the runtime value is NOT None, keep
+                        #     the old behaviour (inspect the value itself).
+                        # 2.  If it IS None, consult the dataclass
+                        #     annotation to discover the intended type.
+                        # --------------------------------------------------
+                        if ref_val is None:
+                            from typing import get_origin, get_args
+                            anno = type(self.config).__annotations__.get(
+                                        core_attr, None)
+                            hinted = str          # fallback
+                            if anno is not None:
+                                origin = get_origin(anno)  # Optional → Union
+                                args   = get_args(anno)
+                                if origin is None:         # plain type
+                                    hinted = anno
+                                elif (len(args) == 2
+                                      and type(None) in args):  # T | None
+                                    hinted = (args[0] if args[1] is type(None)
+                                              else args[1])
+
+                            # Cast according to *hinted*
+                            if hinted is bool:
+                                raw_val = str(raw_val).lower() in ("1", "true", "yes", "0", "false", "no")
+                            elif hinted is int:
+                                raw_val = int(raw_val)
+                            elif hinted is float:
+                                raw_val = float(raw_val)
+                        else:
+                            # old behaviour
+                            if isinstance(ref_val, bool):
+                                raw_val = str(raw_val).lower() in (
+                                    "1", "true", "yes")
+                            elif isinstance(ref_val, int):
+                                raw_val = int(raw_val)
+                            elif isinstance(ref_val, float):
+                                raw_val = float(raw_val)
+                    setattr(layer_config, core_attr, raw_val)
+
             # Create a new layer block every "shared_size"
             if i % shared_size == 0:
                 if layer_type == "mlp":
                     # Possibly handle MoE
                     if self.config.use_moe and i % self.config.moe_layer_freq == 0:
-                        layer_block = MoELayer(self.config)
+                        layer_block = MoELayer(layer_config)
                     else:
-                        layer_block = get_mlp_instance(self.config)
+                        layer_block = get_mlp_instance(layer_config)
                 else:
                     # Determine which attention variant to use
                     variant = None
@@ -88,7 +147,7 @@ class SharedParamGroupCreator:
                         attn_variant_index += 1
 
                     attn_cls = attention_dictionary[variant]
-                    layer_block = attn_cls(self.config, fire_pos_enc=self.fire_pos_enc)
+                    layer_block = attn_cls(layer_config, fire_pos_enc=self.fire_pos_enc)
 
             # Add this (possibly reused) block to the list
             shared_group.append(layer_block)
