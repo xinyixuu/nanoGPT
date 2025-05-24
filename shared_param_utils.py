@@ -100,9 +100,15 @@ class SharedParamGroupCreator:
                         def _as_bool(txt):
                             if _is_none(txt):
                                 return None
-                            return str(txt).strip().lower() in {
-                                "1", "true", "yes", "y", "on", "false", "0", "n", "off",
-                            }
+                            truthy_values = {"1", "true", "yes", "y", "on"}
+                            falsy_values = {"0", "false", "no", "n", "off"}
+                            txt_lower = str(txt).strip().lower()
+                            if txt_lower in truthy_values:
+                                return True
+                            elif txt_lower in falsy_values:
+                                return False
+                            else:
+                                raise ValueError(f"Invalid boolean value: {txt}")
                         # a) If the runtime value is *not* None we can
                         #    rely on its actual Python type.
                         if ref_val is not None:
