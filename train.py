@@ -42,7 +42,13 @@ from rich.progress import (
         BarColumn,
         TimeRemainingColumn,
         TaskProgressColumn,
+        SpinnerColumn,
+        TimeElapsedColumn,
 )
+from rich.live   import Live
+from rich.table  import Table
+from rich.align  import Align
+
 
 # GNS Related
 import utils.gns_monitoring.gns_utils as gns_utils
@@ -1168,12 +1174,11 @@ class Trainer:
             TextColumn("[bold white]{task.description}"),
             BarColumn(),
             TaskProgressColumn(),
-            TimeRemainingColumn(compact=True),
-            TextColumn("[bright_cyan]ETA:[/bright_cyan] {task.fields[eta]}"),
-            TextColumn("[bright_yellow]Day:[/bright_yellow] {task.fields[day]}"),
-            TextColumn("[bright_yellow]Hr:[/bright_yellow] {task.fields[hour]}"),
-            TextColumn("[bright_yellow]Min:[/bright_yellow] {task.fields[min]}"),
-            TextColumn("[bright_red]BestValLoss:[/bright_red] {task.fields[best_val_loss]}"),
+            TimeRemainingColumn(compact=False),
+            TimeElapsedColumn(),
+            TextColumn("[bold dark_cyan]dhm:[/bold dark_cyan]{task.fields[day]}d,{task.fields[hour]}:{task.fields[min]}"),
+            TextColumn("[bold purple3]ETA:[/bold purple3] {task.fields[eta]}"),
+            TextColumn("[bold dark_violet]BestValLoss:[/bold dark_violet] {task.fields[best_val_loss]}"),
         )
         with progress:
             task_id = progress.add_task(
@@ -1487,8 +1492,8 @@ class Trainer:
                         advance=progress_advance,
                         eta=self.formatted_completion_eta,
                         day=f"{int(self.time_remaining_ms // (1000*3600*24))}",
-                        hour=f"{int((self.time_remaining_ms // (1000*3600)) % 24)}",
-                        min=f"{int((self.time_remaining_ms // 60000) % 60)}",
+                        hour=f"{int((self.time_remaining_ms // (1000*3600)) % 24):02d}",
+                        min=f"{int((self.time_remaining_ms // 60000) % 60):02d}",
                         best_val_loss=f"{self.best_val_loss:.3f}",
                 )
 
