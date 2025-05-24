@@ -193,6 +193,106 @@ def _lambdiff(param_groups, args):
         debias=args.lamb_debias,
     )
 
+# ###############  AdEMAMix  ###################
+#
+# Paper ― “The AdEMAMix Optimizer: Better, Faster, Older” (Pagliardini et al., 2024)
+# Key idea: keep *two* exponential moving averages of the gradient:
+#   m1 – a fast EMA (β1 ≈ 0.9)           – retains responsiveness
+#   m2 – a *very* slow EMA (β3 ≈ 0.9999) – stores decades-old grads
+# Update uses a weighted mix  ( m1  +  α·m2 ) / √ν
+# where ν is the usual 2-nd moment (AdamW-style).  α is warmed-up
+# together with β3 to avoid early explosions.
+
+class AdEMAMix(Optimizer):
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-3,
+        betas=(0.9, 0.999, 0.9999),        # (β1, β2, β3_final)
+        alpha: float = 5.0,                # final α
+        T_alpha_beta3: int = 0,            # warm-up steps (0 → off)
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+    ):
+        if not 0.0 <= lr:
+            raise ValueError(f"Invalid lr: {lr}")
+        if any(not 0.0 <= b < 1.0 for b in betas):
+            raise ValueError(f"Invalid betas: {betas}")
+        defaults = dict(
+            lr=lr,
+            betas=betas,
+            alpha=alpha,
+            T_alpha_beta3=T_alpha_beta3,
+            eps=eps,
+            weight_decay=weight_decay,
+        )
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            lr, eps, wd = group["lr"], group["eps"], group["weight_decay"]
+            beta1, beta2, beta3_final = group["betas"]
+            alpha_final = group["alpha"]
+            T = group["T_alpha_beta3"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                state = self.state[p]
+
+                # --- state init ---
+                if len(state) == 0:
+                    state["step"] = 0
+                    state["m1"] = torch.zeros_like(p)
+                    state["m2"] = torch.zeros_like(p)
+                    state["nu"] = torch.zeros_like(p)
+
+                m1, m2, nu = state["m1"], state["m2"], state["nu"]
+                state["step"] += 1
+                t = state["step"]
+
+                # --- linear warm-ups (disabled if T==0) ---
+                if T > 0:
+                    warm = min(1.0, t / T)
+                    beta3 = beta1 + warm * (beta3_final - beta1)
+                    alpha = warm * alpha_final
+                else:
+                    beta3, alpha = beta3_final, alpha_final
+
+                # --- decoupled weight-decay (AdamW style) ---
+                if wd != 0:
+                    p.data.mul_(1 - lr * wd)
+
+                # --- moment updates ---
+                m1.mul_(beta1).add_(g, alpha=1 - beta1)          # fast EMA
+                m2.mul_(beta3).add_(g, alpha=1 - beta3)          # slow EMA
+                nu.mul_(beta2).addcmul_(g, g, value=1 - beta2)   # 2-nd moment
+
+                # bias correction for m1 / nu (none for m2)
+                bc1 = 1 - beta1 ** t
+                bc2 = 1 - beta2 ** t
+
+                denom = (nu.sqrt() / math.sqrt(bc2)).add_(eps)
+                step_dir = (m1 / bc1 + alpha * m2) / denom
+                p.add_(step_dir, alpha=-lr)
+        return loss
+
+# ---- factory helper ---------------------------------------
+def _ademamix(param_groups, args):
+    return AdEMAMix(
+        param_groups,
+        lr=args.lr,
+        betas=(args.ademamix_beta1, args.ademamix_beta2, args.ademamix_beta3),
+        alpha=args.ademamix_alpha,
+        T_alpha_beta3=args.ademamix_warmup,
+        eps=args.eps,
+        weight_decay=args.weight_decay,
+    )
+
+
 ###############################################################################
 # AdamS (Momentum-as-Normalizer) – Huishuai Zhang et al. 2024
 # Paper: “Momentum Itself Can Be a Normalizer for LLM Pre-/Post-training”
@@ -206,6 +306,8 @@ class AdamS(Optimizer):
     Implements **AdamS** from Zhang et al. (2024) –– a memory-lean variant of
     Adam that *removes* the second-moment buffer.  It matches SGD-momentum in
     memory footprint while retaining Adam-like adaptivity.
+
+    https://arxiv.org/abs/2505.16363
 
     Args
     ----
@@ -1033,6 +1135,7 @@ optimizer_dictionary: dict[str, callable] = {
     # paper-driven implementations
     "orthoadam": _orthoadam,
     "adams": _adams,
+    "ademamix": _ademamix,
     # hybrids
     "lambdiff": _lambdiff,
     "adamod_diffgrad": _adamod_diffgrad,
