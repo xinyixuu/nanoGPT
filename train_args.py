@@ -121,6 +121,7 @@ def parse_args():
             "lbfgs",
             "adabelief",
             "orthoadam",
+            "adams",
             "adan",
             "apollo_adamw",
             "qhadam",
@@ -160,6 +161,9 @@ def parse_args():
     training_group.add_argument("--adagrad_lr_decay", type=float, default=0, help="Learning rate decay for Adagrad optimizer.")
     # --------  RMSProp --------------------------------------------------
     training_group.add_argument("--rmsprop_alpha", type=float, default=0.99, help="Smoothing constant for RMSprop.")
+    # --------  ADAMS --------------------------------------------------
+    training_group.add_argument("--adams_beta1", type=float, default=0.9, help="Beta1 for AdamS optimizer.")
+    training_group.add_argument("--adams_beta2", type=float, default=0.95, help="Beta2 for AdamS optimizer. Paper suggests 0.95 vs 0.999 for numerical stability.")
     # --------  NADAM --------------------------------------------------
     training_group.add_argument("--nadam_betas", type=float, nargs=2, default=[0.9, 0.999], help="Betas for Nadam optimizer.")
     training_group.add_argument("--nadam_eps", type=float, default=1e-8, help="Epsilon for Nadam optimizer.")

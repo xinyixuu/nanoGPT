@@ -19,6 +19,7 @@ optimizer:
 - adabelief
 # paper-driven implementations
 - orthoadam
+- adams
 # hybrids
 - lambdiff
 - adamod_diffgrad

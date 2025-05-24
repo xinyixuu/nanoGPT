@@ -193,6 +193,102 @@ def _lambdiff(param_groups, args):
         debias=args.lamb_debias,
     )
 
+###############################################################################
+# AdamS (Momentum-as-Normalizer) – Huishuai Zhang et al. 2024
+# Paper: “Momentum Itself Can Be a Normalizer for LLM Pre-/Post-training”
+#   • Denominator:  √( β₂ m² + (1-β₂) g² )
+#   • One state tensor fewer than Adam/AdamW  → ½ memory
+#   • Drop-in replacement for AdamW hyper-params
+###############################################################################
+
+class AdamS(Optimizer):
+    r"""
+    Implements **AdamS** from Zhang et al. (2024) –– a memory-lean variant of
+    Adam that *removes* the second-moment buffer.  It matches SGD-momentum in
+    memory footprint while retaining Adam-like adaptivity.
+
+    Args
+    ----
+    params         : iterable of parameters
+    lr             : learning rate  (default 1e-3)
+    betas          : (β1, β2)  momentum & denominator EMA factors
+    eps            : numerical ε  (default 1e-8)
+    weight_decay   : decoupled weight decay  (AdamW style)
+    """
+
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-3,
+        betas: tuple[float, float] = (0.9, 0.95),
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+    ):
+        if lr <= 0.0:
+            raise ValueError("Invalid learning rate")
+        if not 0.0 <= eps:
+            raise ValueError("Invalid eps")
+
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            beta1, beta2 = group["betas"]
+            lr = group["lr"]
+            eps = group["eps"]
+            wd = group["weight_decay"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                if g.is_sparse:
+                    raise RuntimeError("AdamS does not support sparse gradients")
+
+                state = self.state[p]
+                # State initialisation ---------------------------------------------------
+                if not state:
+                    state["step"] = 0
+                    state["exp_avg"] = torch.zeros_like(p, dtype=torch.float32)
+
+                exp_avg: torch.Tensor = state["exp_avg"]
+                state["step"] += 1
+
+                # Weight decay (decoupled – same spot as AdamW)
+                if wd != 0.0:
+                    p.data.mul_(1.0 - lr * wd)
+
+                # Momentum --------------------------------------------------------------
+                exp_avg.mul_(beta1).add_(g, alpha=1 - beta1)
+
+                # Denominator (no v buffer!)
+                denom = (beta2 * exp_avg.pow(2) + (1 - beta2) * g.pow(2)).sqrt().add_(eps)
+
+                step_size = lr
+                p.data.addcdiv_(exp_avg, denom, value=-step_size)
+
+        return loss
+
+# -----------------------------------------------------------------------------
+#  Factory helper – matches create_optimizer() convention
+# -----------------------------------------------------------------------------
+
+def _adams(param_groups, args):
+    return AdamS(
+        param_groups,
+        lr=args.learning_rate,
+        betas=(args.adams_beta1, args.adams_beta2),
+        eps=args.adamw_eps,
+        weight_decay=args.adamw_weight_decay,
+    )
+
 
 class OrthoAdam(Optimizer):
     """
@@ -936,6 +1032,7 @@ optimizer_dictionary: dict[str, callable] = {
     "lbfgs": _lbfgs,
     # paper-driven implementations
     "orthoadam": _orthoadam,
+    "adams": _adams,
     # hybrids
     "lambdiff": _lambdiff,
     "adamod_diffgrad": _adamod_diffgrad,
