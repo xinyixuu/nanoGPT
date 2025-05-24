@@ -100,6 +100,8 @@ class MonitorApp(App):
         self.current_entries: List[Dict] = []  # View data with filters
         self.row_filters: List[tuple] = []     # (col, op, val) triples
         self.colour_first: bool = False        # toggled with “c”
+        self._bar_mode: bool = False           # are we collecting digits?
+        self._bar_digits: List[int] = []       # collected numeric keys
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -304,6 +306,48 @@ class MonitorApp(App):
             return
         r, c = coord.row, coord.column
         key = event.key
+        if self._bar_mode:
+            if key.isdigit() and key != "0":
+                self._bar_digits.append(int(key))
+                if len(self._bar_digits) == 2:
+                    n_bars, n_labels = self._bar_digits
+                    # reset mode before plotting so errors don’t trap us
+                    self._bar_mode, self._bar_digits = False, []
+                    try:
+                        needed = 1 + n_bars + n_labels
+                        if len(self.columns) < needed:
+                            raise ValueError(
+                                f"Need at least {needed} visible columns "
+                                "for this bar-chart"
+                            )
+                        y_cols   = self.columns[0 : n_bars]
+                        lbl_cols = self.columns[n_bars : n_bars + n_labels]
+                        plot_view.plot_multi_bars(
+                            self.current_entries,
+                            y_cols   = y_cols,
+                            label_cols = lbl_cols,
+                        )
+                        self._msg(
+                            f"Bar-chart: {', '.join(y_cols)} by "
+                            f"{', '.join(lbl_cols)}",
+                            timeout = 3,
+                        )
+                    except Exception as exc:
+                        self._msg(f"Graph error: {exc}", timeout = 4)
+            else:
+                # any non-digit cancels the mode
+                self._bar_mode, self._bar_digits = False, []
+                self._msg("Bar-chart mode cancelled")
+            return  # swallow key while in bar-mode
+
+        # ────────────────────────── normal hotkeys ────────────────────────────
+
+        if key == "q":
+            # enter modal bar-chart mode
+            self._bar_mode, self._bar_digits = True, []
+            self._msg("Bar-chart mode: type <#metrics><#labels>")
+            return
+
         if key == "e":
             # Export CSV
             fname = f"{self.log_file.stem}_export_{int(time.time())}.csv"
@@ -456,12 +500,11 @@ class MonitorApp(App):
                 self._msg(f"Graph error: {exc}", timeout=4)
 
         shift_map = {
-            "q": 1,
-            "w": 2,
-            "e": 3,
-            "r": 4,
-            "t": 5,
-            "y": 6,
+            "w": 1,
+            "e": 2,
+            "r": 3,
+            "t": 4,
+            "y": 5,
         }
         if key in shift_map:
             n = shift_map[key]

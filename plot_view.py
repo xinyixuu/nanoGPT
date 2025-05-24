@@ -33,6 +33,8 @@ CLI usage
 from __future__ import annotations
 
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots  # multi-axis helper
 import numpy as np
 import pandas as pd
 import argparse
@@ -233,6 +235,93 @@ def plot_bars(
     safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in title_text)
     fig.write_image(f"{safe}.png", scale=2)  # requires kaleido
     fig.show()
+
+# ───────────────────────────── plot multi bars ──────────────────────────────
+def plot_multi_bars(
+    rows: List[Dict[str, Any]],
+    *,
+    y_cols: List[str],          # numeric columns to plot (≥1)
+    label_cols: List[str],      # columns whose values build the category label (≥1)
+) -> None:
+    if not y_cols or not label_cols:
+        raise ValueError("Need ≥1 numeric-col *and* ≥1 label-col")
+
+    # ---- harvest data -----------------------------------------------------
+    cats: List[str] = []
+    series: Dict[str, List[float]] = {yc: [] for yc in y_cols}
+
+    for r in rows:
+        merged = "-".join(
+            "None" if _extract(r, c) is None else str(_extract(r, c))
+            for c in label_cols
+        )
+        cat_label = merged
+        if cat_label not in cats:
+            cats.append(cat_label)
+        for yc in y_cols:
+            val = _extract(r, yc)
+            series[yc].append(float(val) if val is not None else np.nan)
+
+    # ---- build traces -----------------------------------------------------
+    # ── choose layout: one secondary axis (2 metrics) or stacked rows (>2) ──
+    if len(y_cols) == 1:
+        # ----- single metric → simple grouped bars ----------------------
+        fig = go.Figure()
+        fig.add_trace(
+            go.Bar(
+                x=cats,
+                y=series[y_cols[0]],
+                name=y_cols[0],
+                marker_color=px.colors.qualitative.Plotly[0],
+            )
+        )
+        fig.update_layout(
+            barmode="group",
+            xaxis_title=" / ".join(label_cols),
+            yaxis_title=y_cols[0],
+        )
+    else:
+        # N > 2  → one row per metric, shared X axis
+        fig = make_subplots(
+            rows=len(y_cols),
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.03,
+        )
+        col_cycle = itertools.cycle(px.colors.qualitative.Plotly)
+        for idx, yc in enumerate(y_cols, start=1):
+            fig.add_trace(
+                go.Bar(
+                    x=cats,
+                    y=series[yc],
+                    name=yc,
+                    marker_color=next(col_cycle),
+                    showlegend=False,
+                ),
+                row=idx,
+                col=1,
+            )
+        # give each panel its own y-axis label
+            fig.update_yaxes(title_text=yc, row=idx, col=1)
+        fig.update_layout(barmode="group", height=300 * len(y_cols))
+
+    pretty = lambda s: s.replace("_", " ").title()
+    # ── common layout bits ────────────────────────────────────────────
+    fig.update_layout(
+        title=dict(
+            text=f"{' / '.join(map(pretty, y_cols))} by "
+                 f"{' / '.join(map(pretty, label_cols))}",
+            x=0.5, xanchor="center", yanchor="top",
+        ),
+        bargap=0.15,
+        bargroupgap=0.1,
+        legend_title_text="Metric",
+    )
+
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in fig.layout.title.text)
+    fig.write_image(f"{safe}.png", scale=2)  # kaleido needed
+    fig.show()
+
 # ───────────────────────────── CLI wrapper ──────────────────────────
 
 
