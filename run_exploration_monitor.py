@@ -16,8 +16,11 @@ Interactive keybindings:
   g     - graphs first two rows
   L     - graph & connect points sharing the 3rd column value
   1–9   - graph & connect points sharing merged columns 3..(2+N)
-  q–y   - barcharts with labels merged (q=1, y =6)
+  q # # - multibarcharts - `q [1-9] [1-9]` - e.g. 'q 3 2' will create bar charts for columns 1 2 and 3, the next two columns (column 4 and column 5) as merged labels.
+  w–y   - barcharts with labels merged (w=1, y =5)
   c     - toggle colour-map on first column (green → red)
+  u     - unsort / remove current column from the sort stack
+  U     - clear *all* sorting
 
 Use `--hotkeys` to print this help and exit.
 """
@@ -32,6 +35,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import yaml
+import math
 from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Container
@@ -67,7 +71,11 @@ HOTKEYS_TEXT = (
     "p: shows help menu\n"
     "L: graph & connect points sharing the 3rd column value\n"
     "1–9: graph & connect points sharing merged columns 3..(2+N)\n"
+    "q # #: multibarcharts - `q [1-9] [1-9]` - e.g. 'q 3 2' will create bar charts for columns 1 2 and 3, the next two columns (column 4 and column 5) as merged labels\n"
+    "w–y: barcharts with labels merged (w=1, y =5)\n"
     "c: toggle colour-map on first column (green → red)\n"
+    "u: unsort / remove current column from the sort stack\n"
+    "U: clear *all* sorting\n"
 )
 
 
@@ -93,13 +101,14 @@ class MonitorApp(App):
         self.columns: List[str] = []
         self.all_columns: List[str] = []
         self.hidden_cols: set[str] = set()
-        self.sort_column: Optional[int] = None
-        self.sort_reverse: bool = False
+        self.sort_stack: List[tuple[int, bool]] = []
         self.table: Optional[DataTable] = None
         self.original_entries: List[Dict] = []  # Unfiltered data
         self.current_entries: List[Dict] = []  # View data with filters
         self.row_filters: List[tuple] = []     # (col, op, val) triples
         self.colour_first: bool = False        # toggled with “c”
+        self._bar_mode: bool = False           # are we collecting digits?
+        self._bar_digits: List[int] = []       # collected numeric keys
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -128,8 +137,7 @@ class MonitorApp(App):
             self.all_columns = cfg.get("all_columns", self.all_columns)
             self.hidden_cols = set(cfg.get("hidden_cols", []))
             self.columns = [c for c in self.all_columns if c not in self.hidden_cols]
-            self.sort_column = cfg.get("sort_column")
-            self.sort_reverse = cfg.get("sort_reverse", False)
+            self.sort_stack = [tuple(p) for p in cfg.get("sort_stack", [])]
             # Restore saved row filters
             self.row_filters = cfg.get("row_filters", [])
             self.current_entries = list(self.original_entries)
@@ -165,20 +173,45 @@ class MonitorApp(App):
             return entry.get(col_name)
         return entry.get("config", {}).get(col_name)
 
-    def apply_bubble_sort(self) -> None:
-        """Perform stable bubble sort on current_entries by sort_column."""
-        col = self.columns[self.sort_column]
-        n = len(self.current_entries)
-        for i in range(n):
-            for j in range(n - i - 1):
-                a = self.get_cell(self.current_entries[j], col)
-                b = self.get_cell(self.current_entries[j + 1], col)
-                cmp = self._compare_values(a, b)
-                if (not self.sort_reverse and cmp > 0) or (self.sort_reverse and cmp < 0):
-                    self.current_entries[j], self.current_entries[j + 1] = (
-                        self.current_entries[j + 1],
-                        self.current_entries[j],
-                    )
+    @staticmethod
+    def _is_missing(v) -> bool:
+        """Return *True* for values that should always sink to the bottom."""
+        return (
+            v is None
+            or (isinstance(v, float) and math.isnan(v))
+        )
+    @classmethod
+    def _sort_key(cls, v):
+        """
+        Build a key that always puts “missing” values (*None* or *NaN*) LAST,
+        regardless of ascending / descending order; for everything else use the
+        raw value when comparable, falling back to its string representation for
+        mixed types.
+        """
+        if cls._is_missing(v):
+            return (1, "")            #  sink
+        return (0, v if isinstance(v, (int, float, str)) else str(v))
+
+    def apply_progressive_sort(self) -> None:
+        """
+        Stable multi-key sort:
+        later keys in ``self.sort_stack`` take precedence, but the ordering
+        within equal keys respects the earlier sorts (Python sort is stable).
+        """
+        # NOTE:  we iterate **in insertion order** (oldest → newest).  
+        # Because Python’s sort is *stable*, the **last** pass has the
+        # highest precedence — therefore the *most-recent* “Enter” press
+        # wins, exactly as requested.
+        for col_idx, asc in self.sort_stack:
+            col_name = self.columns[col_idx]
+            self.current_entries.sort(
+                key=lambda e: self._sort_key(self.get_cell(e, col_name)),
+                reverse=not asc,
+            )
+            # second pass → ensure None/NaN always sink
+            self.current_entries.sort(
+                key=lambda e: self._is_missing(self.get_cell(e, col_name))
+            )
 
     @staticmethod
     def _compare_values(a, b) -> int:
@@ -230,8 +263,8 @@ class MonitorApp(App):
                 base_entries = [e for e in base_entries if str(self.get_cell(e, col)) == val]
         self.current_entries = base_entries
         # Apply sort
-        if self.sort_column is not None:
-            self.apply_bubble_sort()
+        if self.sort_stack:
+            self.apply_progressive_sort()
         # Save cursor position
         old = self.table.cursor_coordinate
         ri = old.row if old else 0
@@ -304,6 +337,48 @@ class MonitorApp(App):
             return
         r, c = coord.row, coord.column
         key = event.key
+        if self._bar_mode:
+            if key.isdigit() and key != "0":
+                self._bar_digits.append(int(key))
+                if len(self._bar_digits) == 2:
+                    n_bars, n_labels = self._bar_digits
+                    # reset mode before plotting so errors don’t trap us
+                    self._bar_mode, self._bar_digits = False, []
+                    try:
+                        needed = 1 + n_bars + n_labels
+                        if len(self.columns) < needed:
+                            raise ValueError(
+                                f"Need at least {needed} visible columns "
+                                "for this bar-chart"
+                            )
+                        y_cols   = self.columns[0 : n_bars]
+                        lbl_cols = self.columns[n_bars : n_bars + n_labels]
+                        plot_view.plot_multi_bars(
+                            self.current_entries,
+                            y_cols   = y_cols,
+                            label_cols = lbl_cols,
+                        )
+                        self._msg(
+                            f"Bar-chart: {', '.join(y_cols)} by "
+                            f"{', '.join(lbl_cols)}",
+                            timeout = 3,
+                        )
+                    except Exception as exc:
+                        self._msg(f"Graph error: {exc}", timeout = 4)
+            else:
+                # any non-digit cancels the mode
+                self._bar_mode, self._bar_digits = False, []
+                self._msg("Bar-chart mode cancelled")
+            return  # swallow key while in bar-mode
+
+        # ────────────────────────── normal hotkeys ────────────────────────────
+
+        if key == "q":
+            # enter modal bar-chart mode
+            self._bar_mode, self._bar_digits = True, []
+            self._msg("Bar-chart mode: type <#metrics><#labels>")
+            return
+
         if key == "e":
             # Export CSV
             fname = f"{self.log_file.stem}_export_{int(time.time())}.csv"
@@ -326,27 +401,36 @@ class MonitorApp(App):
             cfg = {
                 "all_columns": self.all_columns,
                 "hidden_cols": list(self.hidden_cols),
-                "sort_column": self.sort_column,
-                "sort_reverse": self.sort_reverse,
+                "sort_stack":  [[i, asc] for i, asc in self.sort_stack],
                 "row_filters": getattr(self, "row_filters", []),
             }
             self.config_file.write_text(json.dumps(cfg, indent=2))
             self.bell()
             self._msg("Layout saved")
         elif key == "enter":
-            # Toggle sort
-            if self.sort_column == c:
-                self.sort_column, self.sort_reverse = None, False
+            # ── direction-cycling progressive sort ──────────────────
+            idx = next((k for k, (col, _) in enumerate(self.sort_stack) if col == c), None)
+
+            if idx is None:                      # not yet in stack → ascending
+                self.sort_stack.append((c, True))
+                state_txt = "↑"
             else:
-                self.sort_column, self.sort_reverse = c, False
+                col, asc = self.sort_stack.pop(idx)        # remove old entry
+                if asc:                     # ascend → descend
+                    self.sort_stack.append((col, False))
+                    state_txt = "↓"
+                else:                       # descend → remove
+                    state_txt = "✕"         # no sort for this col
             self.refresh_table(new_cursor=c)
 
-            # User message
-            col_name = self.columns[c]
-            if self.sort_column is None:
-                self._msg("Sorting cleared")
+            if self.sort_stack:
+                parts = [
+                    f"{self.columns[i]}{'↑' if asc else '↓'}"
+                    for i, asc in self.sort_stack
+                ]
+                self._msg(" • ".join(parts))
             else:
-                self._msg(f"Sorted by “{col_name}”")
+                self._msg("Sorting cleared")
         elif key in ("h", "l"):
             # Move column
             t = c - 1 if key == "h" else c + 1
@@ -424,6 +508,29 @@ class MonitorApp(App):
             state = "enabled" if self.colour_first else "disabled"
             self.refresh_table()
             self._msg(f"First-column colour-map {state}")
+        elif key == "u":
+            # ── remove current column from sort stack ────────────────────
+            before = len(self.sort_stack)
+            self.sort_stack = [(col, asc) for col, asc in self.sort_stack if col != c]
+            if len(self.sort_stack) != before:
+                self.refresh_table(new_cursor=c)
+                if self.sort_stack:
+                    parts = [
+                        f"{self.columns[i]}{'↑' if asc else '↓'}"
+                        for i, asc in self.sort_stack
+                    ]
+                    self._msg("Sort order: " + " • ".join(parts))
+                else:
+                    self._msg("Sorting cleared")
+            else:
+                self._msg("Column wasn’t in sort order")
+        elif key == "U":
+            if self.sort_stack:
+                self.sort_stack.clear()
+                self.refresh_table(new_cursor=c)
+                self._msg("All sorting cleared")
+            else:
+                self._msg("No active sorting")
         elif key.isdigit() and key != "0":  # keys '1'–'9'
             n = int(key)
             try:
@@ -456,12 +563,11 @@ class MonitorApp(App):
                 self._msg(f"Graph error: {exc}", timeout=4)
 
         shift_map = {
-            "q": 1,
-            "w": 2,
-            "e": 3,
-            "r": 4,
-            "t": 5,
-            "y": 6,
+            "w": 1,
+            "e": 2,
+            "r": 3,
+            "t": 4,
+            "y": 5,
         }
         if key in shift_map:
             n = shift_map[key]
@@ -493,7 +599,7 @@ def main() -> None:
     )
     parser.add_argument("log_file", type=Path, help="Path to YAML log file")
     parser.add_argument(
-        "--interval", type=float, default=5.0, help="Refresh interval seconds"
+        "--interval", type=float, default=30.0, help="Refresh interval seconds"
     )
     parser.add_argument(
         "--hotkeys", action="store_true", help="Print available hotkeys and exit"

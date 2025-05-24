@@ -122,6 +122,7 @@ def parse_args():
             "adabelief",
             "orthoadam",
             "adams",
+            "ademamix",
             "adan",
             "apollo_adamw",
             "qhadam",
@@ -165,11 +166,11 @@ def parse_args():
     training_group.add_argument("--adams_beta1", type=float, default=0.9, help="Beta1 for AdamS optimizer.")
     training_group.add_argument("--adams_beta2", type=float, default=0.95, help="Beta2 for AdamS optimizer. Paper suggests 0.95 vs 0.999 for numerical stability.")
     # --------  ADEMAMIX --------------------------------------------------
-    training_group.add_argument("--adedamix_beta1", type=float, default=0.9, help="β1 hyper-parameter for the Adedamix optimizer.")
-    training_group.add_argument("--adedamix_beta2", type=float, default=0.999, help="β2 hyper-parameter for the Adedamix optimizer.")
-    training_group.add_argument("--adedamix_beta3", type=float, default=0.9999, help="β3 hyper-parameter for the Adedamix optimizer.")
-    training_group.add_argument("--adedamix_alpha", type=float, default=8, help="α (scaling factor) for the Adedamix optimizer.")
-    training_group.add_argument("--adedamix_warmup", type=int, default=2000, help="Number of warm-up steps for Adedamix’s learning-rate schedule.")
+    training_group.add_argument("--ademamix_beta1", type=float, default=0.9, help="β1 hyper-parameter for the Ademamix optimizer.")
+    training_group.add_argument("--ademamix_beta2", type=float, default=0.999, help="β2 hyper-parameter for the Ademamix optimizer.")
+    training_group.add_argument("--ademamix_beta3", type=float, default=0.9999, help="β3 hyper-parameter for the Ademamix optimizer.")
+    training_group.add_argument("--ademamix_alpha", type=float, default=8, help="α (scaling factor) for the Ademamix optimizer.")
+    training_group.add_argument("--ademamix_warmup", type=int, default=2000, help="Number of warm-up steps for Ademamix’s learning-rate schedule.")
     # --------  NADAM --------------------------------------------------
     training_group.add_argument("--nadam_betas", type=float, nargs=2, default=[0.9, 0.999], help="Betas for Nadam optimizer.")
     training_group.add_argument("--nadam_eps", type=float, default=1e-8, help="Epsilon for Nadam optimizer.")

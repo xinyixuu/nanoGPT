@@ -20,6 +20,7 @@ optimizer:
 # paper-driven implementations
 - orthoadam
 - adams
+- ademamix
 # hybrids
 - lambdiff
 - adamod_diffgrad
