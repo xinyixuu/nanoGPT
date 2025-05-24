@@ -138,6 +138,7 @@ class GPTConfig:
     mlp_variant: str = "mlp"
     mlp_expansion_factor: int = 4
     mlp_size: int = None
+    mlp_size_layerlist: List[int] = field(default_factory=list)
     mlp_res: bool = False
 
     ## KAN Option

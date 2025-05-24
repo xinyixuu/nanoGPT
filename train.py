@@ -44,6 +44,7 @@ from rich.progress import (
         TaskProgressColumn,
 )
 
+
 # GNS Related
 import utils.gns_monitoring.gns_utils as gns_utils
 from utils.gns_monitoring.hook import (add_hooks_to_model, add_sogns_hooks,
@@ -83,6 +84,7 @@ class Trainer:
         self.peak_gpu_usage = 0.0
         self.total_training_time_ms: float = 0.0   # total run-time from start of training
         self.time_remaining_ms: float= 0.0
+        self.total_time_est_ms: float= 0.0
         self.evaluation_count: int = 0   # cumulative run-time (ns)
         self.evaluations_remaining: int = 0 # will be updated after the current iter is loaded
         self.formatted_completion_eta: str = "waiting for calculation"
@@ -1165,19 +1167,25 @@ class Trainer:
 
         # Create progress bar with ETA and remaining time display
         progress = Progress(
-            TextColumn("[progress.description]{task.description}"),
+            TextColumn("[bold white]{task.description}"),
             BarColumn(),
-            TaskProgressColumn(),  # shows n/N iterations
-            TimeRemainingColumn(),  # estimated time column
-            TextColumn("ETA: {task.fields[eta]}"),
-            TextColumn("Remain: {task.fields[ms]} ms")
+            TaskProgressColumn(),
+            TimeRemainingColumn(compact=False),
+            TextColumn("-- [bold dark_cyan]BestValLoss:[/bold dark_cyan]{task.fields[best_val_loss]}"),
+            TextColumn("-- [bold purple3]ETA:[/bold purple3]{task.fields[eta]}"),
+            TextColumn("[bold purple3]Remaining:[/bold purple3]{task.fields[hour]}h{task.fields[min]}m"),
+            TextColumn("[bold purple3]total_est:[/bold purple3]{task.fields[total_hour]}h{task.fields[total_min]}m"),
         )
         with progress:
             task_id = progress.add_task(
                 "[green]Training...",
                 total=((self.args.max_iters - self.iter_num) + self.evaluations_remaining * self.args.eval_iters),
                 eta=self.formatted_completion_eta,
-                ms=f"{self.time_remaining_ms:.0f}"
+                total_hour=f"{int(self.total_time_est_ms // 3_600_000)}",
+                total_min=f"{int((self.total_time_est_ms // 60_000) % 60):02d}",
+                hour=f"{int((self.time_remaining_ms // (1000*3600)) % 24):02d}",
+                min=f"{int((self.time_remaining_ms // 60000) % 60):02d}",
+                best_val_loss=f"{self.best_val_loss:.3f}"
             )
 
             while True:
@@ -1476,12 +1484,17 @@ class Trainer:
 
 
                 # Update progress bar
+                self.total_time_est_ms = self.total_training_time_ms + self.time_remaining_ms
                 progress.update(
                         task_id,
                         advance=progress_advance,
                         eta=self.formatted_completion_eta,
-                        ms=f"{self.time_remaining_ms:.0f}",
-                        )
+                        total_hour=f"{int(self.total_time_est_ms // 3_600_000)}",
+                        total_min=f"{int((self.total_time_est_ms // 60_000) % 60):02d}",
+                        hour=f"{int((self.time_remaining_ms // 3_600_000) % 24):02d}",
+                        min=f"{int((self.time_remaining_ms // 60_000) % 60):02d}",
+                        best_val_loss=f"{self.best_val_loss:.3f}",
+                )
 
                 # End of training actions
                 if self.iter_num > self.args.max_iters:

@@ -338,6 +338,7 @@ def parse_args():
     model_group.add_argument("--mlp_variant", type=str, default="mlp", choices=mlp_variants, help="MLP variation type")
     model_group.add_argument("--mlp_expansion_factor", type=int, default=4, help="If MLP like variant is used, set the expansion factor for the linear transformations, default is 4.")
     model_group.add_argument("--mlp_size", type=int, default=None, help="If not None, is used instead of mlp_expansion_factor")
+    model_group.add_argument("--mlp_size_layerlist", nargs='+', action=LayerListAction, default=None, help="Override mlp_size per layer, cycling through the list. " "Example: --mlp_size_layerlist 100 200 300")
     model_group.add_argument('--mlp_res', default=False, action=argparse.BooleanOptionalAction)
 
     ## KAN Options
@@ -877,3 +878,13 @@ class FlattenListAction(argparse.Action):
             tokens = v.split() if " " in v else [v]
             result.extend([float(x) for x in tokens])
         setattr(namespace, self.dest, result)
+
+class LayerListAction(argparse.Action):
+    """
+    Stores any number of values (kept as strings) that should override the
+    corresponding base argument on a per-layer basis.  Casting to the correct
+    type happens later inside SharedParamGroupCreator.
+    """
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, list(values))
+
