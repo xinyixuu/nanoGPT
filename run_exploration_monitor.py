@@ -16,7 +16,8 @@ Interactive keybindings:
   g     - graphs first two rows
   L     - graph & connect points sharing the 3rd column value
   1–9   - graph & connect points sharing merged columns 3..(2+N)
-  q–y   - barcharts with labels merged (q=1, y =6)
+  q # # - multibarcharts - `q [1-9] [1-9]` - e.g. 'q 3 2' will create bar charts for columns 1 2 and 3, the next two columns (column 4 and column 5) as merged labels.
+  w–y   - barcharts with labels merged (w=1, y =5)
   c     - toggle colour-map on first column (green → red)
 
 Use `--hotkeys` to print this help and exit.
@@ -67,6 +68,8 @@ HOTKEYS_TEXT = (
     "p: shows help menu\n"
     "L: graph & connect points sharing the 3rd column value\n"
     "1–9: graph & connect points sharing merged columns 3..(2+N)\n"
+    "q # #: multibarcharts - `q [1-9] [1-9]` - e.g. 'q 3 2' will create bar charts for columns 1 2 and 3, the next two columns (column 4 and column 5) as merged labels\n"
+    "w–y: barcharts with labels merged (w=1, y =5)\n"
     "c: toggle colour-map on first column (green → red)\n"
 )
 
@@ -93,8 +96,7 @@ class MonitorApp(App):
         self.columns: List[str] = []
         self.all_columns: List[str] = []
         self.hidden_cols: set[str] = set()
-        self.sort_column: Optional[int] = None
-        self.sort_reverse: bool = False
+        self.sort_stack : List[int] = []
         self.table: Optional[DataTable] = None
         self.original_entries: List[Dict] = []  # Unfiltered data
         self.current_entries: List[Dict] = []  # View data with filters
@@ -130,8 +132,7 @@ class MonitorApp(App):
             self.all_columns = cfg.get("all_columns", self.all_columns)
             self.hidden_cols = set(cfg.get("hidden_cols", []))
             self.columns = [c for c in self.all_columns if c not in self.hidden_cols]
-            self.sort_column = cfg.get("sort_column")
-            self.sort_reverse = cfg.get("sort_reverse", False)
+            self.sort_stack = cfg.get("sort_stack", [])
             # Restore saved row filters
             self.row_filters = cfg.get("row_filters", [])
             self.current_entries = list(self.original_entries)
@@ -167,20 +168,28 @@ class MonitorApp(App):
             return entry.get(col_name)
         return entry.get("config", {}).get(col_name)
 
-    def apply_bubble_sort(self) -> None:
-        """Perform stable bubble sort on current_entries by sort_column."""
-        col = self.columns[self.sort_column]
-        n = len(self.current_entries)
-        for i in range(n):
-            for j in range(n - i - 1):
-                a = self.get_cell(self.current_entries[j], col)
-                b = self.get_cell(self.current_entries[j + 1], col)
-                cmp = self._compare_values(a, b)
-                if (not self.sort_reverse and cmp > 0) or (self.sort_reverse and cmp < 0):
-                    self.current_entries[j], self.current_entries[j + 1] = (
-                        self.current_entries[j + 1],
-                        self.current_entries[j],
-                    )
+    @staticmethod
+    def _sort_key(v):
+        """
+        Build a key that always puts ``None`` LAST (higher than any value),
+        and otherwise uses the raw value when comparable, or its string
+        representation as a tiebreaker for mixed types.
+        """
+        if v is None:
+            return (1, "")            #  ❖  None  ← bottom
+        return (0, v if isinstance(v, (int, float, str)) else str(v))
+
+    def apply_progressive_sort(self) -> None:
+        """
+        Stable multi-key sort:
+        later keys in ``self.sort_stack`` take precedence, but the ordering
+        within equal keys respects the earlier sorts (Python sort is stable).
+        """
+        for col_idx in reversed(self.sort_stack):
+            col_name = self.columns[col_idx]
+            self.current_entries.sort(
+                key=lambda e: self._sort_key(self.get_cell(e, col_name))
+            )
 
     @staticmethod
     def _compare_values(a, b) -> int:
@@ -232,8 +241,8 @@ class MonitorApp(App):
                 base_entries = [e for e in base_entries if str(self.get_cell(e, col)) == val]
         self.current_entries = base_entries
         # Apply sort
-        if self.sort_column is not None:
-            self.apply_bubble_sort()
+        if self.sort_stack:
+            self.apply_progressive_sort()
         # Save cursor position
         old = self.table.cursor_coordinate
         ri = old.row if old else 0
@@ -370,27 +379,24 @@ class MonitorApp(App):
             cfg = {
                 "all_columns": self.all_columns,
                 "hidden_cols": list(self.hidden_cols),
-                "sort_column": self.sort_column,
-                "sort_reverse": self.sort_reverse,
+                "sort_stack":  self.sort_stack,
                 "row_filters": getattr(self, "row_filters", []),
             }
             self.config_file.write_text(json.dumps(cfg, indent=2))
             self.bell()
             self._msg("Layout saved")
         elif key == "enter":
-            # Toggle sort
-            if self.sort_column == c:
-                self.sort_column, self.sort_reverse = None, False
-            else:
-                self.sort_column, self.sort_reverse = c, False
+            # ── progressive column sort ─────────────────────────────
+            if c in self.sort_stack:
+                self.sort_stack.remove(c)   # move to *most-recent* position
+            self.sort_stack.append(c)
             self.refresh_table(new_cursor=c)
 
-            # User message
-            col_name = self.columns[c]
-            if self.sort_column is None:
-                self._msg("Sorting cleared")
+            if self.sort_stack:
+                path = " ➜ ".join(self.columns[i] for i in self.sort_stack)
+                self._msg(f"Sort order: {path}")
             else:
-                self._msg(f"Sorted by “{col_name}”")
+                self._msg("Sorting cleared")
         elif key in ("h", "l"):
             # Move column
             t = c - 1 if key == "h" else c + 1
@@ -536,7 +542,7 @@ def main() -> None:
     )
     parser.add_argument("log_file", type=Path, help="Path to YAML log file")
     parser.add_argument(
-        "--interval", type=float, default=5.0, help="Refresh interval seconds"
+        "--interval", type=float, default=30.0, help="Refresh interval seconds"
     )
     parser.add_argument(
         "--hotkeys", action="store_true", help="Print available hotkeys and exit"
