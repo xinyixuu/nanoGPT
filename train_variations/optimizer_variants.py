@@ -193,6 +193,204 @@ def _lambdiff(param_groups, args):
         debias=args.lamb_debias,
     )
 
+# ###############  AdEMAMix  ###################
+#
+# Paper ― “The AdEMAMix Optimizer: Better, Faster, Older” (Pagliardini et al., 2024)
+# Key idea: keep *two* exponential moving averages of the gradient:
+#   m1 – a fast EMA (β1 ≈ 0.9)           – retains responsiveness
+#   m2 – a *very* slow EMA (β3 ≈ 0.9999) – stores decades-old grads
+# Update uses a weighted mix  ( m1  +  α·m2 ) / √ν
+# where ν is the usual 2-nd moment (AdamW-style).  α is warmed-up
+# together with β3 to avoid early explosions.
+
+class AdEMAMix(Optimizer):
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-3,
+        betas=(0.9, 0.999, 0.9999),        # (β1, β2, β3_final)
+        alpha: float = 5.0,                # final α
+        T_alpha_beta3: int = 0,            # warm-up steps (0 → off)
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+    ):
+        if not 0.0 <= lr:
+            raise ValueError(f"Invalid lr: {lr}")
+        if any(not 0.0 <= b < 1.0 for b in betas):
+            raise ValueError(f"Invalid betas: {betas}")
+        defaults = dict(
+            lr=lr,
+            betas=betas,
+            alpha=alpha,
+            T_alpha_beta3=T_alpha_beta3,
+            eps=eps,
+            weight_decay=weight_decay,
+        )
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            lr, eps, wd = group["lr"], group["eps"], group["weight_decay"]
+            beta1, beta2, beta3_final = group["betas"]
+            alpha_final = group["alpha"]
+            T = group["T_alpha_beta3"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                state = self.state[p]
+
+                # --- state init ---
+                if len(state) == 0:
+                    state["step"] = 0
+                    state["m1"] = torch.zeros_like(p)
+                    state["m2"] = torch.zeros_like(p)
+                    state["nu"] = torch.zeros_like(p)
+
+                m1, m2, nu = state["m1"], state["m2"], state["nu"]
+                state["step"] += 1
+                t = state["step"]
+
+                # --- linear warm-ups (disabled if T==0) ---
+                if T > 0:
+                    warm = min(1.0, t / T)
+                    beta3 = beta1 + warm * (beta3_final - beta1)
+                    alpha = warm * alpha_final
+                else:
+                    beta3, alpha = beta3_final, alpha_final
+
+                # --- decoupled weight-decay (AdamW style) ---
+                if wd != 0:
+                    p.data.mul_(1 - lr * wd)
+
+                # --- moment updates ---
+                m1.mul_(beta1).add_(g, alpha=1 - beta1)          # fast EMA
+                m2.mul_(beta3).add_(g, alpha=1 - beta3)          # slow EMA
+                nu.mul_(beta2).addcmul_(g, g, value=1 - beta2)   # 2-nd moment
+
+                # bias correction for m1 / nu (none for m2)
+                bc1 = 1 - beta1 ** t
+                bc2 = 1 - beta2 ** t
+
+                denom = (nu.sqrt() / math.sqrt(bc2)).add_(eps)
+                step_dir = (m1 / bc1 + alpha * m2) / denom
+                p.add_(step_dir, alpha=-lr)
+        return loss
+
+# ---- factory helper ---------------------------------------
+def _ademamix(param_groups, args):
+    return AdEMAMix(
+        param_groups,
+        lr=args.lr,
+        betas=(args.ademamix_beta1, args.ademamix_beta2, args.ademamix_beta3),
+        alpha=args.ademamix_alpha,
+        T_alpha_beta3=args.ademamix_warmup,
+        eps=args.eps,
+        weight_decay=args.weight_decay,
+    )
+
+
+###############################################################################
+# AdamS (Momentum-as-Normalizer) – Huishuai Zhang et al. 2024
+# Paper: “Momentum Itself Can Be a Normalizer for LLM Pre-/Post-training”
+#   • Denominator:  √( β₂ m² + (1-β₂) g² )
+#   • One state tensor fewer than Adam/AdamW  → ½ memory
+#   • Drop-in replacement for AdamW hyper-params
+###############################################################################
+
+class AdamS(Optimizer):
+    r"""
+    Implements **AdamS** from Zhang et al. (2024) –– a memory-lean variant of
+    Adam that *removes* the second-moment buffer.  It matches SGD-momentum in
+    memory footprint while retaining Adam-like adaptivity.
+
+    https://arxiv.org/abs/2505.16363
+
+    Args
+    ----
+    params         : iterable of parameters
+    lr             : learning rate  (default 1e-3)
+    betas          : (β1, β2)  momentum & denominator EMA factors
+    eps            : numerical ε  (default 1e-8)
+    weight_decay   : decoupled weight decay  (AdamW style)
+    """
+
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-3,
+        betas: tuple[float, float] = (0.9, 0.95),
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+    ):
+        if lr <= 0.0:
+            raise ValueError("Invalid learning rate")
+        if not 0.0 <= eps:
+            raise ValueError("Invalid eps")
+
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            beta1, beta2 = group["betas"]
+            lr = group["lr"]
+            eps = group["eps"]
+            wd = group["weight_decay"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                if g.is_sparse:
+                    raise RuntimeError("AdamS does not support sparse gradients")
+
+                state = self.state[p]
+                # State initialisation ---------------------------------------------------
+                if not state:
+                    state["step"] = 0
+                    state["exp_avg"] = torch.zeros_like(p, dtype=torch.float32)
+
+                exp_avg: torch.Tensor = state["exp_avg"]
+                state["step"] += 1
+
+                # Weight decay (decoupled – same spot as AdamW)
+                if wd != 0.0:
+                    p.data.mul_(1.0 - lr * wd)
+
+                # Momentum --------------------------------------------------------------
+                exp_avg.mul_(beta1).add_(g, alpha=1 - beta1)
+
+                # Denominator (no v buffer!)
+                denom = (beta2 * exp_avg.pow(2) + (1 - beta2) * g.pow(2)).sqrt().add_(eps)
+
+                step_size = lr
+                p.data.addcdiv_(exp_avg, denom, value=-step_size)
+
+        return loss
+
+# -----------------------------------------------------------------------------
+#  Factory helper – matches create_optimizer() convention
+# -----------------------------------------------------------------------------
+
+def _adams(param_groups, args):
+    return AdamS(
+        param_groups,
+        lr=args.learning_rate,
+        betas=(args.adams_beta1, args.adams_beta2),
+        eps=args.adamw_eps,
+        weight_decay=args.adamw_weight_decay,
+    )
+
 
 class OrthoAdam(Optimizer):
     """
@@ -936,6 +1134,8 @@ optimizer_dictionary: dict[str, callable] = {
     "lbfgs": _lbfgs,
     # paper-driven implementations
     "orthoadam": _orthoadam,
+    "adams": _adams,
+    "ademamix": _ademamix,
     # hybrids
     "lambdiff": _lambdiff,
     "adamod_diffgrad": _adamod_diffgrad,
