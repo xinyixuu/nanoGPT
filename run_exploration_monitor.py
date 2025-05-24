@@ -19,6 +19,8 @@ Interactive keybindings:
   q # # - multibarcharts - `q [1-9] [1-9]` - e.g. 'q 3 2' will create bar charts for columns 1 2 and 3, the next two columns (column 4 and column 5) as merged labels.
   w–y   - barcharts with labels merged (w=1, y =5)
   c     - toggle colour-map on first column (green → red)
+  u     - unsort / remove current column from the sort stack
+  U     - clear *all* sorting
 
 Use `--hotkeys` to print this help and exit.
 """
@@ -33,6 +35,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import yaml
+import math
 from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Container
@@ -71,6 +74,8 @@ HOTKEYS_TEXT = (
     "q # #: multibarcharts - `q [1-9] [1-9]` - e.g. 'q 3 2' will create bar charts for columns 1 2 and 3, the next two columns (column 4 and column 5) as merged labels\n"
     "w–y: barcharts with labels merged (w=1, y =5)\n"
     "c: toggle colour-map on first column (green → red)\n"
+    "u: unsort / remove current column from the sort stack\n"
+    "U: clear *all* sorting\n"
 )
 
 
@@ -96,7 +101,7 @@ class MonitorApp(App):
         self.columns: List[str] = []
         self.all_columns: List[str] = []
         self.hidden_cols: set[str] = set()
-        self.sort_stack : List[int] = []
+        self.sort_stack: List[tuple[int, bool]] = []
         self.table: Optional[DataTable] = None
         self.original_entries: List[Dict] = []  # Unfiltered data
         self.current_entries: List[Dict] = []  # View data with filters
@@ -132,7 +137,7 @@ class MonitorApp(App):
             self.all_columns = cfg.get("all_columns", self.all_columns)
             self.hidden_cols = set(cfg.get("hidden_cols", []))
             self.columns = [c for c in self.all_columns if c not in self.hidden_cols]
-            self.sort_stack = cfg.get("sort_stack", [])
+            self.sort_stack = [tuple(p) for p in cfg.get("sort_stack", [])]
             # Restore saved row filters
             self.row_filters = cfg.get("row_filters", [])
             self.current_entries = list(self.original_entries)
@@ -169,14 +174,22 @@ class MonitorApp(App):
         return entry.get("config", {}).get(col_name)
 
     @staticmethod
-    def _sort_key(v):
+    def _is_missing(v) -> bool:
+        """Return *True* for values that should always sink to the bottom."""
+        return (
+            v is None
+            or (isinstance(v, float) and math.isnan(v))
+        )
+    @classmethod
+    def _sort_key(cls, v):
         """
-        Build a key that always puts ``None`` LAST (higher than any value),
-        and otherwise uses the raw value when comparable, or its string
-        representation as a tiebreaker for mixed types.
+        Build a key that always puts “missing” values (*None* or *NaN*) LAST,
+        regardless of ascending / descending order; for everything else use the
+        raw value when comparable, falling back to its string representation for
+        mixed types.
         """
-        if v is None:
-            return (1, "")            #  ❖  None  ← bottom
+        if cls._is_missing(v):
+            return (1, "")            #  sink
         return (0, v if isinstance(v, (int, float, str)) else str(v))
 
     def apply_progressive_sort(self) -> None:
@@ -185,10 +198,19 @@ class MonitorApp(App):
         later keys in ``self.sort_stack`` take precedence, but the ordering
         within equal keys respects the earlier sorts (Python sort is stable).
         """
-        for col_idx in reversed(self.sort_stack):
+        # NOTE:  we iterate **in insertion order** (oldest → newest).  
+        # Because Python’s sort is *stable*, the **last** pass has the
+        # highest precedence — therefore the *most-recent* “Enter” press
+        # wins, exactly as requested.
+        for col_idx, asc in self.sort_stack:
             col_name = self.columns[col_idx]
             self.current_entries.sort(
-                key=lambda e: self._sort_key(self.get_cell(e, col_name))
+                key=lambda e: self._sort_key(self.get_cell(e, col_name)),
+                reverse=not asc,
+            )
+            # second pass → ensure None/NaN always sink
+            self.current_entries.sort(
+                key=lambda e: self._is_missing(self.get_cell(e, col_name))
             )
 
     @staticmethod
@@ -379,22 +401,34 @@ class MonitorApp(App):
             cfg = {
                 "all_columns": self.all_columns,
                 "hidden_cols": list(self.hidden_cols),
-                "sort_stack":  self.sort_stack,
+                "sort_stack":  [[i, asc] for i, asc in self.sort_stack],
                 "row_filters": getattr(self, "row_filters", []),
             }
             self.config_file.write_text(json.dumps(cfg, indent=2))
             self.bell()
             self._msg("Layout saved")
         elif key == "enter":
-            # ── progressive column sort ─────────────────────────────
-            if c in self.sort_stack:
-                self.sort_stack.remove(c)   # move to *most-recent* position
-            self.sort_stack.append(c)
+            # ── direction-cycling progressive sort ──────────────────
+            idx = next((k for k, (col, _) in enumerate(self.sort_stack) if col == c), None)
+
+            if idx is None:                      # not yet in stack → ascending
+                self.sort_stack.append((c, True))
+                state_txt = "↑"
+            else:
+                col, asc = self.sort_stack.pop(idx)        # remove old entry
+                if asc:                     # ascend → descend
+                    self.sort_stack.append((col, False))
+                    state_txt = "↓"
+                else:                       # descend → remove
+                    state_txt = "✕"         # no sort for this col
             self.refresh_table(new_cursor=c)
 
             if self.sort_stack:
-                path = " ➜ ".join(self.columns[i] for i in self.sort_stack)
-                self._msg(f"Sort order: {path}")
+                parts = [
+                    f"{self.columns[i]}{'↑' if asc else '↓'}"
+                    for i, asc in self.sort_stack
+                ]
+                self._msg(" • ".join(parts))
             else:
                 self._msg("Sorting cleared")
         elif key in ("h", "l"):
@@ -474,6 +508,29 @@ class MonitorApp(App):
             state = "enabled" if self.colour_first else "disabled"
             self.refresh_table()
             self._msg(f"First-column colour-map {state}")
+        elif key == "u":
+            # ── remove current column from sort stack ────────────────────
+            before = len(self.sort_stack)
+            self.sort_stack = [(col, asc) for col, asc in self.sort_stack if col != c]
+            if len(self.sort_stack) != before:
+                self.refresh_table(new_cursor=c)
+                if self.sort_stack:
+                    parts = [
+                        f"{self.columns[i]}{'↑' if asc else '↓'}"
+                        for i, asc in self.sort_stack
+                    ]
+                    self._msg("Sort order: " + " • ".join(parts))
+                else:
+                    self._msg("Sorting cleared")
+            else:
+                self._msg("Column wasn’t in sort order")
+        elif key == "U":
+            if self.sort_stack:
+                self.sort_stack.clear()
+                self.refresh_table(new_cursor=c)
+                self._msg("All sorting cleared")
+            else:
+                self._msg("No active sorting")
         elif key.isdigit() and key != "0":  # keys '1'–'9'
             n = int(key)
             try:
