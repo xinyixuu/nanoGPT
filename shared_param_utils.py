@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 
 import copy
+import sys
+from typing import get_origin, get_args
 
 from variations.attention_variations import attention_dictionary
 from variations.mlp_variations import get_mlp_instance
@@ -86,46 +88,52 @@ class SharedParamGroupCreator:
                     core_attr = attr[:-10]         # strip "_layerlist"
                     raw_val   = lst[i % len(lst)]  # cyclic selection
 
-                    # Cast to the same type as the original value if it exists
                     if hasattr(self.config, core_attr):
                         ref_val = getattr(self.config, core_attr)
-                        # --------------------------------------------------
-                        # 1.  If the runtime value is NOT None, keep
-                        #     the old behaviour (inspect the value itself).
-                        # 2.  If it IS None, consult the dataclass
-                        #     annotation to discover the intended type.
-                        # --------------------------------------------------
-                        if ref_val is None:
-                            from typing import get_origin, get_args
-                            anno = type(self.config).__annotations__.get(
-                                        core_attr, None)
-                            hinted = str          # fallback
-                            if anno is not None:
-                                origin = get_origin(anno)  # Optional → Union
-                                args   = get_args(anno)
-                                if origin is None:         # plain type
-                                    hinted = anno
-                                elif (len(args) == 2
-                                      and type(None) in args):  # T | None
-                                    hinted = (args[0] if args[1] is type(None)
-                                              else args[1])
 
-                            # Cast according to *hinted*
-                            if hinted is bool:
-                                raw_val = str(raw_val).lower() in ("1", "true", "yes", "0", "false", "no")
-                            elif hinted is int:
-                                raw_val = int(raw_val)
-                            elif hinted is float:
-                                raw_val = float(raw_val)
-                        else:
-                            # old behaviour
+
+                        _SENTINEL_NONE = {"", "none", "null"}
+
+                        def _is_none(txt) -> bool:
+                            return str(txt).strip().lower() in _SENTINEL_NONE
+
+                        def _as_bool(txt):
+                            if _is_none(txt):
+                                return None
+                            return str(txt).strip().lower() in {
+                                "1", "true", "yes", "y", "on", "false", "0", "n", "off",
+                            }
+                        # a) If the runtime value is *not* None we can
+                        #    rely on its actual Python type.
+                        if ref_val is not None:
                             if isinstance(ref_val, bool):
-                                raw_val = str(raw_val).lower() in (
-                                    "1", "true", "yes")
+                                raw_val = _as_bool(raw_val)
                             elif isinstance(ref_val, int):
                                 raw_val = int(raw_val)
                             elif isinstance(ref_val, float):
                                 raw_val = float(raw_val)
+                        # b) Otherwise, fall back to the dataclass annotation
+                        #    to guess the intended type (handles `T | None`).
+                        else:
+                            anno = type(self.config).__annotations__.get(core_attr)
+                            hinted = str  # default: leave string as-is
+                            if anno:
+                                origin = get_origin(anno)
+                                args   = get_args(anno)
+                                if origin is None:
+                                    hinted = anno
+                                elif len(args) == 2 and type(None) in args:
+                                    hinted = next(a for a in args if a is not type(None))
+
+                            if _is_none(raw_val):
+                                raw_val = None
+                            elif hinted is bool:
+                                raw_val = _as_bool(raw_val)
+                            elif hinted is int:
+                                raw_val = int(raw_val)
+                            elif hinted is float:
+                                raw_val = float(raw_val)
+
                     setattr(layer_config, core_attr, raw_val)
 
             # Create a new layer block every "shared_size"
