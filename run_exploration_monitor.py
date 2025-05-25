@@ -10,14 +10,15 @@ Interactive keybindings:
   x     - hide all rows matching current cell in column
   i     - invert filter: keep only rows matching current cell in column
   O     - unhide all rows (clear row filters)
-  v     - export current view to CSV
+  e     - export CSV with automatic name
+  E     - export CSV with prompt for custom name
   s     - save current layout
   p     - shows help menu
   g     - graphs first two rows
   L     - graph & connect points sharing the 3rd column value
   1–9   - graph & connect points sharing merged columns 3..(2+N)
   q # # - multibarcharts - `q [1-9] [1-9]` - e.g. 'q 3 2' will create bar charts for columns 1 2 and 3, the next two columns (column 4 and column 5) as merged labels.
-  w–y   - barcharts with labels merged (w=1, y =5)
+  r–y   - barcharts with labels merged (r=1, y=3)
   c     - toggle colour-map on first column (green → red)
   u     - unsort / remove current column from the sort stack
   U     - clear *all* sorting
@@ -28,6 +29,7 @@ Use `--hotkeys` to print this help and exit.
 import plot_view
 import argparse
 import csv
+import os
 import json
 import sys
 import time
@@ -36,10 +38,11 @@ from typing import Dict, List, Optional
 
 import yaml
 import math
-from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Container
-from textual.widgets import DataTable, Footer, Header
+from textual.widgets import DataTable, Footer, Header, Input, Label, Button
+from textual import events, on, work
+from textual.screen import Screen
 
 
 def load_runs(log_file: Path) -> List[Dict]:
@@ -64,7 +67,8 @@ HOTKEYS_TEXT = (
     "x: hide rows matching value\n"
     "i: keep only rows matching value\n"
     "O: clear all row filters\n"
-    "e: export CSV\n"
+    "e: export CSV auto naming \n"
+    "E: export CSV with prompt for custom name \n"
     "s: save layout (columns, hidden-cols, filters)\n"
     "g: graph first two columns (matplotlib)\n"
     "g: graph first two columns (opens a Plotly window)\n"
@@ -72,11 +76,40 @@ HOTKEYS_TEXT = (
     "L: graph & connect points sharing the 3rd column value\n"
     "1–9: graph & connect points sharing merged columns 3..(2+N)\n"
     "q # #: multibarcharts - `q [1-9] [1-9]` - e.g. 'q 3 2' will create bar charts for columns 1 2 and 3, the next two columns (column 4 and column 5) as merged labels\n"
-    "w–y: barcharts with labels merged (w=1, y =5)\n"
+    "r–y: barcharts with labels merged (r=1, y=3)\n"
     "c: toggle colour-map on first column (green → red)\n"
     "u: unsort / remove current column from the sort stack\n"
     "U: clear *all* sorting\n"
 )
+
+# ──────────────────────────── FILENAME PROMPT ────────────────────────────
+
+# Template-style screen (returns str | None)
+class FileNameScreen(Screen[str | None]):
+    """Modal screen that asks the user for a CSV filename and returns it."""
+
+    def compose(self) -> ComposeResult:                         # noqa: D401
+        yield Label("Enter CSV filename:", id="prompt")
+        yield Input(placeholder="results.csv", id="fname")
+        yield Button("Save", id="save", variant="success")
+        yield Button("Cancel", id="cancel", variant="error")
+
+    # Focus the text box when the screen appears
+    def on_mount(self) -> None:
+        self.query_one("#fname", Input).focus()
+
+    @on(Input.Submitted, "#fname")
+    def _submitted(self, ev: Input.Submitted) -> None:          #  ↵
+        self.dismiss(ev.value.strip() or None)
+
+    @on(Button.Pressed, "#save")
+    def _save(self) -> None:                                    #  Save btn
+        name = self.query_one("#fname", Input).value.strip()
+        self.dismiss(name or None)
+
+    @on(Button.Pressed, "#cancel")
+    def _cancel(self) -> None:                                  #  Cancel btn
+        self.dismiss(None)
 
 
 class MonitorApp(App):
@@ -91,7 +124,7 @@ class MonitorApp(App):
     }
     """
 
-    def __init__(self, log_file: Path, interval: float) -> None:
+    def __init__(self, log_file: Path, interval: float, csv_dir: str) -> None:
         super().__init__()
         self.log_file = log_file
         self.interval = interval
@@ -109,6 +142,7 @@ class MonitorApp(App):
         self.colour_first: bool = False        # toggled with “c”
         self._bar_mode: bool = False           # are we collecting digits?
         self._bar_digits: List[int] = []       # collected numeric keys
+        self.csv_dir: str = csv_dir
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -172,6 +206,23 @@ class MonitorApp(App):
         if col_name in ("best_val_loss", "best_val_iter", "num_params", "peak_gpu_mb", "iter_latency_avg"):
             return entry.get(col_name)
         return entry.get("config", {}).get(col_name)
+
+    # ──────────────────────── async worker for “E” export ────────────────────────
+    @work(exclusive=True)                      # ← runs in a background worker
+    async def _export_with_prompt(self) -> None:
+        """Open filename prompt, wait, then save CSV (Shift-E)."""
+        fname: str | None = await self.push_screen_wait(FileNameScreen())
+        if fname is None:
+            self._msg("Export cancelled")
+            return
+
+        if not fname.lower().endswith(".csv"):
+            fname += ".csv"
+        path = str(Path(self.csv_dir) / fname)
+        try:
+            self._write_csv(path)
+        except Exception as exc:
+            self._msg(f"Couldn’t save: {exc}", timeout=4)
 
     @staticmethod
     def _is_missing(v) -> bool:
@@ -327,7 +378,25 @@ class MonitorApp(App):
         except AttributeError:
             # Older Textual: just beep so the user at least gets feedback
             self.bell()
+    # ───────────────────────────── CSV-helper ──────────────────────────────
+    def _write_csv(self, filename: str) -> None:
+        with open(filename, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(self.columns)
+            for entry in self.current_entries:
+                row: List[str] = []
+                for col in self.columns:
+                    val = self.get_cell(entry, col)
+                    if col == "best_val_loss" and val is not None:
+                        row.append(f"{val:.6f}")
+                    else:
+                        row.append(str(val))
+                w.writerow(row)
+        self.bell()
+        self._msg(f"Exported view → {filename}")
 
+
+    # ────────────────────────── main key-handler ────────────────────────────
     async def on_key(self, event: events.Key) -> None:
         """Handle key presses for table interactions and config saving."""
         if not self.table:
@@ -345,7 +414,7 @@ class MonitorApp(App):
                     # reset mode before plotting so errors don’t trap us
                     self._bar_mode, self._bar_digits = False, []
                     try:
-                        needed = 1 + n_bars + n_labels
+                        needed = n_bars + n_labels
                         if len(self.columns) < needed:
                             raise ValueError(
                                 f"Need at least {needed} visible columns "
@@ -379,23 +448,14 @@ class MonitorApp(App):
             self._msg("Bar-chart mode: type <#metrics><#labels>")
             return
 
-        if key == "e":
-            # Export CSV
-            fname = f"{self.log_file.stem}_export_{int(time.time())}.csv"
-            with open(fname, "w", newline="") as f:
-                w = csv.writer(f)
-                w.writerow(self.columns)
-                for entry in self.current_entries:
-                    row: List[str] = []
-                    for col in self.columns:
-                        val = self.get_cell(entry, col)
-                        if col == "best_val_loss" and val is not None:
-                            row.append(f"{val:.6f}")
-                        else:
-                            row.append(str(val))
-                    w.writerow(row)
-            self.bell()
-            self._msg(f"Exported view → {fname}")
+        # ── Export CSV ──────────────────────────────────────────
+        elif key == "e":
+            fname = f"{self.csv_dir}/{self.log_file.stem}_export_{int(time.time())}.csv"
+            self._write_csv(fname)
+            return
+        elif key == "E":
+            self._export_with_prompt()
+            return
         elif key == "s":
             # Save layout to JSON with same base name
             cfg = {
@@ -563,11 +623,9 @@ class MonitorApp(App):
                 self._msg(f"Graph error: {exc}", timeout=4)
 
         shift_map = {
-            "w": 1,
-            "e": 2,
-            "r": 3,
-            "t": 4,
-            "y": 5,
+            "r": 1,
+            "t": 2,
+            "y": 3,
         }
         if key in shift_map:
             n = shift_map[key]
@@ -604,16 +662,19 @@ def main() -> None:
     parser.add_argument(
         "--hotkeys", action="store_true", help="Print available hotkeys and exit"
     )
+    parser.add_argument(
+        "--csv_dir", type=str, default="rem_csv_exports", help="directory for csv outputs"
+    )
     args = parser.parse_args()
 
     if args.hotkeys:
         print(HOTKEYS_TEXT)
         sys.exit(0)
 
-    app = MonitorApp(args.log_file, args.interval)
+    os.makedirs(args.csv_dir, exist_ok=True)
+    app = MonitorApp(args.log_file, args.interval, args.csv_dir)
     app.run()
 
 
 if __name__ == "__main__":
     main()
-
