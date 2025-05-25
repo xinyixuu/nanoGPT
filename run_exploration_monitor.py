@@ -139,7 +139,7 @@ class MonitorApp(App):
         self.original_entries: List[Dict] = []  # Unfiltered data
         self.current_entries: List[Dict] = []  # View data with filters
         self.row_filters: List[tuple] = []     # (col, op, val) triples
-        self.colour_first: bool = False        # toggled with “c”
+        self.colour_columns: set[int] = set()   # columns currently colourised
         self._bar_mode: bool = False           # are we collecting digits?
         self._bar_digits: List[int] = []       # collected numeric keys
         self.csv_dir: str = csv_dir
@@ -321,47 +321,89 @@ class MonitorApp(App):
         ri = old.row if old else 0
         ci = new_cursor if new_cursor is not None else (old.column if old else 0)
 
-        # ── pre-compute colour-map for first column if enabled ─────────────
-        colour_map: List[str | None] = []
-        if self.colour_first and self.current_entries and self.columns:
-            first_col = self.columns[0]
-            numeric_vals = [
-                self.get_cell(e, first_col)
-                for e in self.current_entries
-                if isinstance(self.get_cell(e, first_col), (int, float))
-            ]
-            if numeric_vals:
-                lo, hi = min(numeric_vals), max(numeric_vals)
-                if hi == lo:                      # avoid ÷0
-                    hi += 1e-9
-                rng = hi - lo
-                for e in self.current_entries:
-                    v = self.get_cell(e, first_col)
-                    if isinstance(v, (int, float)):
-                        t = (v - lo) / rng          # 0→green, 1→red
-                        r = int(255 * t)
-                        g = int(255 * (1 - t))
-                        colour_map.append(f"#{r:02x}{g:02x}00")
+
+        # ── build colour-maps for *each* enabled column ───────────────
+        colour_by_col: dict[int, list[str | None]] = {}
+        if self.colour_columns and self.current_entries:
+            # helper to rank values by our sort order (lowest→0)
+            for col_idx in self.colour_columns:
+                col_name = self.columns[col_idx]
+                vals = [self.get_cell(e, col_name) for e in self.current_entries]
+
+                # strip out bools from 'numeric' test (bool isa int)
+                def _is_real_num(v):
+                    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+                numeric_only = all((_is_real_num(v) or v is None) for v in vals)
+                numeric_only = all((_is_real_num(v) or v is None or (
+                    isinstance(v, float) and math.isnan(v))) for v in vals)
+
+
+                if numeric_only:
+                    nums = [v for v in vals if _is_real_num(v)]
+                    if not nums:
+                        continue
+                    lo, hi = min(nums), max(nums)
+                    if hi == lo:
+                        hi += 1e-9
+                    rng = hi - lo
+                    cmap = []
+                    ORANGE = "#ff7f00"
+                    for v in vals:
+                        if v is None or (isinstance(v, float) and math.isnan(v)):
+                            cmap.append(ORANGE)          # special orange
+                        elif _is_real_num(v):
+                            t = (v - lo) / rng
+                            cmap.append(f"#{int(255*t):02x}{int(255*(1-t)):02x}00")
+                        elif isinstance(v, bool):        # shouldn’t appear here
+                            cmap.append("#00ff00" if v else "#ff0000")
+                        else:
+                            cmap.append(ORANGE)
+
+                    colour_by_col[col_idx] = cmap
+
+                else:  # categorical
+                    # categorical:  fixed colours for special values
+                    uniques = sorted(set(vals), key=self._sort_key)
+                    if len(uniques) == 1:
+                        palette = {uniques[0]: "#00ff00"}
                     else:
-                        colour_map.append(None)
-            else:
-                colour_map = [None] * len(self.current_entries)
-        else:
-            colour_map = [None] * len(self.current_entries)
+                        palette = {
+                            v: f"#{int(255*i/(len(uniques)-1)):02x}{int(255*(1-i/(len(uniques)-1))):02x}00"
+                            for i, v in enumerate(uniques)
+                        }
+                    ORANGE = "#ff7f00"
+                    palette[None] = ORANGE
+                    # need a stable key for NaN – use float("nan")’s id isn’t stable,
+                    # so we detect per-row instead
+                    colour_row = []
+                    for v in vals:
+                        if v is None:
+                            colour_row.append(ORANGE)
+                        elif isinstance(v, float) and math.isnan(v):
+                            colour_row.append(ORANGE)
+                        elif isinstance(v, bool):
+                            colour_row.append("#00ff00" if v else "#ff0000")
+                        else:
+                            colour_row.append(palette[v])
+                    colour_by_col[col_idx] = colour_row
+
 
         # Rebuild columns and rows
         self.build_table()
         for row_idx, entry in enumerate(self.current_entries):
             row: List[str] = []
-            for col in self.columns:
+            for j, col in enumerate(self.columns):
                 val = self.get_cell(entry, col)
-                if col == "best_val_loss" and val is not None:
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
                     row.append(f"{val:.6f}")
                 else:
                     row.append(str(val))
-            # apply colour markup to first cell if requested
-            if colour_map[row_idx]:
-                row[0] = f"[{colour_map[row_idx]}]{row[0]}[/]"
+
+            # colour the active column cell
+            for col_idx, cmap in colour_by_col.items():
+                row[col_idx] = f"[{cmap[row_idx]}]{row[col_idx]}[/]"
+
             self.table.add_row(*row)
         # Restore cursor
         maxr, maxc = len(self.current_entries) - 1, len(self.columns) - 1
@@ -564,10 +606,15 @@ class MonitorApp(App):
             except Exception as exc:
                 self._msg(f"Graph error: {exc}", timeout=4)
         elif key == "c":
-            self.colour_first = not self.colour_first
-            state = "enabled" if self.colour_first else "disabled"
+            # toggle colour for the *current* column
+            cur = self.table.cursor_coordinate.column
+            if cur in self.colour_columns:
+                self.colour_columns.remove(cur)
+                self._msg(f"Colour OFF for {self.columns[cur]}")
+            else:
+                self.colour_columns.add(cur)
+                self._msg(f"Colour ON for {self.columns[cur]}")
             self.refresh_table()
-            self._msg(f"First-column colour-map {state}")
         elif key == "u":
             # ── remove current column from sort stack ────────────────────
             before = len(self.sort_stack)
