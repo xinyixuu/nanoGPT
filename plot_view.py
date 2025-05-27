@@ -1,8 +1,5 @@
-#!/usr/bin/env python3
+# plot_view.py
 """
-plot_view.py
-============
-
 Utility for visualising the “current view” from the Textual hyper-parameter
 monitor.
 
@@ -35,6 +32,11 @@ CLI usage
 
 from __future__ import annotations
 
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots  # multi-axis helper
+import numpy as np
+import pandas as pd
 import argparse
 import json
 from collections import defaultdict
@@ -159,6 +161,166 @@ def plot_rows(
     fig.savefig(f"{safe_title}.png", dpi=300)
     plt.show()
 
+
+# ───────────────────────────── plot bars ──────────────────────────────
+def _extract(entry: Dict[str, Any], key: str) -> Any:
+    """Return entry[key] if present, else entry['config'][key], else None."""
+    if key in entry:
+        return entry[key]
+    return entry.get("config", {}).get(key)
+
+
+
+def plot_bars(
+    rows: List[Dict[str, Any]],
+    *,
+    y: str,
+    label_cols: List[str],
+    bar_color: str = "#1f77b4",
+) -> None:
+    if not label_cols:
+        raise ValueError("Need ≥1 label column for bar chart")
+
+    labels, heights = [], []
+    for r in rows:
+        yv = _extract(r, y)
+        if yv is None:
+            continue
+        merged = "-".join(
+            "None" if _extract(r, c) is None else str(_extract(r, c))
+            for c in label_cols
+        )
+        labels.append(merged)
+        heights.append(float(yv))
+
+    if not heights:
+        raise ValueError(f"No numeric values found in column “{y}”")
+
+    order = np.argsort(np.array(heights))
+    df = pd.DataFrame(
+        {"label": np.array(labels)[order], y: np.array(heights)[order]}
+    )
+
+    # pretty title parts
+    pretty = lambda s: s.replace("_", " ").title()
+    title_text = f"{pretty(y)} by {' / '.join(pretty(c) for c in label_cols)}"
+
+    fig = px.bar(
+        df,
+        x=y,
+        y="label",
+        orientation="h",
+        color_discrete_sequence=[bar_color],
+        text=df[y].apply(lambda v: f"{v:.3f}"),
+    )
+    fig.update_traces(textposition="outside")
+    fig.update_layout(
+    title=dict(
+        text=title_text,
+        x=0.5,             # halfway across the plot *area*
+        xref="container",  # ← key line: ignore the margins
+        xanchor="center",
+        yanchor="top",
+    ),
+        # merged column names become the Y-axis title
+    yaxis=dict(
+        title=" / ".join(label_cols),   # e.g. "optimizer / sgd_nesterov"
+        autorange="reversed",           # keep smallest bar on top
+    ),
+    xaxis=dict(title=y),
+    margin=dict(l=120, r=40, t=80, b=40),  # t a bit larger for the centred title
+)
+
+
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in title_text)
+    fig.write_image(f"{safe}.png", scale=2)  # requires kaleido
+    fig.show()
+
+# ───────────────────────────── plot multi bars ──────────────────────────────
+def plot_multi_bars(
+    rows: List[Dict[str, Any]],
+    *,
+    y_cols: List[str],          # numeric columns to plot (≥1)
+    label_cols: List[str],      # columns whose values build the category label (≥1)
+) -> None:
+    if not y_cols or not label_cols:
+        raise ValueError("Need ≥1 numeric-col *and* ≥1 label-col")
+
+    # ---- harvest data -----------------------------------------------------
+    cats: List[str] = []
+    series: Dict[str, List[float]] = {yc: [] for yc in y_cols}
+
+    for r in rows:
+        merged = "-".join(
+            "None" if _extract(r, c) is None else str(_extract(r, c))
+            for c in label_cols
+        )
+        cat_label = merged
+        if cat_label not in cats:
+            cats.append(cat_label)
+        for yc in y_cols:
+            val = _extract(r, yc)
+            series[yc].append(float(val) if val is not None else np.nan)
+
+    # ---- build traces -----------------------------------------------------
+    # ── choose layout: one secondary axis (2 metrics) or stacked rows (>2) ──
+    if len(y_cols) == 1:
+        # ----- single metric → simple grouped bars ----------------------
+        fig = go.Figure()
+        fig.add_trace(
+            go.Bar(
+                x=cats,
+                y=series[y_cols[0]],
+                name=y_cols[0],
+                marker_color=px.colors.qualitative.Plotly[0],
+            )
+        )
+        fig.update_layout(
+            barmode="group",
+            xaxis_title=" / ".join(label_cols),
+            yaxis_title=y_cols[0],
+        )
+    else:
+        # N > 2  → one row per metric, shared X axis
+        fig = make_subplots(
+            rows=len(y_cols),
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.03,
+        )
+        col_cycle = itertools.cycle(px.colors.qualitative.Plotly)
+        for idx, yc in enumerate(y_cols, start=1):
+            fig.add_trace(
+                go.Bar(
+                    x=cats,
+                    y=series[yc],
+                    name=yc,
+                    marker_color=next(col_cycle),
+                    showlegend=False,
+                ),
+                row=idx,
+                col=1,
+            )
+        # give each panel its own y-axis label
+            fig.update_yaxes(title_text=yc, row=idx, col=1)
+        fig.update_layout(barmode="group", height=300 * len(y_cols))
+
+    pretty = lambda s: s.replace("_", " ").title()
+    # ── common layout bits ────────────────────────────────────────────
+    fig.update_layout(
+        title=dict(
+            text=f"{' / '.join(map(pretty, y_cols))} by "
+                 f"{' / '.join(map(pretty, label_cols))}",
+            x=0.5, xanchor="center", yanchor="top",
+        ),
+        bargap=0.15,
+        bargroupgap=0.1,
+        legend_title_text="Metric",
+    )
+
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in fig.layout.title.text)
+    fig.write_image(f"{safe}.png", scale=2)  # kaleido needed
+    fig.show()
 
 # ───────────────────────────── CLI wrapper ──────────────────────────
 

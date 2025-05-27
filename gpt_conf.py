@@ -14,11 +14,19 @@ class GPTConfig:
     n_kv_group: int = 12
     n_embd: int = 768
 
+    # For multicontext training
+    multicontext: bool = False
+    vocab_sizes: List[int] = field(default_factory=lambda: []) # Used in place of vocab
+
     ## Inf attention variation
     n_qk_head_dim: int = None
     n_v_head_dim: int = None
     n_cproj: int = None
     use_concat_heads: bool = False
+
+    # Softcapping params
+    attn_logit_softcapping: float | None = None
+    final_logit_softcapping: float | None = None
 
     # Learned Position Embeddings
     n_lpe: int = 0
@@ -72,6 +80,7 @@ class GPTConfig:
 
     # weight tying
     n_embd_wte_scale_tying: bool = True
+    wte_weight_tying: bool = True # Non-factorized wte weight tying
 
     # wte import/export
     import_wte_freeze: bool = False
@@ -129,6 +138,7 @@ class GPTConfig:
     mlp_variant: str = "mlp"
     mlp_expansion_factor: int = 4
     mlp_size: int = None
+    mlp_size_layerlist: List[int] = field(default_factory=list)
     mlp_res: bool = False
 
     ## KAN Option
