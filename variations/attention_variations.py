@@ -693,6 +693,7 @@ class InfiniteHeadAttention(nn.Module):
 
         if self.use_concat_heads:
             print("use_concat_heads")
+            # Usually c_proj dim are (n_head * n_head dim = n_embd), here we have to provide the factorized version
             self.c_proj = self.linear_variant_attn_proj(
                 self.n_head * self.n_v_head_dim, self.n_embd, config, bias=config.bias
             )
@@ -809,14 +810,15 @@ class InfiniteHeadAttention(nn.Module):
 
         else:
             # manual implementation of attention
-            att = (q @ k.transpose(-2, -1)) * (1.0 / torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device)))
+            att = (q @ k.transpose(-2, -1))
 
             if self.use_qk_norm_scale:
                 # utilize learned qk_norm_scaling factor
                 att = att * self.qk_norm_factor
             else:
+                head_dim = torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device))
                 # divide by head dimension if not
-                att = att / torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device))
+                att = att / head_dim
 
             # apply lower triangle attention mask
             att = att.masked_fill(self.bias[:,:,:T,:T].to(x.device) == 0, float('-inf'))
@@ -835,7 +837,7 @@ class InfiniteHeadAttention(nn.Module):
         if self.use_concat_heads:
             # (B, nh, T, v_dim) → (B, T, nh*v_dim); avoid extra .contiguous()
             # flatten heads → (B, T, n_head * n_v_head_dim)
-            y = y.transpose(1, 2).contiguous().view( B, T, self.n_head * self.n_v_head_dim)
+            y = y.transpose(1, 2).contiguous().view(B, T, self.n_head * self.n_v_head_dim)
             y = self.c_proj(y)
         elif self.n_cproj == 1:
             # Sum heads first: (B, nh, T, v_dim) → (B, T, v_dim)
