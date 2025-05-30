@@ -345,7 +345,7 @@ class MonitorApp(App):
                         continue
                     lo, hi = min(nums), max(nums)
                     if hi == lo:
-                        hi += 1e-9
+                        hi += 1e-8
                     rng = hi - lo
                     cmap = []
                     ORANGE = "#ff7f00"
@@ -395,7 +395,7 @@ class MonitorApp(App):
             row: List[str] = []
             for j, col in enumerate(self.columns):
                 val = self.get_cell(entry, col)
-                if isinstance(val, (int, float)) and not isinstance(val, bool):
+                if isinstance(val, float) and not isinstance(val, bool):
                     row.append(f"{val:.6f}")
                 else:
                     row.append(str(val))
@@ -429,7 +429,7 @@ class MonitorApp(App):
                 row: List[str] = []
                 for col in self.columns:
                     val = self.get_cell(entry, col)
-                    if col == "best_val_loss" and val is not None:
+                    if col == "best_val_loss" and isinstance(val, float):
                         row.append(f"{val:.6f}")
                     else:
                         row.append(str(val))
