@@ -688,8 +688,8 @@ class InfiniteHeadAttention(nn.Module):
 
         # TODO: no reason for qk and v to have same dimension
         self.c_attn_q = self.linear_variant_q(self.n_embd, self.n_head * self.n_qk_head_dim, config, bias=config.bias)
-        self.c_attn_k = self.linear_variant_k(self.n_embd, self.n_head * self.n_qk_head_dim, config, bias=config.bias)
-        self.c_attn_v = self.linear_variant_v(self.n_embd, self.n_head * self.n_v_head_dim, config, bias=config.bias)
+        self.c_attn_k = self.linear_variant_k(self.n_embd, self.n_kv_group * self.n_qk_head_dim, config, bias=config.bias)
+        self.c_attn_v = self.linear_variant_v(self.n_embd, self.n_kv_group * self.n_v_head_dim, config, bias=config.bias)
 
         if self.use_concat_heads:
             print("use_concat_heads")
@@ -756,8 +756,8 @@ class InfiniteHeadAttention(nn.Module):
         v = self.c_attn_v(x)
 
         q = q.view(B, T, self.n_head, self.n_qk_head_dim).transpose(1, 2) # (B, n_h, T, hs)
-        k = k.view(B, T, self.n_head, self.n_qk_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
-        v = v.view(B, T, self.n_head, self.n_v_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
+        k = k.view(B, T, self.n_kv_group, self.n_qk_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
+        v = v.view(B, T, self.n_kv_group, self.n_v_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
 
         # Apply Rotary Position Encodings
         if (self.rotary_emb_q is not None) and (self.rotary_emb_k is not None):
@@ -804,8 +804,8 @@ class InfiniteHeadAttention(nn.Module):
             attn_bias = None
             if self.use_flash_lobo:
                 # 2-a  Make dummy key/value column of zeros
-                dummy_k = q.new_zeros(B, self.n_kv_group, 1, q.size(-1))
-                dummy_v = q.new_zeros(B, self.n_kv_group, 1, v.size(-1))
+                dummy_k = q.new_zeros(B, k.size(1), 1, q.size(-1))
+                dummy_v = q.new_zeros(B, v.size(1), 1, v.size(-1))
 
                 k = torch.cat([dummy_k, k], dim=2)   # prepend → causal mask still valid
                 v = torch.cat([dummy_v, v], dim=2)
