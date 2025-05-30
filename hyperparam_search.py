@@ -22,6 +22,7 @@ import os
 import subprocess
 import sys
 from contextlib import contextmanager
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -29,13 +30,25 @@ from typing import Any, Dict, List, Tuple
 import torch
 import yaml
 
+
 import ast
 
 
 # ───────────────────────── helpers ──────────────────────────
 def dict_to_cli(d: Dict[str, Any]) -> List[str]:
+    """
+    Convert a config dict to a flat list of CLI args for *train.py*.
+
+    Any key that starts with “_” is considered **private** and is *not*
+    forwarded, because *train.py* would reject unknown flags such as
+    “--_last_dup_idx”.
+    """
     cli: List[str] = []
     for k, v in d.items():
+        # Skip internal/meta fields
+        if str(k).startswith("_"):
+            continue
+
         if isinstance(v, bool):
             if v:
                 cli.append(f"--{k}")
@@ -202,10 +215,15 @@ def main():
     log.setdefault("iterations", [])
     # helper: duplicate a layer in every *_layerlist
     def _extend_layerlists(cfg: Dict[str, Any], dup_idx: int) -> None:
-        for k, v in cfg.items():
-            if k.endswith("_layerlist") and isinstance(v, list) and v:
-                dup = min(dup_idx, len(v) - 1)
-                v.insert(dup + 1, deepcopy(v[dup]))
+        """
+        Duplicate element *dup_idx* (0-based) in every X_layerlist that is
+        present in *cfg*.  Modifies the dict in place.
+        """
+        for key, val in cfg.items():
+            if key.endswith("_layerlist") and isinstance(val, list) and val:
+                src = min(dup_idx, len(val) - 1)
+                val.insert(src + 1, deepcopy(val[src]))
+
 
     # ── restore / initialise baseline ─────────────────────────
     if log["iterations"]:
@@ -338,7 +356,10 @@ def main():
                     cfg2              = deepcopy(baseline_cfg)
                     cfg2["n_layer"]   = new_nlayer
                     _extend_layerlists(cfg2, dup_idx)
-                    _evaluate(cfg2, "n_layer", tag)
+                    # store which layer got duplicated (for logging/debug)
+                    cfg2["_last_dup_idx"] = dup_idx
+                    _evaluate(cfg2, "n_layer", {"dup": dup_idx,
+                                                "new_layers": new_nlayer})
 
                 if args.nlayer_dup_mode == "dup_middle":
                     mid = (old_nlayer - 1) // 2     # rounded-up middle
@@ -353,11 +374,6 @@ def main():
 
                 continue         # done with 'n_layer', next pname
 
-            # ------------------------------------------------------------------
-            # (2) scalar / list parameters (old behaviour)
-            # ------------------------------------------------------------------
-            base_val  = baseline_cfg[pname]
-            step_spec = inc_map[pname]                 # scalar or list
 
             # ---------- scalar hyper-parameters ---------------------------------
             if isinstance(base_val, (int, float)):
@@ -414,7 +430,7 @@ def main():
                                 "loss": base_loss, # Keep current baseline metrics
                                 "score": base_score,
                                 "params": base_params,
-                                "best_iter": chosen["best_iter"] if chosen else log["iterations"][-1]["baseline_metrics"]["best_iter"],
+                                "best_iter": log["iterations"][-1]["baseline_metrics"]["best_iter"],
                             },
                             "candidates": candidates, # Log candidates for this unproductive iteration
                             "chosen": None, # Indicate no candidate was chosen for this iteration
@@ -438,8 +454,43 @@ def main():
             f"[CHOSEN] {chosen['param']} → {chosen['value']}  eff={chosen['efficiency']:.3e}"
         )
 
-        # update baseline
-        baseline_cfg[chosen["param"]] = chosen["value"]
+        # ───────────── baseline update ───────────────────────────────
+        if chosen["param"] == "n_layer":
+            # `chosen["value"]` is the dict we stuffed into the log:
+            #   {"dup": dup_idx, "new_layers": new_nlayer}
+            dup_idx    = chosen["value"]["dup"]
+            new_layers = chosen["value"]["new_layers"]
+
+            # 1) keep n_layer an *integer*
+            baseline_cfg["n_layer"] = new_layers
+
+            # 2) replicate the duplicated layer in every *_layerlist
+            _extend_layerlists(baseline_cfg, dup_idx)
+
+            # 3) (optional) remember for debugging / inspection
+            baseline_cfg["_last_dup_idx"] = dup_idx
+
+        # else:
+        #     baseline_cfg[chosen["param"]] = chosen["value"]
+        # 2) list element like “mlp_size_layerlist[3]”
+        elif (m := re.fullmatch(r"(\w+_layerlist)\[(\d+)]", chosen["param"])) :
+            list_key, str_idx = m.groups()
+            idx = int(str_idx)
+
+            if list_key not in baseline_cfg or not isinstance(baseline_cfg[list_key], list):
+                raise RuntimeError(
+                    f"BUG: expected {list_key} to be a list in baseline_cfg")
+
+            # grow the list if the dup-each mode added a new tail element
+            while idx >= len(baseline_cfg[list_key]):
+                baseline_cfg[list_key].append(
+                    deepcopy(baseline_cfg[list_key][-1]))
+
+            baseline_cfg[list_key][idx] = chosen["value"]
+
+        # 3) ordinary scalar / list parameters
+        else:
+            baseline_cfg[chosen["param"]] = chosen["value"]
         base_loss = chosen["avg_loss"]
         base_score = chosen["avg_score"]
         base_params = chosen["num_params"]
