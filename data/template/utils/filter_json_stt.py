@@ -45,7 +45,7 @@ def extract_values_by_key(json_file, key, output_file):
 def main():
     parser = argparse.ArgumentParser(description="Extract values of a specific key from a JSON file to a text file.")
     parser.add_argument("json_file", help="Path to the input JSON file.")
-    parser.add_argument("key", help="The key whose values you want to extract.")
+    parser.add_argument("key", help="The key whose values you want to contain.")
     parser.add_argument("output_file", help="Path to the output text file.")
 
     args = parser.parse_args()
