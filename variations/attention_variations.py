@@ -772,13 +772,33 @@ class InfiniteHeadAttention(nn.Module):
         y = None
         att = None
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        if self.use_flash_lobo:
+        if not self.disable_flash_attention:
             # Flash QK Norm
             if self.use_qk_norm_scale:
                 # pre-scale Q so that built-in √dₕ division becomes our g scaling
-                head_dim = math.sqrt(k.size(-1))
-                qk_scaling_factor = self.qk_norm_factor * math.sqrt(head_dim)
+                sqrt_head_dim = torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device))
+                qk_scaling_factor = self.qk_norm_factor * sqrt_head_dim
                 q = q * qk_scaling_factor
+
+            # GQA
+            if self.n_kv_group != self.n_head:
+                repeat = self.n_head // self.n_kv_group
+
+                # (B, n_head, T, d) -> (B, T, n_head, d) -> contiguous
+                k = k.transpose(1, 2).contiguous()
+                v = v.transpose(1, 2).contiguous()
+
+                # view with n_kv_group then repeat-interleave to n_head
+                k = (
+                    k.view(B, T, self.n_kv_group, self.n_qk_head_dim)
+                    .repeat_interleave(repeat, dim=2)
+                    .transpose(1, 2)
+                )  # (B, n_head, T, d)
+                v = (
+                    v.view(B, T, self.n_kv_group, self.n_v_head_dim)
+                    .repeat_interleave(repeat, dim=2)
+                    .transpose(1, 2)
+                )  # (B, n_head, T, d)
 
             # Flash Lobo
             attn_bias = None
@@ -809,16 +829,26 @@ class InfiniteHeadAttention(nn.Module):
             )
 
         else:
-            # manual implementation of attention
-            att = (q @ k.transpose(-2, -1))
+            # Manual implementation of attention
+
+            # ----- GQA support (repeat k & v when n_kv_group < n_head) -------
+            if self.n_kv_group != self.n_head:
+                repeat = self.n_head // self.n_kv_group
+                k_adjusted = k.repeat_interleave(repeat, dim=1)
+                v_adjusted = v.repeat_interleave(repeat, dim=1)
+            else:
+                k_adjusted = k
+                v_adjusted = v
+
+            att = (q @ k_adjusted.transpose(-2, -1))
 
             if self.use_qk_norm_scale:
                 # utilize learned qk_norm_scaling factor
                 att = att * self.qk_norm_factor
             else:
-                head_dim = torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device))
-                # divide by head dimension if not
-                att = att / head_dim
+                sqrt_head_dim = torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device))
+                # divide by sqrt of head dimension if not
+                att = att / sqrt_head_dim
 
             # apply lower triangle attention mask
             att = att.masked_fill(self.bias[:,:,:T,:T].to(x.device) == 0, float('-inf'))
@@ -831,7 +861,7 @@ class InfiniteHeadAttention(nn.Module):
 
             att = self.attn_dropout(att)
 
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+            y = att @ v_adjusted # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
 
         # Concat Heads or Inf Concat Heads
         if self.use_concat_heads:
