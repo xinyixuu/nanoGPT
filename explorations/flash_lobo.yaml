@@ -17,6 +17,9 @@ dataset: ["minipile"]
 
 # FLASH LOBO SECTION
 # ------------------
+attention_variant: ["infinite"]
+n_qk_head_dim: [64]
+n_v_head_dim: [64]
 disable_flash_attention: [false]
 use_flash_lobo: [true, false]
 use_flash_lobo_per_head: [true]
