@@ -9,10 +9,11 @@ use_rotary_embeddings: [true]
 use_abs_pos_embeddings: [false]
 
 # training settings
-max_iters: [3500]
+max_iters: [10000]
+eval_interval: [10000]
 time_remaining_mode: ["iteration"]
 device: ["cuda"]
-dataset: ["cosmopedia_100k"]
+dataset: ["minipile"]
 
 # FLASH LOBO SECTION
 # ------------------
