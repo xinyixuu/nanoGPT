@@ -776,7 +776,7 @@ class InfiniteHeadAttention(nn.Module):
             # Flash QK Norm
             if self.use_qk_norm_scale:
                 # pre-scale Q so that built-in √dₕ division becomes our g scaling
-                sqrt_head_dim = torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device))
+                sqrt_head_dim = math.sqrt(k.size(-1))
                 qk_scaling_factor = self.qk_norm_factor * sqrt_head_dim
                 q = q * qk_scaling_factor
 
@@ -846,7 +846,7 @@ class InfiniteHeadAttention(nn.Module):
                 # utilize learned qk_norm_scaling factor
                 att = att * self.qk_norm_factor
             else:
-                sqrt_head_dim = torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device))
+                sqrt_head_dim = math.sqrt(k.size(-1))
                 # divide by sqrt of head dimension if not
                 att = att / sqrt_head_dim
 
