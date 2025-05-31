@@ -145,6 +145,10 @@ def parse_args():
             "sgdw",
             "shampoo",
             "swats",
+            "sophiag",
+            "soap",
+            "var_adaptive_lr",
+            "lookahead",
             ]
 
     training_group.add_argument("--optimizer", type=str, default="adamw",
@@ -204,6 +208,16 @@ def parse_args():
     training_group.add_argument("--adafactor_scale_param", action=argparse.BooleanOptionalAction, default=True, help="Enable parameter-scale adaptive LR.")
     training_group.add_argument("--adafactor_relative_step", action=argparse.BooleanOptionalAction, default=True, help="Use relative-step schedule if learning rate is not supplied.")
     training_group.add_argument("--adafactor_warmup_init", action=argparse.BooleanOptionalAction, default=False, help="Use warm-up initialisation of learning rate.")
+    # Sophia-G
+    training_group.add_argument("--sophiag_beta1", type=float, default=0.96)
+    training_group.add_argument("--sophiag_beta2", type=float, default=0.99)
+    training_group.add_argument("--sophiag_rho",   type=float, default=0.04)
+    training_group.add_argument("--sophiag_update_freq", type=int, default=10)
+    # SOAP
+    training_group.add_argument("--soap_graft_lr", type=float, default=1.0)
+    # Variance Adaptive Lr
+    training_group.add_argument("--varlr_beta", type=float, default=0.9, help="EMA smoothing for VarianceAdaptiveLR optimizer")
+
 
     # AdaBelief -----------------------------------------------------------
     training_group.add_argument("--adabelief_eps", type=float, default=1e-16, help="AdaBelief epsilon.")
@@ -217,6 +231,19 @@ def parse_args():
     training_group.add_argument("--apollo_update_proj_gap", type=int, default=200, help="# of optimisation steps between projector refresh.")
     training_group.add_argument("--apollo_proj_type", type=str, default="std", choices=["std", "gaussian", "rademacher"], help="Distribution for generating the projection matrix.")
     training_group.add_argument("--apollo_apply_to_all", action=argparse.BooleanOptionalAction, default=False, help="If set, apply low-rank Apollo updates to *all* " "parameters instead of only tensors tagged with " "`.lowrank = True`.")
+    training_group.add_argument("--lookahead_inner_opt",
+                                type=str,
+                                default="adamw",
+                                choices=optimizer_variations,
+                                help="Inner/fast optimiser that Lookahead will wrap.")
+    training_group.add_argument("--lookahead_k",
+                                type=int,
+                                default=6,
+                                help="Number of inner-optimiser steps before a slow weight sync.")
+    training_group.add_argument("--lookahead_alpha",
+                                type=float,
+                                default=0.5,
+                                help="Interpolation factor for the slow update (0 < α ≤ 1).")
 
 
     # from torch-optimizer (common)
