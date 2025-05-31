@@ -145,6 +145,8 @@ def parse_args():
             "sgdw",
             "shampoo",
             "swats",
+            "sophiag",
+            "soap",
             ]
 
     training_group.add_argument("--optimizer", type=str, default="adamw",
@@ -204,6 +206,13 @@ def parse_args():
     training_group.add_argument("--adafactor_scale_param", action=argparse.BooleanOptionalAction, default=True, help="Enable parameter-scale adaptive LR.")
     training_group.add_argument("--adafactor_relative_step", action=argparse.BooleanOptionalAction, default=True, help="Use relative-step schedule if learning rate is not supplied.")
     training_group.add_argument("--adafactor_warmup_init", action=argparse.BooleanOptionalAction, default=False, help="Use warm-up initialisation of learning rate.")
+    # Sophia-G
+    training_group.add_argument("--sophiag_beta1", type=float, default=0.96)
+    training_group.add_argument("--sophiag_beta2", type=float, default=0.99)
+    training_group.add_argument("--sophiag_rho",   type=float, default=0.04)
+    training_group.add_argument("--sophiag_update_freq", type=int, default=10)
+    # SOAP
+    training_group.add_argument("--soap_graft_lr", type=float, default=1.0)
 
     # AdaBelief -----------------------------------------------------------
     training_group.add_argument("--adabelief_eps", type=float, default=1e-16, help="AdaBelief epsilon.")
