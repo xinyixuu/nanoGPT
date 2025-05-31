@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import torch
+import itertools
 from torch.optim import (ASGD, LBFGS, SGD, Adagrad, Adam, Adamax, AdamW, NAdam,
                          RAdam, RMSprop, SparseAdam)
 from torch.optim.optimizer import Optimizer
@@ -46,6 +47,127 @@ def _needs_topt():
             "➡  pip install torch-optimizer"
         )
 
+# -------------------------------------------------------------------------
+# Lookahead wrapper – works with *any* existing inner optimiser  (2025)
+# Paper: M. Zhang et al., “Lookahead Optimizer: k steps forward, 1 step back”
+# -------------------------------------------------------------------------
+class Lookahead(Optimizer):
+    r"""
+    Generic Lookahead that wraps *any* PyTorch optimiser.
+
+    Args
+    ----
+    optimizer : the inner/fast optimiser instance
+    k         : number of inner steps before a slow update
+    alpha     : interpolation factor  (0 < α ≤ 1).  α=0.5 ⇒ slow <- 0.5·slow + 0.5·fast
+    """
+
+    def __init__(self, optimizer: Optimizer, k: int = 6, alpha: float = 0.5):
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError("alpha must be in (0, 1]")
+        if k < 1:
+            raise ValueError("k must be ≥ 1")
+        self.optimizer = optimizer
+        self.k      = k
+        self.alpha  = alpha
+        self._step  = 0
+
+        # Keep slow weights **outside** the inner optimiser’s state
+        self._slow_buffers = [
+            p.data.clone().detach() for p in
+            itertools.chain.from_iterable(g["params"] for g in self.optimizer.param_groups)
+        ]
+
+    # --- mandatory PyTorch boilerplate -----------------------------------
+    @property
+    def param_groups(self):
+        return self.optimizer.param_groups
+
+    def zero_grad(self, set_to_none: bool = False):
+        return self.optimizer.zero_grad(set_to_none=set_to_none)
+
+    def state_dict(self):
+        base = self.optimizer.state_dict()
+        base.update({
+            "lookahead_k":      self.k,
+            "lookahead_alpha":  self.alpha,
+            "lookahead_step":   self._step,
+            "lookahead_slow":   [t.cpu() for t in self._slow_buffers],
+        })
+        return base
+
+    def load_state_dict(self, state_dict):
+        # 1) pull our own keys
+        self.k     = int(state_dict.pop("lookahead_k",      self.k))
+        self.alpha = float(state_dict.pop("lookahead_alpha", self.alpha))
+        self._step = int(state_dict.pop("lookahead_step",   0))
+
+        slow = state_dict.pop("lookahead_slow")
+        self._slow_buffers = [
+            t.clone().to(p.device)
+            for t, p in zip(
+                slow,
+                itertools.chain.from_iterable(g["params"]
+                                              for g in self.optimizer.param_groups)
+            )
+        ]
+
+        # 2) delegate the remainder to the inner optimiser
+        self.optimizer.load_state_dict(state_dict)
+
+    # ---------------------------------------------------------------------
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = self.optimizer.step(closure)
+        self._step += 1
+
+        # 2) interpolate slow weights every *k* steps
+        if self._step % self.k:
+            return loss
+
+        buf_idx = 0
+        for group in self.optimizer.param_groups:
+            for p in group["params"]:
+                slow = self._slow_buffers[buf_idx]
+
+                # ── keep slow buffer on same device as the live param ─────
+                if slow.device != p.data.device:
+                    slow = slow.to(p.data.device, non_blocking=True)
+                    self._slow_buffers[buf_idx] = slow        # update ref
+
+                slow.add_(p.data - slow, alpha=self.alpha)   # slow ← slow + α·Δ
+                p.data.copy_(slow)                           # fast ← slow
+                buf_idx += 1
+
+        return loss
+
+# -------------------------------------------------------------
+def _lookahead(param_groups, args):
+    """
+    Wrap any existing optimiser in Lookahead.
+
+    Extra CLI flags expected:
+      --lookahead_inner_opt  adamw   (name of an optimiser already in optimiser_dictionary)
+      --lookahead_k          6
+      --lookahead_alpha      0.5
+    """
+    inner_name = getattr(args, "lookahead_inner_opt", "adamw")
+    if inner_name == "lookahead":
+        raise ValueError("Lookahead cannot wrap itself!")
+    if inner_name not in optimizer_dictionary:
+        raise ValueError(f"Unknown inner optimiser: {inner_name}")
+
+    # Build the *inner* optimiser first, re-using param_groups + generic args
+    inner_opt = optimizer_dictionary[inner_name](param_groups, args)
+
+    # YAML gives us strings → cast defensively
+    k      = int(getattr(args, "lookahead_k", 6))
+    alpha  = float(getattr(args, "lookahead_alpha", 0.5))
+    return Lookahead(inner_opt, k=k, alpha=alpha)
+
+
+
+## Variance Adaptive LR
 class VarianceAdaptiveLR(Optimizer):
     def __init__(self, params, lr=1e-3, beta=0.9, eps=1e-8, weight_decay=0.0):
         if lr <= 0.0:
@@ -1464,4 +1586,5 @@ optimizer_dictionary: dict[str, callable] = {
     "sophiag": _sophiag,
     "soap": _soap,
     "var_adaptive_lr": _var_adaptive_lr,
+    "lookahead": _lookahead,
 }

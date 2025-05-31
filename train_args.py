@@ -148,6 +148,7 @@ def parse_args():
             "sophiag",
             "soap",
             "var_adaptive_lr",
+            "lookahead",
             ]
 
     training_group.add_argument("--optimizer", type=str, default="adamw",
@@ -230,6 +231,19 @@ def parse_args():
     training_group.add_argument("--apollo_update_proj_gap", type=int, default=200, help="# of optimisation steps between projector refresh.")
     training_group.add_argument("--apollo_proj_type", type=str, default="std", choices=["std", "gaussian", "rademacher"], help="Distribution for generating the projection matrix.")
     training_group.add_argument("--apollo_apply_to_all", action=argparse.BooleanOptionalAction, default=False, help="If set, apply low-rank Apollo updates to *all* " "parameters instead of only tensors tagged with " "`.lowrank = True`.")
+    training_group.add_argument("--lookahead_inner_opt",
+                                type=str,
+                                default="adamw",
+                                choices=optimizer_variations,
+                                help="Inner/fast optimiser that Lookahead will wrap.")
+    training_group.add_argument("--lookahead_k",
+                                type=int,
+                                default=6,
+                                help="Number of inner-optimiser steps before a slow weight sync.")
+    training_group.add_argument("--lookahead_alpha",
+                                type=float,
+                                default=0.5,
+                                help="Interpolation factor for the slow update (0 < α ≤ 1).")
 
 
     # from torch-optimizer (common)
