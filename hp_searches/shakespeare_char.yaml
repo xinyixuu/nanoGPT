@@ -1,0 +1,22 @@
+# static
+dataset: "shakespeare_char"
+use_rotary_embeddings: True
+use_abs_pos_embeddings: False
+use_flash_lobo: true
+use_flash_lobo_per_head: true
+use_concat_heads: true
+attention_variant: "infinite"
+time_remaining_mode: "eval_cycle"
+max_iters: 3000
+eval_interval: 250
+compile: True
+batch_size: 64
+block_size: 256
+# changeable things
+n_layer: 1
+n_head: 1
+n_embd: 32
+mlp_size_layerlist: [32]
+n_qk_head_dim: 32
+n_v_head_dim: 32
+flash_lobo_log_const: 1.0
