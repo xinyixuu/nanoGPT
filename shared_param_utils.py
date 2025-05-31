@@ -7,6 +7,10 @@ import torch.nn as nn
 import copy
 import sys
 from typing import get_origin, get_args
+from string import ascii_uppercase
+from rich.console import Console
+
+_console = Console()
 
 from variations.attention_variations import attention_dictionary
 from variations.mlp_variations import get_mlp_instance
@@ -81,9 +85,11 @@ class SharedParamGroupCreator:
             raise ValueError("shared_*_seq must be ≥ 1")
         seq_pool: list[nn.Module | None] = [None] * seq_len
 
-        # If we are later going to mirror, we only need to *build* the first
-        # half (the rest is just references).
-        num_physical = self.config.n_layer // 2 if shared_sym else self.config.n_layer
+        # If we'll mirror, build only the *first half plus centre* for odd n.
+        if shared_sym:
+            num_physical = (self.config.n_layer + 1) // 2   # ceil(n/2)
+        else:
+            num_physical = self.config.n_layer
 
         for i in range(num_physical):
 
@@ -179,10 +185,13 @@ class SharedParamGroupCreator:
         # Optional symmetry mirroring
         # ────────────────────────────────
         if shared_sym:
-            mirror = list(reversed(shared_group))
-            if self.config.n_layer % 2:       # odd → centre layer shouldn’t duplicate
-                mirror = mirror[1:]
+            # exclude centre element for odd n to avoid duplication
+            mirror = list(reversed(shared_group[:-1])) if self.config.n_layer % 2 else list(reversed(shared_group))
             shared_group.extend(mirror)
+
+        # ── pretty debug print ──────────────────────────────
+        msg = f"[bold cyan]{layer_type.upper()}[/] sharing: {_label_sequence(shared_group)}"
+        _console.print(msg)
 
         return shared_group
 
@@ -204,3 +213,21 @@ def _build_block(layer_type: str, layer_config, fire_pos_enc):
         variant = variant_list[idx]
     attn_cls = attention_dictionary[variant]
     return attn_cls(layer_config, fire_pos_enc=fire_pos_enc)
+
+# ─────────────────────────────────────────────────────────────
+#  Debug printer
+# ─────────────────────────────────────────────────────────────
+
+def _label_sequence(blocks) -> str:
+    """
+    Convert a list of blocks into a string like 'A B C A B C'.
+    Equal objects (by identity) get the same letter.
+    """
+    mapping = {}
+    label_iter = iter(ascii_uppercase)
+    letters = []
+    for blk in blocks:
+        if blk not in mapping:
+            mapping[blk] = next(label_iter, '?')
+        letters.append(mapping[blk])
+    return " ".join(letters)
