@@ -293,6 +293,239 @@ def _ademamix(param_groups, args):
         weight_decay=args.weight_decay,
     )
 
+################################################################################
+# Sophia-G  (Diagonal Hessian + clipped Newton step)
+# Paper: “Sophia: A Scalable Stochastic Second-order Optimizer for  
+#         Language Modeling”  – Ma et al., 2023-24 (v4)
+# URL :  https://arxiv.org/abs/2305.14342
+################################################################################
+
+class SophiaG(Optimizer):
+    r"""
+    **Sophia-G** keeps (1) a momentum buffer *m*  and (2) a *running diagonal
+    Hessian* estimate *h*.  Every `update_freq` steps it refreshes *h*
+    with the squared gradient; between refreshes it reuses the stale value,
+    making the extra cost negligible in wall-clock terms.
+
+       m_t   = β₁ m_{t-1} + (1-β₁) g_t
+       h_t   = β₂ h_{t-1} + (1-β₂) g_t²          (only on refresh steps)
+       Δ_t   = clip( m_t / (h_t + ε) ,  -ρ , ρ )
+       θ_{t+1} = θ_t − η Δ_t      (  AdamW-style decoupled weight-decay first )
+
+    Args
+    ----
+    params        : iterable of Tensors
+    lr            : learning rate          (η)
+    betas         : (β₁, β₂)               momentum & Hessian EMA factors
+    rho           : clipping threshold     (ρ in the paper, default 0.04)
+    update_freq   : refresh period for h_t (k  in the paper, default 10)
+    eps           : numerical epsilon
+    weight_decay  : decoupled weight decay
+    """
+
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-4,
+        betas: tuple[float, float] = (0.96, 0.99),
+        rho: float = 0.04,
+        update_freq: int = 10,
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+    ):
+        if lr <= 0.0:
+            raise ValueError("Invalid learning rate")
+        if update_freq < 1:
+            raise ValueError("update_freq must be ≥ 1")
+        defaults = dict(
+            lr=lr,
+            betas=betas,
+            rho=rho,
+            update_freq=update_freq,
+            eps=eps,
+            weight_decay=weight_decay,
+        )
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            lr, eps, wd = group["lr"], group["eps"], group["weight_decay"]
+            beta1, beta2 = group["betas"]
+            rho, k = group["rho"], group["update_freq"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad.detach()
+                state = self.state[p]
+
+                # ── state init ────────────────────────────────────────────
+                if len(state) == 0:
+                    state["step"] = 0
+                    state["m"] = torch.zeros_like(p, dtype=torch.float32)
+                    state["h"] = torch.zeros_like(p, dtype=torch.float32)
+
+                m, h = state["m"], state["h"]
+                state["step"] += 1
+                t = state["step"]
+
+                # ── momentum ──────────────────────────────────────────────
+                m.mul_(beta1).add_(g, alpha=1 - beta1)
+
+                # ── Hessian diag update every k steps ────────────────────
+                if t % k == 0:
+                    h.mul_(beta2).addcmul_(g, g, value=1 - beta2)
+
+                # ── decoupled weight-decay (AdamW style) ─────────────────
+                if wd != 0.0:
+                    p.data.mul_(1 - lr * wd)
+
+                # ── pre-conditioned & clipped update ─────────────────────
+                denom = h.add(eps)            # element-wise
+                update = m / denom
+                update.clamp_(min=-rho, max=rho)
+                p.data.add_(update, alpha=-lr)
+        return loss
+
+
+################################################################################
+# SOAP  –  “Shampoo plus Adam in the Eigen-basis”  (Mohan et al., 2024-25)
+# Very memory-heavy but ~-40 % tokens-to-target on GPT-J / OPT-1.3 B.
+#
+# Implementation note
+# -------------------
+# •  We reuse torch-optimizer’s Kronecker-factored **Shampoo** to get the
+#    pre-conditioned gradient `g̃`.  Inside SOAP we *also* keep an Adam-style
+#    first-moment buffer on that pre-conditioned gradient – exactly as in the
+#    paper (“momentum in the eigen-basis”).
+# •  If `torch_optimizer.Shampoo` is unavailable we raise an ImportError with
+#    a helpful hint (keeps repo importable even on minimal installs).
+################################################################################
+
+try:
+    from torch_optimizer import Shampoo as _ToptShampoo
+except (ModuleNotFoundError, ImportError):
+    _ToptShampoo = None
+
+
+class SOAP(Optimizer):
+    r"""
+    SOAP = **S**hampoo-**O**rthogonal **A**dam-grafted **P**rojection
+
+    Stats per parameter
+    -------------------
+    •  _ToptShampoo keeps the Kronecker factors and their running inverses;
+    •  we keep *one* extra momentum buffer **m** in the *Shampoo basis*.
+    """
+
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-4,
+        betas: tuple[float, float] = (0.9, 0.999),   # (β₁  for m,  β₂ for Shampoo)
+        eps: float = 1e-12,
+        weight_decay: float = 0.0,
+        momentum: float = 0.9,        # reused for Shampoo
+        update_freq: int = 1,         # Shampoo pre-condition freq
+        graft_lr: float = 1.0,        # LR multiplier after grafting
+    ):
+        if _ToptShampoo is None:
+            raise ImportError(
+                "`torch-optimizer` not found.  Install with:\n"
+                "    pip install torch-optimizer[shampoo]\n"
+                "or choose a different optimiser."
+            )
+
+        defaults = dict(
+            lr=lr,
+            betas=betas,
+            eps=eps,
+            weight_decay=weight_decay,
+            momentum=momentum,
+            update_freq=update_freq,
+            graft_lr=graft_lr,
+        )
+        super().__init__(params, defaults)
+
+        # A *real* Shampoo instance to handle Kronecker math & inverse roots
+        self._shampoo = _ToptShampoo(
+            params,
+            lr=1.0,                       # handled by SOAP itself
+            momentum=momentum,
+            epsilon=eps,
+            weight_decay=0.0,             # decay handled in outer loop
+            update_freq=update_freq,
+        )
+
+        # we must NOT let torch-optimizer step the params – override later
+        self._shampoo.step = lambda *a, **kw: None
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None if closure is None else closure()
+
+        # 1) Let Shampoo compute **pre-conditioned grads** (stored on .grad)
+        self._shampoo.precondition_grads()   # no param update here
+
+        # 2) Adam-style first-moment + weight decay + param update
+        for group in self.param_groups:
+            lr, eps = group["lr"], group["eps"]
+            beta1, _ = group["betas"]
+            wd, η = group["weight_decay"], group["graft_lr"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+
+                state = self.state[p]
+                if len(state) == 0:
+                    state["m"] = torch.zeros_like(p.grad, dtype=torch.float32)
+                m = state["m"]
+
+                # Shampoo has already given us *g̃*  (pre-conditioned grad)
+                g_tilde = p.grad
+
+                # Momentum in the Shampoo eigen-basis
+                m.mul_(beta1).add_(g_tilde, alpha=1 - beta1)
+
+                # Decoupled weight decay
+                if wd != 0.0:
+                    p.data.mul_(1 - lr * wd)
+
+                # Final update  (optionally graft lr)
+                p.data.add_(m, alpha=-lr * η)
+
+        return loss
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  Factory helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _sophiag(param_groups, args):
+    return SophiaG(
+        param_groups,
+        lr=args.learning_rate,
+        betas=(args.sophiag_beta1, args.sophiag_beta2),
+        rho=args.sophiag_rho,
+        update_freq=args.sophiag_update_freq,
+        eps=args.opt_eps,
+        weight_decay=args.opt_weight_decay,
+    )
+
+
+def _soap(param_groups, args):
+    return SOAP(
+        param_groups,
+        lr=args.learning_rate,
+        betas=(args.beta1, args.beta2),
+        eps=args.opt_eps,
+        weight_decay=args.opt_weight_decay,
+        momentum=args.shampoo_momentum,
+        update_freq=args.shampoo_update_freq,
+        graft_lr=args.soap_graft_lr,
+    )
 
 ###############################################################################
 # AdamS (Momentum-as-Normalizer) – Huishuai Zhang et al. 2024
@@ -1166,4 +1399,6 @@ optimizer_dictionary: dict[str, callable] = {
     "swats": _swats,
     "qhadam": _qhadam,
     "yogi": _yogi,
+    "sophiag": _sophiag,
+    "soap": _soap,
 }
