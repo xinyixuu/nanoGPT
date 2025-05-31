@@ -9,6 +9,8 @@ import sys
 from typing import get_origin, get_args
 from string import ascii_uppercase
 from rich.console import Console
+from rich.table import Table
+from rich.text import Text
 
 _console = Console()
 
@@ -101,6 +103,7 @@ class SharedParamGroupCreator:
             # ------------------------------------------------------------------
             layer_config = copy.deepcopy(self.config)
             layer_config.layer_idx = i
+            group_idx = i // shared_size
 
             for attr in dir(self.config):
                 if attr.endswith("_layerlist"):
@@ -108,7 +111,9 @@ class SharedParamGroupCreator:
                     if not lst:          # [], None, or empty → ignore
                         continue
                     core_attr = attr[:-10]         # strip "_layerlist"
-                    raw_val   = lst[i % len(lst)]  # cyclic selection
+                    # raw_val   = lst[i % len(lst)]  # cyclic selection
+                    raw_val = lst[group_idx % len(lst)]    # cyclic selection with group_idx
+
 
                     if hasattr(self.config, core_attr):
                         ref_val = getattr(self.config, core_attr)
@@ -166,7 +171,12 @@ class SharedParamGroupCreator:
 
             # Decide which sharing mode we are in
             if seq_len > 1:
-                seq_idx = i % seq_len
+                # ---------------------------------------------
+                # combined: sequence + size
+                # group_idx  = i // size      ← which full block we’re in
+                # seq_idx    = group_idx % k  ← which letter A/B/C…
+                # ---------------------------------------------
+                seq_idx  = (i // shared_size) % seq_len if shared_size > 1 else i % seq_len
                 layer_block = seq_pool[seq_idx]
                 if layer_block is None:
                     layer_block = _build_block(layer_type, layer_config, self.fire_pos_enc)
@@ -190,8 +200,29 @@ class SharedParamGroupCreator:
             shared_group.extend(mirror)
 
         # ── pretty debug print ──────────────────────────────
-        msg = f"[bold cyan]{layer_type.upper()}[/] sharing: {_label_sequence(shared_group)}"
-        _console.print(msg)
+        letters = _label_sequence(shared_group)
+        if layer_type == "mlp":
+            mlp_sizes = [getattr(blk, "_debug_size", "?") for blk in shared_group]
+
+        tbl = Table(
+            title=f"{layer_type.upper()} sharing",
+            header_style="bold magenta",
+            show_lines=False,
+            pad_edge=False,
+        )
+        tbl.add_column("Layer")
+        tbl.add_column("Type")
+        if layer_type == "mlp":
+            tbl.add_column("mlp_size")
+
+        for i, letter in enumerate(letters):
+            row_letter = Text(letter, style="cyan" if layer_type == "mlp" else "green")
+            if layer_type == "mlp":
+                tbl.add_row(str(i), row_letter, str(mlp_sizes[i]))
+            else:
+                tbl.add_row(str(i), row_letter)
+
+        _console.print(tbl)
 
         return shared_group
 
@@ -204,7 +235,15 @@ def _build_block(layer_type: str, layer_config, fire_pos_enc):
     if layer_type == "mlp":
         if layer_config.use_moe and layer_config.layer_idx % layer_config.moe_layer_freq == 0:
             return MoELayer(layer_config)
-        return get_mlp_instance(layer_config)
+        else:
+            block = get_mlp_instance(layer_config)
+        # remember the hidden size for debugging tables
+        try:
+            block._debug_size = block.c_fc.out_features   # OriginalMLP
+        except AttributeError:
+            block._debug_size = getattr(layer_config, "mlp_size", "?")
+        return block
+
     # Attention
     variant = layer_config.attention_variant
     if hasattr(layer_config, "attention_list") and layer_config.attention_list:
@@ -219,15 +258,10 @@ def _build_block(layer_type: str, layer_config, fire_pos_enc):
 # ─────────────────────────────────────────────────────────────
 
 def _label_sequence(blocks) -> str:
-    """
-    Convert a list of blocks into a string like 'A B C A B C'.
-    Equal objects (by identity) get the same letter.
-    """
-    mapping = {}
-    label_iter = iter(ascii_uppercase)
-    letters = []
+    """Map block identities to letters: A A B C …"""
+    mapping, letters = {}, []
     for blk in blocks:
         if blk not in mapping:
-            mapping[blk] = next(label_iter, '?')
+            mapping[blk] = ascii_uppercase[len(mapping)]   # A, B, C…
         letters.append(mapping[blk])
-    return " ".join(letters)
+    return letters               # list of letters, not joined
