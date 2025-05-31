@@ -58,10 +58,13 @@ class SharedParamGroupCreator:
 
         if layer_type == "mlp":
             shared_size = self.config.shared_mlp_size
-            shared_sym = self.config.shared_mlp_sym
+            shared_sym  = self.config.shared_mlp_sym
+            seq_len     = self.config.shared_mlp_seq
+
         elif layer_type == "attn":
             shared_size = self.config.shared_attn_size
             shared_sym = self.config.shared_attn_sym
+            seq_len     = self.config.shared_attn_seq
         else:
             sys.exit(f"{layer_type} not supported. Use 'mlp' or 'attn' only.")
 
@@ -71,7 +74,19 @@ class SharedParamGroupCreator:
         # For cycling multiple attention variants
         attn_variant_index = 0
 
-        for i in range(self.config.n_layer):
+        # ────────────────────────────────
+        # Cyclic-sequence sharing pool
+        # ────────────────────────────────
+        if seq_len < 1:
+            raise ValueError("shared_*_seq must be ≥ 1")
+        seq_pool: list[nn.Module | None] = [None] * seq_len
+
+        # If we are later going to mirror, we only need to *build* the first
+        # half (the rest is just references).
+        num_physical = self.config.n_layer // 2 if shared_sym else self.config.n_layer
+
+        for i in range(num_physical):
+
 
             # ------------------------------------------------------------------
             # Build a per-layer clone of the config and apply any *layerlist
@@ -79,6 +94,7 @@ class SharedParamGroupCreator:
             # → layer 0→100, 1→200, 2→300, 3→100, 4→200, ...
             # ------------------------------------------------------------------
             layer_config = copy.deepcopy(self.config)
+            layer_config.layer_idx = i
 
             for attr in dir(self.config):
                 if attr.endswith("_layerlist"):
@@ -142,45 +158,49 @@ class SharedParamGroupCreator:
 
                     setattr(layer_config, core_attr, raw_val)
 
-            # Create a new layer block every "shared_size"
-            if i % shared_size == 0:
-                if layer_type == "mlp":
-                    # Possibly handle MoE
-                    if self.config.use_moe and i % self.config.moe_layer_freq == 0:
-                        layer_block = MoELayer(layer_config)
-                    else:
-                        layer_block = get_mlp_instance(layer_config)
-                else:
-                    # Determine which attention variant to use
-                    variant = None
-                    if len(self.attention_list) == 1:
-                        variant = self.attention_list[0]
-                    else:
-                        # Cycle through multiple variants
-                        variant = self.attention_list[attn_variant_index % len(self.attention_list)]
-                        attn_variant_index += 1
+            # Decide which sharing mode we are in
+            if seq_len > 1:
+                seq_idx = i % seq_len
+                layer_block = seq_pool[seq_idx]
+                if layer_block is None:
+                    layer_block = _build_block(layer_type, layer_config, self.fire_pos_enc)
 
-                    attn_cls = attention_dictionary[variant]
-                    layer_block = attn_cls(layer_config, fire_pos_enc=self.fire_pos_enc)
+                    seq_pool[seq_idx] = layer_block
+            else:
+                # create a new block only every k layers,
+                # otherwise keep re-using the last one
+                if i % shared_size == 0 or layer_block is None:
+                    layer_block = _build_block(layer_type, layer_config, self.fire_pos_enc)
 
-            # Add this (possibly reused) block to the list
+            # Add this (possibly reused) block for *every* logical layer
             shared_group.append(layer_block)
 
-            # If symmetrical sharing is requested
-            if shared_sym:
-                # Even number of layers
-                if self.config.n_layer % 2 == 0:
-                    # Once we reach halfway-1, we mirror
-                    if i == (self.config.n_layer // 2 - 1):
-                        for j in range(i + 1):
-                            shared_group.append(shared_group[i - j])
-                        return shared_group
-                else:
-                    # Odd number of layers
-                    if i == (self.config.n_layer // 2):
-                        for j in range(i):
-                            shared_group.append(shared_group[i - j])
-                        return shared_group
+        # ────────────────────────────────
+        # Optional symmetry mirroring
+        # ────────────────────────────────
+        if shared_sym:
+            mirror = list(reversed(shared_group))
+            if self.config.n_layer % 2:       # odd → centre layer shouldn’t duplicate
+                mirror = mirror[1:]
+            shared_group.extend(mirror)
 
         return shared_group
 
+# ─────────────────────────────────────────────────────────────
+# Helper to move logic out of the main loop
+# ─────────────────────────────────────────────────────────────
+
+def _build_block(layer_type: str, layer_config, fire_pos_enc):
+    """Factory wrapper so we don’t repeat the same if/else everywhere."""
+    if layer_type == "mlp":
+        if layer_config.use_moe and layer_config.layer_idx % layer_config.moe_layer_freq == 0:
+            return MoELayer(layer_config)
+        return get_mlp_instance(layer_config)
+    # Attention
+    variant = layer_config.attention_variant
+    if hasattr(layer_config, "attention_list") and layer_config.attention_list:
+        variant_list = layer_config.attention_list
+        idx = layer_config.layer_idx % len(variant_list)
+        variant = variant_list[idx]
+    attn_cls = attention_dictionary[variant]
+    return attn_cls(layer_config, fire_pos_enc=fire_pos_enc)
