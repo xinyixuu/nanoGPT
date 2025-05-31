@@ -46,6 +46,68 @@ def _needs_topt():
             "➡  pip install torch-optimizer"
         )
 
+class VarianceAdaptiveLR(Optimizer):
+    def __init__(self, params, lr=1e-3, beta=0.9, eps=1e-8, weight_decay=0.0):
+        if lr <= 0.0:
+            raise ValueError("Learning rate must be positive")
+        if not 0.0 <= beta < 1.0:
+            raise ValueError("Invalid beta value")
+
+        defaults = dict(lr=lr, beta=beta, eps=eps, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            beta = group["beta"]
+            eps = group["eps"]
+            lr = group["lr"]
+            wd = group["weight_decay"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+
+                if grad.is_sparse:
+                    raise RuntimeError("Sparse gradients not supported.")
+
+                state = self.state[p]
+
+                if len(state) == 0:
+                    state["step"] = 0
+                    state["grad_avg_sq"] = torch.zeros_like(p.data)
+
+                grad_avg_sq = state["grad_avg_sq"]
+                state["step"] += 1
+
+                grad_sq = grad * grad
+                grad_avg_sq.mul_(beta).add_(grad_sq, alpha=1 - beta)
+
+                # compute adaptive learning rate scaling
+                adaptive_scale = lr / (grad_avg_sq.sqrt() + eps)
+
+                if wd != 0:
+                    p.data.mul_(1.0 - lr * wd)
+
+                p.data.addcmul_(grad, adaptive_scale, value=-1.0)
+
+        return loss
+
+def _var_adaptive_lr(param_groups, args):
+    return VarianceAdaptiveLR(
+        param_groups,
+        lr=args.learning_rate,
+        beta=args.varlr_beta,
+        eps=args.opt_eps,
+        weight_decay=args.opt_weight_decay,
+    )
+
 # -------------------------------------------------------------------------
 #  Lamb-DiffGrad  — layer-wise trust-ratio  ×  element-wise diff-friction
 # -------------------------------------------------------------------------
@@ -1401,4 +1463,5 @@ optimizer_dictionary: dict[str, callable] = {
     "yogi": _yogi,
     "sophiag": _sophiag,
     "soap": _soap,
+    "var_adaptive_lr": _var_adaptive_lr,
 }
