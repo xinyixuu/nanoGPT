@@ -46,6 +46,7 @@ from typing import Any, Dict, List, Set, DefaultDict
 import itertools
 import os
 import matplotlib.pyplot as plt
+import textwrap
 
 # ──────────────────────────── file-saving helper ───────────────────────────
 PLOT_DIR = "rem_plots" #  all plots will be saved here by default
@@ -55,6 +56,16 @@ def _safe_path(title: str, ext: str = ".png") -> str:
     """Sanitise *title* into a filename inside *PLOT_DIR*."""
     safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in title)
     return os.path.join(PLOT_DIR, safe + ext)
+
+# ───────────────────────────── title-wrap helper ───────────────────────────
+def _wrap_title(title: str, width: int = 60, *, html: bool = False) -> str:
+    """
+    Return *title* wrapped at *width* characters.
+
+    Matplotlib understands newlines, whereas Plotly needs <br>.
+    """
+    sep = "<br>" if html else "\n"
+    return sep.join(textwrap.wrap(title, width=width))
 
 # ───────────────────────────── helpers ──────────────────────────────
 
@@ -160,7 +171,7 @@ def plot_rows(
     if connect_by:
         disp = connect_label or connect_by   # NEW
         title += f"  (lines grouped by '{disp}')"
-    plt.title(title)
+    plt.title(_wrap_title(title))
     plt.legend(loc="best", fontsize=8)
     plt.tight_layout()
     plt.show()
@@ -222,7 +233,7 @@ def plot_bars(
     fig.update_traces(textposition="outside")
     fig.update_layout(
             title=dict(
-                text=title_text,
+                text=_wrap_title(title_text, html=True),
                 x=0.5,             # halfway across the plot *area*
                 xref="container",  # ← key line: ignore the margins
                 xanchor="center",
@@ -313,8 +324,11 @@ def plot_multi_bars(
     # ── common layout bits ────────────────────────────────────────────
     fig.update_layout(
         title=dict(
-            text=f"{' / '.join(map(pretty, y_cols))} by "
+            text=_wrap_title(
+                 f"{' / '.join(map(pretty, y_cols))} by "
                  f"{' / '.join(map(pretty, label_cols))}",
+                html=True,
+             ),
             x=0.5, xanchor="center", yanchor="top",
         ),
         bargap=0.15,
