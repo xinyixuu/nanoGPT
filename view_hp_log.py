@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
+import re
 
 import yaml
 from rich.panel import Panel
@@ -199,11 +200,28 @@ class SweepViewer(App):
         # guard against iterations where “chosen” is missing/None
         changed = sorted({it["chosen"]["param"] for it in self.iters if it.get("chosen")})
         hdrs = ["iter", *changed, "best_loss", "best_iter", "params", "Δparams", "eff."]
+
+        # helper ────────────────────────────────────────────────────────────
+        def _lookup(cfg: Dict[str, Any], key: str) -> Any:
+            """
+            Return cfg[key] unless key looks like  ‘something_layerlist[N]’.
+            In that case dig into the list and fetch element N (if present),
+            otherwise return “-”.
+            """
+            m = re.fullmatch(r"(\w+_layerlist)\[(\d+)]", key)
+            if not m:
+                return cfg.get(key, "-")
+            list_key, idx_s = m.groups()
+            idx = int(idx_s)
+            lst = cfg.get(list_key)
+            if isinstance(lst, list) and idx < len(lst):
+                return lst[idx]
+            return "-"  # list missing or too short
         rows: List[List[Any]] = []
 
         # baseline (iter -1) row
         base_src = (self.base_iter or {}).get("baseline_config_after", self.base_cfg)
-        base_vals = [str(base_src.get(p, "-")) for p in changed]
+        base_vals = [str(_lookup(base_src, p)) for p in changed]
         rows.append(
             [
                 "-1",
@@ -222,10 +240,11 @@ class SweepViewer(App):
             # highlight the changed field only if “chosen” is present
             vals = []
             for p in changed:
+                val = _lookup(after, p)
                 if ch and p == ch.get("param"):
-                    vals.append(Text(str(after.get(p, "-")), style=HILITE_STYLE))
+                    vals.append(Text(str(val), style=HILITE_STYLE))
                 else:
-                    vals.append(str(after.get(p, "-")))
+                    vals.append(str(val))
 
             # stats columns – fall back to “-” if missing
             if ch:
