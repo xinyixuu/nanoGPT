@@ -18,6 +18,7 @@ Interactive keybindings:
   L     - graph & connect points sharing the 3rd column value
   1–9   - graph & connect points sharing merged columns 3..(2+N)
   q # # - multibarcharts - `q [1-9] [1-9]` - e.g. 'q 3 2' will create bar charts for columns 1 2 and 3, the next two columns (column 4 and column 5) as merged labels.
+  z # # - Δ-bar chart (trim baseline) – e.g. ‘z 3 2’
   r–y   - barcharts with labels merged (r=1, y=3)
   c     - toggle colour-map on first column (green → red)
   u     - unsort / remove current column from the sort stack
@@ -76,6 +77,7 @@ HOTKEYS_TEXT = (
     "L: graph & connect points sharing the 3rd column value\n"
     "1–9: graph & connect points sharing merged columns 3..(2+N)\n"
     "q # #: multibarcharts - `q [1-9] [1-9]` - e.g. 'q 3 2' will create bar charts for columns 1 2 and 3, the next two columns (column 4 and column 5) as merged labels\n"
+    "z # #: Δ-bar chart (trim baseline) – e.g. ‘z 3 2’\n"
     "r–y: barcharts with labels merged (r=1, y=3)\n"
     "c: toggle colour-map on first column (green → red)\n"
     "u: unsort / remove current column from the sort stack\n"
@@ -142,6 +144,8 @@ class MonitorApp(App):
         self.colour_columns: set[int] = set()   # columns currently colourised
         self._bar_mode: bool = False           # are we collecting digits?
         self._bar_digits: List[int] = []       # collected numeric keys
+        self._trim_mode: bool = False          # 'z' zoom-bar mode
+        self._trim_digit: List[int] = []       # holds the single digit
         self.csv_dir: str = csv_dir
 
     def compose(self) -> ComposeResult:
@@ -482,6 +486,43 @@ class MonitorApp(App):
                 self._msg("Bar-chart mode cancelled")
             return  # swallow key while in bar-mode
 
+        # ─────────────── z-mode (trimmed bars) ───────────────────────────
+        if self._trim_mode:
+            if key.isdigit() and key != "0":
+                self._trim_digits.append(int(key))
+                if len(self._trim_digits) == 2:
+                    n_bars, n_labels = self._trim_digits
+                    self._trim_mode, self._trim_digits = False, []
+                    try:
+                        needed = n_bars + n_labels
+                        if len(self.columns) < needed:
+                            raise ValueError(f"Need ≥{needed} visible columns")
+                        y_cols   = self.columns[0:n_bars]
+                        lbl_cols = self.columns[n_bars:n_bars+n_labels]
+                        if n_bars == 1:
+                            plot_view.plot_bars_trim(
+                                self.current_entries,
+                                y=y_cols[0],
+                                label_cols=lbl_cols,
+                            )
+                        else:
+                            plot_view.plot_multi_bars_trim(
+                                self.current_entries,
+                                y_cols=y_cols,
+                                label_cols=lbl_cols,
+                            )
+                        self._msg(
+                            f"Δ-bar: {', '.join(y_cols)} by {' / '.join(lbl_cols)}",
+                            timeout=3,
+                        )
+                    except Exception as exc:
+                        self._msg(f"Graph error: {exc}", timeout=4)
+            else:
+                # cancel on any non-digit
+                self._trim_mode, self._trim_digits = False, []
+                self._msg("Δ-bar mode cancelled")
+            return
+
         # ────────────────────────── normal hotkeys ────────────────────────────
 
         if key == "q":
@@ -489,7 +530,10 @@ class MonitorApp(App):
             self._bar_mode, self._bar_digits = True, []
             self._msg("Bar-chart mode: type <#metrics><#labels>")
             return
-
+        elif key == "z":
+            self._trim_mode, self._trim_digits = True, []
+            self._msg("Δ-bar mode: type <#metrics><#labels>")
+            return
         # ── Export CSV ──────────────────────────────────────────
         elif key == "e":
             fname = f"{self.csv_dir}/{self.log_file.stem}_export_{int(time.time())}.csv"

@@ -322,6 +322,75 @@ def plot_multi_bars(
     fig.write_image(f"{safe}.png", scale=2)  # kaleido needed
     fig.show()
 
+
+# ─────────────── multi-metric trimmed bar-chart (Δ view) ────────────────
+def plot_multi_bars_trim(                     # NEW
+    rows: List[Dict[str, Any]],
+    *,
+    y_cols: List[str],
+    label_cols: List[str],
+) -> None:
+    """
+    Same signature as ``plot_multi_bars`` but each metric is shown after
+    subtracting its own minimum, letting you inspect the spread.
+    """
+    if not y_cols or not label_cols:
+        raise ValueError("Need ≥1 numeric-col and ≥1 label-col")
+
+    cats: List[str] = []
+    raw: Dict[str, List[float]] = {c: [] for c in y_cols}
+
+    for r in rows:
+        merged = "-".join(
+            "None" if _extract(r, c) is None else str(_extract(r, c))
+            for c in label_cols
+        )
+        if merged not in cats:
+            cats.append(merged)
+        for yc in y_cols:
+            v = _extract(r, yc)
+            raw[yc].append(float(v) if v is not None else np.nan)
+
+    # trim common baseline per metric
+    diffs = {
+        yc: [v - np.nanmin(raw[yc]) for v in raw[yc]]
+        for yc in y_cols
+    }
+
+    if len(y_cols) == 1:
+        yc = y_cols[0]
+        fig = px.bar(
+            x=cats, y=diffs[yc], labels={"x": " / ".join(label_cols), "y": yc}
+        )
+    else:
+        from plotly.subplots import make_subplots
+        import plotly.graph_objects as go
+        fig = make_subplots(
+            rows=len(y_cols), cols=1, shared_xaxes=True, vertical_spacing=0.03
+        )
+        palette = itertools.cycle(px.colors.qualitative.Plotly)
+        for i, yc in enumerate(y_cols, 1):
+            fig.add_trace(
+                go.Bar(x=cats, y=diffs[yc], marker_color=next(palette), showlegend=False),
+                row=i, col=1,
+            )
+            fig.update_yaxes(title_text=f"{yc} Δ", row=i, col=1)
+        fig.update_layout(height=300 * len(y_cols))
+
+    pretty = lambda s: s.replace("_", " ").title()
+    fig.update_layout(
+        title=dict(
+            text=f"Δ({' / '.join(map(pretty, y_cols))}) by "
+                 f"{' / '.join(map(pretty, label_cols))}",
+            x=0.5, xanchor="center", yanchor="top",
+        ),
+        bargap=0.15, bargroupgap=0.1,
+    )
+
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in fig.layout.title.text)
+    fig.write_image(f"{safe}.png", scale=2)
+    fig.show()
+
 # ───────────────────────────── CLI wrapper ──────────────────────────
 
 
