@@ -147,6 +147,7 @@ def parse_args():
             "swats",
             "sophiag",
             "soap",
+            "var_adaptive_lr",
             ]
 
     training_group.add_argument("--optimizer", type=str, default="adamw",
@@ -213,6 +214,9 @@ def parse_args():
     training_group.add_argument("--sophiag_update_freq", type=int, default=10)
     # SOAP
     training_group.add_argument("--soap_graft_lr", type=float, default=1.0)
+    # Variance Adaptive Lr
+    training_group.add_argument("--varlr_beta", type=float, default=0.9, help="EMA smoothing for VarianceAdaptiveLR optimizer")
+
 
     # AdaBelief -----------------------------------------------------------
     training_group.add_argument("--adabelief_eps", type=float, default=1e-16, help="AdaBelief epsilon.")
