@@ -9,6 +9,7 @@
 # ----------------------------------------------------------------------
 
 import argparse
+import sys
 import os
 import time
 import math
@@ -18,6 +19,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+from train_variations.optimizer_variants import optimizer_dictionary
+from train_args import parse_args as parse_generic_args
 
 from model import GPT, GPTConfig           # your patched model.py
 
@@ -26,38 +29,38 @@ global_step = 0          # counts *training* iterations
 
 
 # ----------------------------------------------------------------------
-# 1)  ARGUMENT PARSER  (only what we actually need)
+# 1)  ARGUMENTS  –  reuse *everything* from train_args.py
 # ----------------------------------------------------------------------
-def build_arg_parser():
-    p = argparse.ArgumentParser(description="Latent-chaining trainer")
 
-    # -------- baseline knobs we use -----------------------------------
-    p.add_argument("--dataset",      type=str, default="shakespeare_char")
-    p.add_argument("--block_size",   type=int, default=128)
-    p.add_argument("--learning_rate",type=float, default=3e-5)
-    p.add_argument("--grad_clip",    type=float, default=1.0)
-    p.add_argument("--max_epochs",   type=int,   default=10)
-    p.add_argument("--tensorboard_log", action="store_true")
-    p.add_argument("--log_every", type=int, default=10,
-                   help="Print train-loop stats every N iterations")
-    p.add_argument("--val_every", type=int, default=10,
-                   help="Run validation & checkpoint every N iterations")
+# ----------------------------------------------------------------------
+# 1-bis)  add the *extra* flags that are unique to latent-chaining
+# ----------------------------------------------------------------------
+recur_parser = argparse.ArgumentParser(add_help=False)
+recur_parser.add_argument("--resume_ckpt",   required=True,
+                          help="Path to .pt checkpoint produced by train.py")
+recur_parser.add_argument("--latent_steps",  type=int, default=0,
+                          help="Chain this many hidden states before teacher-forcing")
+recur_parser.add_argument("--skip_steps",    type=int, default=0,
+                          help="Mask loss for the first K positions in every block")
+recur_parser.add_argument("--weight_start",  type=float, default=1.0)
+recur_parser.add_argument("--weight_end",    type=float, default=1.0)
+recur_parser.add_argument("--reset_optim", action="store_true", help="Ignore optimiser state in the checkpoint")
 
+# -- split cmdline -----------------------------------------------------
+latent_args, remaining = recur_parser.parse_known_args()
 
-    # -------- new latent-chaining knobs -------------------------------
-    p.add_argument("--resume_ckpt",   required=True,
-                   help="Path to checkpoint .pt produced by train.py")
-    p.add_argument("--latent_steps",  type=int, default=0,
-                   help="Chain this many hidden states before falling "
-                        "back to token IDs (0 = none).")
-    p.add_argument("--skip_steps",    type=int, default=0,
-                   help="Zero the loss for the first K positions in each block")
-    p.add_argument("--weight_start",  type=float, default=1.0)
-    p.add_argument("--weight_end",    type=float, default=1.0)
+# ----------------------------------------------------------------------
+# 1-b)  now run the gigantic parser **only on the leftovers**
+# ----------------------------------------------------------------------
+sys.argv = [sys.argv[0]] + remaining          # fake argv for train_args
+generic_args, *_ = parse_generic_args()
 
-    return p
-
-args = build_arg_parser().parse_args()
+# ----------------------------------------------------------------------
+# 1-c)  merge both Namespaces into one `args`
+# ----------------------------------------------------------------------
+args = generic_args
+for k, v in vars(latent_args).items():
+    setattr(args, k, v)
 
 
 # ----------------------------------------------------------------------
@@ -95,10 +98,20 @@ if unexpected:
 embed_tokens     = model.embed_tokens
 forward_embedded = lambda x: model.forward_embedded(x, return_hidden=True)
 
-optimizer = torch.optim.AdamW(model.parameters(),
-                              lr=args.learning_rate, betas=(0.9, 0.95))
-if ckpt.get("optimizer"):
+decay, no_decay = [], []
+for n, p in model.named_parameters():
+    (decay if p.dim() >= 2 else no_decay).append(p)
+
+param_groups = [
+    {"params": decay,     "weight_decay": args.opt_weight_decay},
+    {"params": no_decay,  "weight_decay": 0.0},
+]
+
+optimizer = optimizer_dictionary[args.optimizer](param_groups, args)
+
+if ckpt.get("optimizer") and not getattr(args, "reset_optim", False):
     optimizer.load_state_dict(ckpt["optimizer"])
+
 
 best_val_loss = ckpt["best_val_loss"]
 iter_num      = ckpt["iter_num"]          # not used, but preserved
@@ -190,7 +203,7 @@ def run_epoch(split):
             global global_step
             global_step += 1
 
-            if global_step % args.log_every == 0:
+            if global_step % args.log_interval == 0:
                 print(f"iter {global_step:>7} | "
                       f"loss {loss.item():.4f}")
 
@@ -211,12 +224,12 @@ tb = SummaryWriter() if getattr(args, "tensorboard_log", False) else None
 best_ckpt_path = os.path.join(os.path.dirname(args.resume_ckpt), "ckpt_lat.pt")
 
 val_loss = 999.9
-for epoch in range(args.max_epochs):
+while global_step < args.max_iters:
     t0 = time.time()
     train_loss = run_epoch("train")
 
     # ── run validation/checkpoint every N iterations ────────────────
-    if global_step % args.val_every == 0:
+    if global_step % args.eval_interval == 0:
         val_loss = run_epoch("val")
 
         if tb:
@@ -236,9 +249,9 @@ for epoch in range(args.max_epochs):
     # (tensorboard train-loss stays per-epoch to avoid spam)
 
     if tb:
-        tb.add_scalar("loss/train", train_loss, epoch)
+        tb.add_scalar("loss/train", train_loss, global_step)
 
-    print(f"epoch {epoch:03d} | "
+    print(f"iter {global_step:03d} | "
           f"train {train_loss:.4f} | val {val_loss:.4f} | "
           f"{(time.time()-t0):.1f}s")
 

@@ -102,7 +102,13 @@ class Lookahead(Optimizer):
         self.alpha = float(state_dict.pop("lookahead_alpha", self.alpha))
         self._step = int(state_dict.pop("lookahead_step",   0))
 
-        slow = state_dict.pop("lookahead_slow")
+        # checkpoints created **without** Lookahead won’t have slow buffers
+        slow = state_dict.pop("lookahead_slow", None)
+        if slow is None:
+            slow = [p.data.clone().detach() for p in
+                    itertools.chain.from_iterable(
+                        g["params"] for g in self.optimizer.param_groups)]
+
         self._slow_buffers = [
             t.clone().to(p.device)
             for t, p in zip(
