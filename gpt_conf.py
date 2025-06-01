@@ -18,6 +18,13 @@ class GPTConfig:
     multicontext: bool = False
     vocab_sizes: List[int] = field(default_factory=lambda: []) # Used in place of vocab
 
+    ## MLA Variations
+    mla_latent_dim: int | None = None   # d_c  (proj dimension of the shared latent)
+    mla_rotary_dim: int       = 32      # d_r  (# rotary channels per head)
+
+    use_mla_lobo: bool = False          # turns the feature on/off
+    mla_lobo_init: float = 0.0          # log-space initial value (like flash_lobo_log_const)
+
     ## Inf attention variation
     n_qk_head_dim: int = None
     n_v_head_dim: int = None

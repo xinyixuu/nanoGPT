@@ -1,0 +1,34 @@
+# explorations/sharing.yaml
+# Sweep: size-sharing × seq-sharing × symmetry for both MLP & Attn
+#
+# Each key with a *list* value is expanded cartesian-product style
+# by the run_experiments.py launcher.
+
+# ── dataset & compute ──────────────────────────────────────────────
+dataset: ["shakespeare_char"]
+device:  ["cuda"]                    # or ["cpu"] if you like
+compile: [true]                      # tiny net ⇒ compile just works
+dtype: ["float16"]       # try both cheap dtypes
+
+# ── base model hyper-params (SMALL net) ────────────────────────────
+n_embd:  [384]
+n_head:  [6]
+max_iters: [2000]
+eval_interval: [250]
+
+# ── SHARING GRID  (cartesian product) ──────────────────────────────
+# Test odd and even layers
+n_layer: [5, 6]
+
+# Size-sharing: reuse block every k layers
+shared_attn_size: [1, 2, 3]          # 1 = no size-sharing
+shared_mlp_size:  [1, 2, 3]
+
+# Sequence-sharing: cyclic A-B-C pattern length
+shared_attn_seq:  [1, 2, 3]          # 1 = disabled
+shared_mlp_seq:   [1, 2, 3]
+
+# Symmetry mirror
+shared_attn_sym: [false, true]
+shared_mlp_sym:  [false, true]
+
