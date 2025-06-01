@@ -528,7 +528,6 @@ def parse_args():
 
     ### MLA LoBo ------------------------------------------------------------------
     model_group.add_argument("--use_mla_lobo",        action=argparse.BooleanOptionalAction, default=False)
-    model_group.add_argument("--mla_lobo_per_head",   action=argparse.BooleanOptionalAction, default=False)
     model_group.add_argument("--mla_lobo_init",       type=float, default=0.0)
 
     ## Infinite Attention variation

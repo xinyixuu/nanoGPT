@@ -31,7 +31,6 @@ parameter_groups:
     mla_rotary_dim:         [32, 64]         # d_r  – rotary channels per head
     # ----- LoBo grid -----
     use_mla_lobo:        [true, false]
-    mla_lobo_per_head:   [true]
     mla_lobo_init:       [1.0, 0.0, -1.0]   # log-space (~2.718, ~1.0  and  ~0.14)
 
 
