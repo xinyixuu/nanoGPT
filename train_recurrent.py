@@ -40,7 +40,7 @@ def build_arg_parser():
     p.add_argument("--tensorboard_log", action="store_true")
     p.add_argument("--log_every", type=int, default=10,
                    help="Print train-loop stats every N iterations")
-    p.add_argument("--val_every", type=int, default=250,
+    p.add_argument("--val_every", type=int, default=10,
                    help="Run validation & checkpoint every N iterations")
 
 
@@ -146,10 +146,11 @@ def train_block(x_tokens, y_tokens):
 
     for t in range(T):
         # ---- decide what to append ---------------------------------
-        if t == 0 or t >= args.latent_steps:
-            new_piece = embed_tokens(x_tokens[:, t:t+1])     # GT token
+        # ↳ Teacher-force **until** we reach latent_steps
+        if t < args.latent_steps:
+            new_piece = embed_tokens(x_tokens[:, t:t+1])  # GT token
         else:
-            new_piece = hidden_prev                         # latent vector
+            new_piece = hidden_prev                       # latent
 
         # ---- grow the buffer ---------------------------------------
         hidden_buf = new_piece if hidden_buf is None else \
@@ -209,28 +210,38 @@ def run_epoch(split):
 tb = SummaryWriter() if getattr(args, "tensorboard_log", False) else None
 best_ckpt_path = os.path.join(os.path.dirname(args.resume_ckpt), "ckpt_lat.pt")
 
+val_loss = 999.9
 for epoch in range(args.max_epochs):
     t0 = time.time()
     train_loss = run_epoch("train")
-    val_loss   = run_epoch("val")
+
+    # ── run validation/checkpoint every N iterations ────────────────
+    if global_step % args.val_every == 0:
+        val_loss = run_epoch("val")
+
+        if tb:
+            tb.add_scalar("loss/val", val_loss, global_step)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(
+                {"model": model.state_dict(),
+                 "model_args": ckpt["model_args"],
+                 "iter_num":   global_step,
+                 "best_val_loss": best_val_loss},
+                best_ckpt_path)
+            print(f"  ➜ new best @ step {global_step}; "
+                  f"checkpoint saved to {best_ckpt_path}")
+
+    # (tensorboard train-loss stays per-epoch to avoid spam)
 
     if tb:
         tb.add_scalar("loss/train", train_loss, epoch)
-        tb.add_scalar("loss/val",   val_loss,   epoch)
 
     print(f"epoch {epoch:03d} | "
           f"train {train_loss:.4f} | val {val_loss:.4f} | "
           f"{(time.time()-t0):.1f}s")
 
-    if val_loss < best_val_loss:
-        best_val_loss = val_loss
-        torch.save({
-            "model":       model.state_dict(),
-            "model_args":  ckpt["model_args"],
-            "iter_num":    iter_num,
-            "best_val_loss": best_val_loss,
-        }, best_ckpt_path)
-        print(f"  ➜ new best; checkpoint saved to {best_ckpt_path}")
 
 if tb:
     tb.flush()
