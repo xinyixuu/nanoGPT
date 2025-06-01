@@ -12,7 +12,7 @@ from variations.linear_variations import linear_dictionary
 from variations.position_encoding_variations import (
     FIRE, RotaryEmbedding, SymmetricalOverlapAngularPositions)
 from variations.softmax_variations import softmax_dictionary
-
+from variations.triadic_modulation_variations import mod_fn_dict
 # Mamba related imports
 # if torch.cuda.is_available():
 #     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
@@ -1014,6 +1014,96 @@ class MultiHeadLatentAttention(nn.Module):
         y = self.resid_dropout(self.out_proj(y))
         return y
 
+###############################################################################
+#  Co4Attention  —  Triadic Modulation + Latent-to-Token Attention
+#  --------------------------------------------------------------
+#  Complexity  O(Lq · N)   (Lq = n_latent  ≪  seq_len N)
+#  The class deliberately avoids the heavy quantization / Flash / GQA plumbing
+#  present in CausalSelfAttention; if those features are needed, extend here.
+###############################################################################
+
+class Co4Attention(nn.Module):
+    """
+    Implementation of the Co4 mechanism (Adeel 2025 §4).
+    *   L learnable latent-query tokens
+    *   triadic loops between (Q, K, V) with MOD transfer-function
+    *   final latent-to-token dot-product attention
+    """
+    def __init__(self, config, fire_pos_enc=None):
+        super().__init__()
+
+        assert config.n_embd % config.n_head == 0, "n_embd must be divisible by n_head"
+
+        self.n_embd   = config.n_embd
+        self.n_head   = config.n_head
+        self.head_dim = config.n_embd // config.n_head
+
+        self.n_latent      = getattr(config, "n_latent", 4)
+        self.triadic_loops = getattr(config, "triadic_loops", 1)
+        mod_name           = getattr(config, "mod_fn", "cooperation")
+        self.mod_fn        = mod_fn_dict[mod_name]
+
+        # Projections
+        self.k_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+        self.v_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+        self.q_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+
+        # Learnable latent queries  (Lq, E)
+        self.latent = nn.Parameter(torch.randn(self.n_latent, config.n_embd) / math.sqrt(config.n_embd))
+
+        self.out_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+        self.resid_dropout = nn.Dropout(config.dropout)
+
+    # ─────────────────────────── helpers ────────────────────────────────
+    def _split_heads(self, x):
+        # (B,S,E) → (B,H,S,Hd)
+        B, S, _ = x.shape
+        return x.view(B, S, self.n_head, self.head_dim).transpose(1, 2)
+
+    def _merge_heads(self, x):
+        # (B,H,S,Hd) → (B,S,E)
+        B, _, S, _ = x.shape
+        return x.transpose(1, 2).contiguous().view(B, S, self.n_embd)
+
+    # ─────────────────────────── forward ────────────────────────────────
+    def forward(self, x, iter_num=None):
+        """
+        x : (B, N, E)
+        """
+        B, N, _ = x.shape
+
+        k = self.k_proj(x)                         # (B, N, E)
+        v = self.v_proj(x)                         # (B, N, E)
+        q = self.latent.unsqueeze(0).expand(B, -1, -1)  # (B, Lq, E)
+
+        # --- triadic modulation --------------------------------------------------
+        for _ in range(self.triadic_loops):
+            c_q = 0.5 * (k.mean(1, keepdim=True) + v.mean(1, keepdim=True))  # (B,1,E)
+            q   = self.mod_fn(q, c_q)                                        # (B,Lq,E)
+
+            c_k = 0.5 * (q.mean(1, keepdim=True).repeat(1, N, 1) + v)
+            k   = self.mod_fn(k, c_k)                                        # (B,N,E)
+
+            c_v = 0.5 * (q.mean(1, keepdim=True).repeat(1, N, 1) + k)
+            v   = self.mod_fn(v, c_v)                                        # (B,N,E)
+
+        q = self.q_proj(q)                                                   # (B,Lq,E)
+
+        # --- latent-to-token attention ------------------------------------------
+        qh = self._split_heads(q)     # (B,H,Lq,Hd)
+        kh = self._split_heads(k)     # (B,H,N ,Hd)
+        vh = self._split_heads(v)     # (B,H,N ,Hd)
+
+        att = (qh @ kh.transpose(-2, -1)) / math.sqrt(self.head_dim)         # (B,H,Lq,N)
+        att = att.softmax(dim=-1)
+
+        yh  = att @ vh                                                     # (B,H,Lq,Hd)
+        yh  = yh.mean(2, keepdim=True)                                      # (B,H,1,Hd)
+        y   = self._merge_heads(yh).repeat(1, N, 1)                          # (B,N,E)
+
+        y = self.resid_dropout(self.out_proj(y))
+        return y
+
 attention_dictionary = {
     "causal": CausalSelfAttention,
     "linear": LinearAttention,
@@ -1021,4 +1111,5 @@ attention_dictionary = {
     "identity": AttnIdentity,
     "infinite": InfiniteHeadAttention,
     "mla": MultiHeadLatentAttention,
+    "co4": Co4Attention,
 }
