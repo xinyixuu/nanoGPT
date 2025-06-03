@@ -533,12 +533,11 @@ def parse_args():
 
 
     ## CO4 Variations
-    # model_group.add_argument("--use_co4",      action="store_true", help="enable triadic-modulation attention")
-    # model_group.add_argument("--n_latent",     type=int, default=4, help="number of latent queries  Lq")
-    # model_group.add_argument("--triadic_loops",type=int, default=1, help="how many Q-K-V refinement passes")
-    # model_group.add_argument("--mod_fn",       type=str, default="cooperation",
-    #                     choices=["cooperation","tm1","tm2","tm3","tm4"],
-    #                     help="which MOD transfer-function to use")
+    model_group.add_argument("--n_latent",     type=int, default=4, help="number of latent queries  Lq")
+    model_group.add_argument("--triadic_loops",type=int, default=1, help="how many Q-K-V refinement passes")
+    model_group.add_argument("--mod_fn",       type=str, default="cooperation",
+                        choices=["cooperation","tm1","tm2","tm3","tm4"],
+                        help="which MOD transfer-function to use")
 
     ## Infinite Attention variation
     model_group.add_argument('--n_qk_head_dim', default=None, type=int)

@@ -1042,6 +1042,7 @@ class Co4Attention(nn.Module):
         self.triadic_loops = getattr(config, "triadic_loops", 1)
         mod_name           = getattr(config, "mod_fn", "cooperation")
         self.mod_fn        = mod_fn_dict[mod_name]
+        print(mod_name)
 
         # Projections
         self.k_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
