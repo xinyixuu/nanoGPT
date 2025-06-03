@@ -25,6 +25,11 @@ class GPTConfig:
     use_mla_lobo: bool = False          # turns the feature on/off
     mla_lobo_init: float = 0.0          # log-space initial value (like flash_lobo_log_const)
 
+    ## CO4 attention variation
+    n_latent: int = None
+    triadic_loops: int = None
+    mod_fn: str = "causal"
+
     ## Inf attention variation
     n_qk_head_dim: int = None
     n_v_head_dim: int = None

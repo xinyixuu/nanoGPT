@@ -37,7 +37,7 @@ def parse_args():
     training_group.add_argument('--eval_only', default=False, action=argparse.BooleanOptionalAction)
 
     # latency / ETA estimate options
-    training_group.add_argument('--time_remaining_mode', choices=['iteration', 'eval_cycle'], default='eval_cycle', help="iteration - estimates only based on training iterations -- use if doing one eval at the end; eval_cycle -- use if doing multiple evals, will use a single cycle for the estimation.")
+    training_group.add_argument('--eta_variant', choices=['iteration', 'eval_cycle'], default='eval_cycle', help="iteration - estimates only based on training iterations -- use if doing one eval at the end; eval_cycle -- use if doing multiple evals, will use a single cycle for the estimation.")
     training_group.add_argument('--iteration_window', default=100, type=int)
     training_group.add_argument('--eval_cycle_window', default=5, type=int)
 
@@ -533,12 +533,11 @@ def parse_args():
 
 
     ## CO4 Variations
-    # model_group.add_argument("--use_co4",      action="store_true", help="enable triadic-modulation attention")
-    # model_group.add_argument("--n_latent",     type=int, default=4, help="number of latent queries  Lq")
-    # model_group.add_argument("--triadic_loops",type=int, default=1, help="how many Q-K-V refinement passes")
-    # model_group.add_argument("--mod_fn",       type=str, default="cooperation",
-    #                     choices=["cooperation","tm1","tm2","tm3","tm4"],
-    #                     help="which MOD transfer-function to use")
+    model_group.add_argument("--n_latent",     type=int, default=4, help="number of latent queries  Lq")
+    model_group.add_argument("--triadic_loops",type=int, default=1, help="how many Q-K-V refinement passes")
+    model_group.add_argument("--mod_fn",       type=str, default="cooperation",
+                        choices=["cooperation","tm1","tm2","tm3","tm4"],
+                        help="which MOD transfer-function to use")
 
     ## Infinite Attention variation
     model_group.add_argument('--n_qk_head_dim', default=None, type=int)

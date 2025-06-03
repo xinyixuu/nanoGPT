@@ -503,12 +503,12 @@ class GPT(nn.Module):
             logits = []
             for i in range(len(token_list)):
                 logits.append(self.transformer[f'lm_head_{i}'](x))
-                
+
             if self.config.final_logit_softcapping is not None:
                 logits = logits / self.config.final_logit_softcapping
                 logits = torch.tanh(logits)
                 logits = logits * self.config.final_logit_softcapping
-            
+
             # 6. Compute losses if targets are provided
             # If we only want the last token, adapt the slices as you prefer
             losses = None
@@ -617,7 +617,7 @@ class GPT(nn.Module):
                 logits = logits / self.config.final_logit_softcapping
                 logits = torch.tanh(logits)
                 logits = logits * self.config.final_logit_softcapping
-            
+
             if targets is not None:
                 # if we are given some desired targets also calculate the loss
                 logits = self.lm_head(x)
@@ -628,6 +628,64 @@ class GPT(nn.Module):
                 loss = None
 
             return logits, loss
+    # ------------------------------------------------------------------
+    #  LATENT-CHAINING
+    # ------------------------------------------------------------------
+    @torch.no_grad()
+    def embed_tokens(self, idx):
+        """
+        Return the (B,T,E) tensor right *after* token embeddings,
+        factor-scale-up, positional embedding and dropout.  Exactly the
+        same tensor that flows into the first transformer Block inside
+        `forward()`.  Used by train_recurrent.py for the FIRST step.
+        """
+        device = idx.device
+        tok_emb = self.transformer.wte(idx)
+        if self.n_embd_wte:
+            tok_emb = self.transformer.scale_up(tok_emb)
+        if self.config.use_embedding_scale:
+            tok_emb = tok_emb * self.embedding_scale
+        if self.config.use_abs_pos_embeddings:
+            t = idx.size(1)
+            pos = torch.arange(0, t, dtype=torch.long, device=device)
+            tok_emb = tok_emb + self.transformer.wpe(pos)
+        return self.transformer.drop(tok_emb)
+
+    def forward_embedded(self, x_emb, iter_num=None, return_hidden=False):
+        """
+        Complete forward pass **starting from an already-embedded tensor**
+        `x_emb` of shape (B,T,E).  Returns (`logits`, `loss`) identical to
+        `forward`, and – if `return_hidden` – also the final hidden state
+        right before `lm_head`.  No gradients are blocked; loss still
+        back-propagates into `x_emb`.
+        """
+        # ---- copy–paste from the “else:” branch of forward() ---------
+        b, t, _ = x_emb.size()
+        x = x_emb
+
+        # (learned position residuals, steering vectors, etc.)
+        learned_sum = None
+        if self.use_lsv and self.config.apply_lsv_at_layer_idx == 0:
+            x = self.lsv_matrix(x)
+
+        mlp_res = None
+        layer_idx = 1
+        for block in self.transformer.h:
+            x, mlp_res = block(x, iter_num, mlp_res=mlp_res)
+            if self.use_lsv and layer_idx == self.config.apply_lsv_at_layer_idx:
+                x = self.lsv_matrix(x)
+            layer_idx += 1
+
+        x = self.transformer.ln_f(x)
+        if self.n_embd_wte:
+            x = F.linear(x, self.transformer.scale_down.weight.t())
+
+        logits = self.lm_head(x)
+        if self.final_logit_softcapping is not None:
+            logits = torch.tanh(logits / self.final_logit_softcapping) \
+                     * self.final_logit_softcapping
+
+        return (logits, x) if return_hidden else (logits, None)
 
     def set_lsv_scaling_factor(self, factor):
         self.lsv_matrix.update_lsv_scaling_factor(factor)
