@@ -1,28 +1,60 @@
 # flash_lobo.yaml
 ---
+# Model size
+n_layer: [6]
+n_embd : [384]
+
 # pos embeddings
 use_rotary_embeddings: [true]
 use_abs_pos_embeddings: [false]
 
-# base hyperparameters
-max_iters: [3500]
+# training settings
+max_iters: [10000]
+eval_interval: [10000]
+time_remaining_mode: ["iteration"]
 device: ["cuda"]
-dtype: ["bfloat16", "float16", "float32"]
-dataset: ["cosmopedia_100k"]
+dataset: ["minipile"]
 
+# FLASH LOBO SECTION
+# ------------------
+attention_variant: ["infinite"]
+n_qk_head_dim: [64]
+n_v_head_dim: [64]
+disable_flash_attention: [false]
 use_flash_lobo: [true, false]
-
-# conditional options
-use_flash_obo_const:
-  conditions:
-    - ["use_flash_lobo", true]
-  options: [false, true]
+use_flash_lobo_per_head: [true]
 
 # conditional options
 flash_lobo_log_const:
   conditions:
     - ["use_flash_lobo", true]
-  options: ["0.0", "0.1", "0.5"]
+  options: ["2.0", "1.0", "0.5", "0.1"]
 
+# ALWAYS COMPILE
 # boolean flags
 compile: [true]
+
+# MQA/GQA/MHA Sections
+# --------------------
+# head counts (must divide 384)
+n_head: [6, 8, 12]               # 6-head baseline + denser variants
+
+# options are filtered so they always divide n_head
+parameter_groups:
+  - n_head: [6]
+    n_kv_group: [1, 2, 6]
+  - n_head: [8]
+    n_kv_group: [1, 2, 4, 8]
+  - n_head: [12]
+    n_kv_group: [1, 2, 3, 4, 6, 12]
+
+# CONCAT VS SUM THEN PROJECT
+# -------------------------
+# concatenating vs. sum-then-project
+use_concat_heads: [true, false]
+
+
+n_cproj:
+  conditions:
+    - ["use_concat_heads", false]
+  options: [1, 2, 3, 4, 5]

@@ -1,0 +1,55 @@
+# infinite_cproj.yaml
+---
+
+# base hyperparameters
+max_iters: [20000]
+# n_layer: [6]
+# n_head: [6]
+# n_embd: [384]
+# block_size: [256]
+eval_interval: [500]
+device: ["cuda"]
+dataset: ["minipile"]
+
+# uses rotary embeddings, no abs pos embeddings
+use_rotary_embeddings: [true]
+use_abs_pos_embeddings: [false]
+
+# compilation
+compile: [true]
+
+# --- BEGIN FLASH LOBO OPTIONS ------
+use_flash_lobo: [true, false]
+
+use_flash_lobo_per_head:
+  conditions:
+    - ["use_flash_lobo", true]
+  options: [true]
+
+flash_lobo_log_const:
+  conditions:
+    - ["use_flash_lobo", true]
+  options: ["0.1", "0.5"]
+
+# --- END FLASH LOBO OPTIONS ------
+
+# --- BEGIN CONCAT HEADS OPTIONS -----
+attention_variant: "infinite"
+
+# check if mantissa or exp improves
+dtype: ["bfloat16", "float16"]
+
+# inf head allowed, test if this scales better with lobo
+n_head: [6, 12, 18]
+use_concat_heads: [false, true]
+n_cproj:
+  conditions:
+    - ["use_concat_heads", false]
+  options: ["1", "6", "12", "18"]
+
+# test if higher concat_heads or higher n_head scales better with higher n_v_dim
+n_qk_head_dim: [64]
+n_v_head_dim: [64, 80, 96]
+
+# --- END CONCAT HEADS OPTIONS -----
+

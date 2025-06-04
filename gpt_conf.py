@@ -14,9 +14,31 @@ class GPTConfig:
     n_kv_group: int = 12
     n_embd: int = 768
 
+    # For multicontext training
+    multicontext: bool = False
+    vocab_sizes: List[int] = field(default_factory=lambda: []) # Used in place of vocab
+
+    ## MLA Variations
+    mla_latent_dim: int | None = None   # d_c  (proj dimension of the shared latent)
+    mla_rotary_dim: int       = 32      # d_r  (# rotary channels per head)
+
+    use_mla_lobo: bool = False          # turns the feature on/off
+    mla_lobo_init: float = 0.0          # log-space initial value (like flash_lobo_log_const)
+
+    ## CO4 attention variation
+    n_latent: int = None
+    triadic_loops: int = None
+    mod_fn: str = "causal"
+
     ## Inf attention variation
     n_qk_head_dim: int = None
     n_v_head_dim: int = None
+    n_cproj: int = None
+    use_concat_heads: bool = False
+
+    # Softcapping params
+    attn_logit_softcapping: float | None = None
+    final_logit_softcapping: float | None = None
 
     # Learned Position Embeddings
     n_lpe: int = 0
@@ -46,6 +68,7 @@ class GPTConfig:
 
     ## Flash Lobo
     use_flash_lobo: bool = False
+    use_flash_lobo_per_head: bool = False
     use_flash_obo_const: bool = False
     flash_lobo_log_const: float = 0.0
 
@@ -69,6 +92,7 @@ class GPTConfig:
 
     # weight tying
     n_embd_wte_scale_tying: bool = True
+    wte_weight_tying: bool = True # Non-factorized wte weight tying
 
     # wte import/export
     import_wte_freeze: bool = False
@@ -126,6 +150,7 @@ class GPTConfig:
     mlp_variant: str = "mlp"
     mlp_expansion_factor: int = 4
     mlp_size: int = None
+    mlp_size_layerlist: List[int] = field(default_factory=list)
     mlp_res: bool = False
 
     ## KAN Option
@@ -137,9 +162,11 @@ class GPTConfig:
     # MLP
     shared_mlp_size: int = 1
     shared_mlp_sym: bool = False
+    shared_mlp_seq: int = 1
     # ATTN
     shared_attn_size: int = 1
     shared_attn_sym: bool = False
+    shared_attn_seq: int = 1
 
     # Softmax Alternatives and Options
     softmax_variant_attn: str = "softmax" # Choices: "softmax" "softermax" "sigsoftmax" "polymax" "strongermax" "consmax"
@@ -308,6 +335,8 @@ class GPTConfig:
 
     ## Embedding initialization options
     init_variant: str = None
+    init_scale: float = 0.01
+    init_wte_npy: str = "wte.npy"
 
     # Quantizations
     start_quant_level: float = 0

@@ -10,6 +10,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
+import sys
 from rich import print
 import copy
 
@@ -146,10 +147,16 @@ class GPT(nn.Module):
 
         self.config = config
 
+        # Final-logit softcapping
+        self.final_logit_softcapping = config.final_logit_softcapping
+
         # Use the new SharedParamGroupCreator for MLP and Attn layers
         spg_creator = SharedParamGroupCreator(config)
         shared_mlp_array = spg_creator.create_shared_param_group("mlp")
         shared_attn_array = spg_creator.create_shared_param_group("attn")
+
+        # General weight tying
+        self.wte_weight_tying = config.wte_weight_tying
 
         # Factorization Parameters
         self.n_embd_wte = config.n_embd_wte
@@ -176,6 +183,7 @@ class GPT(nn.Module):
                 for _ in range(config.n_lpe)
                 ])
 
+        self.transformer = nn.ModuleDict(dict())
         # Configure wte, with optional quantization and factoring
         if config.quantize_wte:
             if config.n_embd_wte:
@@ -184,20 +192,28 @@ class GPT(nn.Module):
             else:
                 # no factorization
                 word_embd = QuantizedEmbedding(config.vocab_size, config.n_embd, config.quantize_wte_method, config.quantize_wte_bits)
+            self.transformer['wte'] = word_embd
         else:
             if config.n_embd_wte:
                 # If factorization is set
                 word_embd = nn.Embedding(config.vocab_size, config.n_embd_wte)
+                self.transformer['wte'] = word_embd
             else:
-                # no factorization
-                word_embd = nn.Embedding(config.vocab_size, config.n_embd)
+                #TODO: currently multicontext is in own category, add support later for WTE factorization
+                if config.multicontext:
+                    for i, vocab_size in enumerate(self.config.vocab_sizes):
+                        embedding_layer = nn.Embedding(vocab_size, config.n_embd)
+                        self.transformer[f'wte_{i}'] = embedding_layer
+                        self.transformer[f'lm_head_{i}'] = nn.Linear(config.n_embd, vocab_size, bias=False)
+                else:
+                    # no factorization
+                    word_embd = nn.Embedding(config.vocab_size, config.n_embd)
+                    self.transformer['wte'] = word_embd
 
-        self.transformer = nn.ModuleDict(dict(
-            wte = word_embd,
-            drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config, mlp=shared_mlp_array[i], attn=shared_attn_array[i]) for i in range(config.n_layer)]),
-            ln_f = norm_dictionary[config.norm_variant_output](config),
-        ))
+
+        self.transformer['drop'] = nn.Dropout(config.dropout)
+        self.transformer['h'] = nn.ModuleList([Block(config, mlp=shared_mlp_array[i], attn=shared_attn_array[i]) for i in range(config.n_layer)])
+        self.transformer['ln_f'] = norm_dictionary[config.norm_variant_output](config)
 
         if self.config.use_abs_pos_embeddings:
             if config.quantize_wpe:
@@ -214,7 +230,12 @@ class GPT(nn.Module):
         if config.n_embd_wte:
             self.lm_head = nn.Linear(config.n_embd_wte, config.vocab_size, bias=False)
         else:
-            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+            #TODO: currently multicontext is in own category, add support later for WTE factorization
+            if config.multicontext:
+                for i, vocab_size in enumerate(self.config.vocab_sizes):
+                    self.transformer[f'lm_head_{i}'].weight = self.transformer[f'wte_{i}'].weight
+            else:
+                self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # Initialize and possibly import scale_up and scale_down matrices, if factorization is set
         if self.n_embd_wte:
@@ -237,7 +258,12 @@ class GPT(nn.Module):
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.lm_head.weight = self.transformer.wte.weight # https://paperswithcode.com/method/weight-tying
+        if self.wte_weight_tying:
+            if config.multicontext:
+                for i, vocab_size in enumerate(self.config.vocab_sizes):
+                    self.transformer[f'lm_head_{i}'].weight = self.transformer[f'wte_{i}'].weight
+            else:
+                self.lm_head.weight = self.transformer.wte.weight # https://paperswithcode.com/method/weight-tying
 
         # import wte
         if self.config.import_wte_npy:
@@ -291,7 +317,13 @@ class GPT(nn.Module):
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            if self.config.init_variant == "gaussian" or module is self.transformer['wpe']:
+            if self.config.init_variant == "gaussian":
+                torch.nn.init.normal_(
+                    module.weight,
+                    mean=self.config.embedding_mean_init,
+                    std=self.config.embedding_std_init
+                )
+            elif 'wpe' in self.transformer.keys() and module is self.transformer['wpe']:
                 torch.nn.init.normal_(
                     module.weight,
                     mean=self.config.embedding_mean_init,
@@ -299,12 +331,10 @@ class GPT(nn.Module):
                 )
             else:
                 init_fn = init_dictionary[self.config.init_variant]
+                print(self.config.init_variant)
 
                 # Generate custom init matrix
-                weight_data = init_fn(
-                    vocab_size=self.config.vocab_size,
-                    n_embd=self.config.n_embd
-                )
+                weight_data = init_fn(self.config)
 
                 # Copy into the module's weight
                 with torch.no_grad():
@@ -378,97 +408,284 @@ class GPT(nn.Module):
         np.savez(file_path, scale_up=scale_up_matrix, scale_down=scale_down_matrix)
         print(f"Scale matrices saved to {file_path}")
 
-    def forward(self, idx, targets=None, iter_num=None):
-        device = idx.device
-        b, t = idx.size()
-        # assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        x = None
-
-        if self.config.use_embedding_scale:
-            tok_emb = tok_emb * self.embedding_scale
-
-        if self.n_embd_wte:
-            tok_emb = self.transformer.scale_up(tok_emb)
-
-        if self.config.use_abs_pos_embeddings:
-            pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
-            pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-            x = self.transformer.drop(tok_emb + pos_emb)
-        else:
-            x = self.transformer.drop(tok_emb)
-
-        # sum all learned position residuals
-        learned_sum = None
-
-
-        # TODO: abstact into a method
-        if self.config.n_lpe != 0 and self.config.target_layer_in_lpe == 0:
-            for lpe in self.learned_position_embeddings:
-                out = lpe(b, t, x, iter_num)
-                # Accumulate embedding sum
-                learned_sum = out if learned_sum is None else learned_sum + out
-
-        if self.config.n_lpe != 0 and self.config.target_layer_out_lpe == 0:
-            # Add learned embeddings to x
-            x = x + learned_sum
-
-        x.requires_grad_(True)  # Ensure requires_grad is True
-
-        if self.use_lsv and self.config.apply_lsv_at_layer_idx == 0:
-            x = self.lsv_matrix(x)
-
-        layer = 1
-        mlp_res = None
-        for block in self.transformer.h:
-            # Propagate tokens through layers
-            if self.config.use_gradient_checkpointing:
-                x = checkpoint.checkpoint(block, x, iter_num, use_reentrant=self.config.recompute_backward_pass)
+    def forward(self, idx, targets=None, iter_num=None, token_dict=None, target_dict=None):
+        if token_dict is not None:
+            token_list = list(token_dict.values())
+            # If target_dict is None (typical for inference), set target_list = None
+            if target_dict is not None:
+                target_list = list(target_dict.values())
             else:
-                x, mlp_res = block(x, iter_num, mlp_res=mlp_res)
+                target_list = None
+            device = token_list[0].device
+            b, t = token_list[0].size()
 
-            # Intercept for Learned Steering Vectors
-            if self.use_lsv and layer == self.config.apply_lsv_at_layer_idx:
-                x = self.lsv_matrix(x)
-                # x = self.apply_learned_vector_to_layer_output(x)
+            x = None
+
+            # Add all of the input tokens
+            for i, tokens in enumerate(token_list):
+                if i == 0:
+                    x = self.transformer[f'wte_{i}'](tokens)
+                else:
+                    x += self.transformer[f'wte_{i}'](tokens)
+
+            if self.config.use_embedding_scale:
+                x = x * self.embedding_scale
+
+            if self.config.use_abs_pos_embeddings:
+                pos = torch.arange(0, t, dtype=torch.long, device=device)
+                pos_emb = self.transformer.wpe(pos)  # (t, n_embd)
+                x = self.transformer.drop(x + pos_emb)
+            else:
+                x = self.transformer.drop(x)
+
+            x.requires_grad_(True)
+
+            # sum all learned position residuals
+            learned_sum = None
+
 
             # TODO: abstact into a method
-            if self.config.n_lpe != 0 and self.config.target_layer_in_lpe == layer:
+            if self.config.n_lpe != 0 and self.config.target_layer_in_lpe == 0:
                 for lpe in self.learned_position_embeddings:
                     out = lpe(b, t, x, iter_num)
                     # Accumulate embedding sum
                     learned_sum = out if learned_sum is None else learned_sum + out
 
-            if self.config.n_lpe != 0 and self.config.target_layer_out_lpe == layer:
+            if self.config.n_lpe != 0 and self.config.target_layer_out_lpe == 0:
                 # Add learned embeddings to x
                 x = x + learned_sum
-            # END lpe section
 
-            if self.config.apply_vector_at_layer_idx is not None and layer == self.config.apply_vector_at_layer_idx:
-                x = self.apply_vector_to_layer_output(x)
-            if self.config.obtain_vector_at_layer_idx is not None and layer == self.config.obtain_vector_at_layer_idx:
-                print(layer, self.config.obtain_vector_at_layer_idx)
-                x = self.obtain_vector_from_layer_output(x)
+            # 2. Possibly apply LSV on input
+            if self.use_lsv and self.config.apply_lsv_at_layer_idx == 0:
+                x = self.lsv_matrix(x)
 
-            layer +=1
+            layer_idx = 1
+            mlp_res = None
+            for block in self.transformer.h:
+                if self.config.use_gradient_checkpointing:
+                    # TODO: see if this still works with and without mlp res
+                    x = checkpoint.checkpoint(block, x, iter_num, use_reentrant=self.config.recompute_backward_pass)
+                else:
+                    x, mlp_res = block(x, iter_num, mlp_res=mlp_res)
+
+                # TODO: abstact into a method
+                if self.config.n_lpe != 0 and self.config.target_layer_in_lpe == layer:
+                    for lpe in self.learned_position_embeddings:
+                        out = lpe(b, t, x, iter_num)
+                        # Accumulate embedding sum
+                        learned_sum = out if learned_sum is None else learned_sum + out
+
+                if self.config.n_lpe != 0 and self.config.target_layer_out_lpe == layer:
+                    # Add learned embeddings to x
+                    x = x + learned_sum
+                # END lpe section
+
+                # Steering logic
+                if self.use_lsv and layer_idx == self.config.apply_lsv_at_layer_idx:
+                    x = self.lsv_matrix(x)
+                if (self.config.apply_vector_at_layer_idx is not None
+                        and layer_idx == self.config.apply_vector_at_layer_idx):
+                    x = self.apply_vector_to_layer_output(x)
+                if (self.config.obtain_vector_at_layer_idx is not None
+                        and layer_idx == self.config.obtain_vector_at_layer_idx):
+                    x = self.obtain_vector_from_layer_output(x)
+
+                layer_idx += 1
+
+            # 3. Final layer norm
+            x = self.transformer.ln_f(x)
+
+            # 4. Optionally scale down
+            if self.n_embd_wte:
+                x = F.linear(x, self.transformer.scale_down.weight.t())
+
+            # 5. Compute separate logits
+            logits = []
+            for i in range(len(token_list)):
+                logits.append(self.transformer[f'lm_head_{i}'](x))
+
+            if self.config.final_logit_softcapping is not None:
+                logits = logits / self.config.final_logit_softcapping
+                logits = torch.tanh(logits)
+                logits = logits * self.config.final_logit_softcapping
+
+            # 6. Compute losses if targets are provided
+            # If we only want the last token, adapt the slices as you prefer
+            losses = None
+            if target_list is not None:
+                # If we do want to compute losses for each context
+                losses = []
+                for i in range(len(token_list)):
+                    loss_i = F.cross_entropy(
+                        logits[i].view(-1, logits[i].size(-1)),
+                        target_list[i].view(-1),
+                        ignore_index=-1
+                    )
+                    losses.append(loss_i)
+
+            else:
+                # only forward lm head on very last position in inference mode
+                for i in range(len(token_list)):
+                    logits.append(self.transformer[f'lm_head_{i}'](x[:, [-1], :]))
+                losses = None
+
+            return logits, losses
+
+        else:
+            device = idx.device
+            b, t = idx.size()
+            # assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
+            # forward the GPT model itself
+            tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+            x = None
+
+            if self.config.use_embedding_scale:
+                tok_emb = tok_emb * self.embedding_scale
+
+            if self.n_embd_wte:
+                tok_emb = self.transformer.scale_up(tok_emb)
+
+            if self.config.use_abs_pos_embeddings:
+                pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
+                pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+                x = self.transformer.drop(tok_emb + pos_emb)
+            else:
+                x = self.transformer.drop(tok_emb)
+
+            # sum all learned position residuals
+            learned_sum = None
+
+
+            # TODO: abstact into a method
+            if self.config.n_lpe != 0 and self.config.target_layer_in_lpe == 0:
+                for lpe in self.learned_position_embeddings:
+                    out = lpe(b, t, x, iter_num)
+                    # Accumulate embedding sum
+                    learned_sum = out if learned_sum is None else learned_sum + out
+
+            if self.config.n_lpe != 0 and self.config.target_layer_out_lpe == 0:
+                # Add learned embeddings to x
+                x = x + learned_sum
+
+            x.requires_grad_(True)  # Ensure requires_grad is True
+
+            if self.use_lsv and self.config.apply_lsv_at_layer_idx == 0:
+                x = self.lsv_matrix(x)
+
+            layer = 1
+            mlp_res = None
+            for block in self.transformer.h:
+                # Propagate tokens through layers
+                if self.config.use_gradient_checkpointing:
+                    x = checkpoint.checkpoint(block, x, iter_num, use_reentrant=self.config.recompute_backward_pass)
+                else:
+                    x, mlp_res = block(x, iter_num, mlp_res=mlp_res)
+
+                # Intercept for Learned Steering Vectors
+                if self.use_lsv and layer == self.config.apply_lsv_at_layer_idx:
+                    x = self.lsv_matrix(x)
+                    # x = self.apply_learned_vector_to_layer_output(x)
+
+                # TODO: abstact into a method
+                if self.config.n_lpe != 0 and self.config.target_layer_in_lpe == layer:
+                    for lpe in self.learned_position_embeddings:
+                        out = lpe(b, t, x, iter_num)
+                        # Accumulate embedding sum
+                        learned_sum = out if learned_sum is None else learned_sum + out
+
+                if self.config.n_lpe != 0 and self.config.target_layer_out_lpe == layer:
+                    # Add learned embeddings to x
+                    x = x + learned_sum
+                # END lpe section
+
+                # Intercept for Steering Vectors
+                if self.config.apply_vector_at_layer_idx is not None and layer == self.config.apply_vector_at_layer_idx:
+                    x = self.apply_vector_to_layer_output(x)
+                if self.config.obtain_vector_at_layer_idx is not None and layer == self.config.obtain_vector_at_layer_idx:
+                    print(layer, self.config.obtain_vector_at_layer_idx)
+                    x = self.obtain_vector_from_layer_output(x)
+
+                layer +=1
+
+            x = self.transformer.ln_f(x)
+
+            if self.n_embd_wte:
+                x = F.linear(x, self.transformer.scale_down.weight.t())
+
+            if self.config.final_logit_softcapping is not None:
+                logits = logits / self.config.final_logit_softcapping
+                logits = torch.tanh(logits)
+                logits = logits * self.config.final_logit_softcapping
+
+            if targets is not None:
+                # if we are given some desired targets also calculate the loss
+                logits = self.lm_head(x)
+                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            else:
+                # inference-time mini-optimization: only forward the lm_head on the very last position
+                logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+                loss = None
+
+            return logits, loss
+    # ------------------------------------------------------------------
+    #  LATENT-CHAINING
+    # ------------------------------------------------------------------
+    @torch.no_grad()
+    def embed_tokens(self, idx):
+        """
+        Return the (B,T,E) tensor right *after* token embeddings,
+        factor-scale-up, positional embedding and dropout.  Exactly the
+        same tensor that flows into the first transformer Block inside
+        `forward()`.  Used by train_recurrent.py for the FIRST step.
+        """
+        device = idx.device
+        tok_emb = self.transformer.wte(idx)
+        if self.n_embd_wte:
+            tok_emb = self.transformer.scale_up(tok_emb)
+        if self.config.use_embedding_scale:
+            tok_emb = tok_emb * self.embedding_scale
+        if self.config.use_abs_pos_embeddings:
+            t = idx.size(1)
+            pos = torch.arange(0, t, dtype=torch.long, device=device)
+            tok_emb = tok_emb + self.transformer.wpe(pos)
+        return self.transformer.drop(tok_emb)
+
+    def forward_embedded(self, x_emb, iter_num=None, return_hidden=False):
+        """
+        Complete forward pass **starting from an already-embedded tensor**
+        `x_emb` of shape (B,T,E).  Returns (`logits`, `loss`) identical to
+        `forward`, and – if `return_hidden` – also the final hidden state
+        right before `lm_head`.  No gradients are blocked; loss still
+        back-propagates into `x_emb`.
+        """
+        # ---- copy–paste from the “else:” branch of forward() ---------
+        b, t, _ = x_emb.size()
+        x = x_emb
+
+        # (learned position residuals, steering vectors, etc.)
+        learned_sum = None
+        if self.use_lsv and self.config.apply_lsv_at_layer_idx == 0:
+            x = self.lsv_matrix(x)
+
+        mlp_res = None
+        layer_idx = 1
+        for block in self.transformer.h:
+            x, mlp_res = block(x, iter_num, mlp_res=mlp_res)
+            if self.use_lsv and layer_idx == self.config.apply_lsv_at_layer_idx:
+                x = self.lsv_matrix(x)
+            layer_idx += 1
 
         x = self.transformer.ln_f(x)
-
         if self.n_embd_wte:
             x = F.linear(x, self.transformer.scale_down.weight.t())
 
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
-            loss = None
+        logits = self.lm_head(x)
+        if self.final_logit_softcapping is not None:
+            logits = torch.tanh(logits / self.final_logit_softcapping) \
+                     * self.final_logit_softcapping
 
-        return logits, loss
+        return (logits, x) if return_hidden else (logits, None)
 
     def set_lsv_scaling_factor(self, factor):
         self.lsv_matrix.update_lsv_scaling_factor(factor)

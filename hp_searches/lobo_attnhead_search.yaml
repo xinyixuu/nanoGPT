@@ -1,0 +1,22 @@
+# static
+dataset: "minipile"
+use_rotary_embeddings: True
+use_abs_pos_embeddings: False
+use_flash_lobo: true
+use_flash_lobo_per_head: true
+use_concat_heads: False
+attention_variant: "infinite"
+max_iters: 5000
+eval_interval: 5000
+compile: True
+batch_size: 32
+block_size: 256
+n_cproj: 1
+# changeable things
+n_layer: 1
+n_head: 1
+n_embd: 32
+mlp_size: 32
+n_qk_head_dim: 32
+n_v_head_dim: 32
+flash_lobo_log_const: 0.1

@@ -1,0 +1,95 @@
+# optimizers.yaml
+---
+
+optimizer:
+# From pytorch
+- sgd
+- adam
+- adamw
+- adamax
+- radam
+- nadam
+- adagrad
+- rmsprop
+- rprop
+- sparseadam
+- asgd
+- lbfgs
+# adabelief pytorch
+- adabelief
+# paper-driven implementations
+- orthoadam
+- adams
+- ademamix
+# hybrids
+- lambdiff
+- adamod_diffgrad
+# pytorch optimizer
+- qhadam
+- yogi
+- adamp
+# community
+- lion
+- apollo_adamw
+# torch-optimizer suite
+- adafactor
+- accsgd
+- adabound
+- adamod
+- aggmo
+- diffgrad
+- lamb
+- novograd
+- pid
+- qhm
+- sgdp
+- sgdw
+- shampoo
+- swats
+- var_adaptive_lr
+- sophiag
+- soap
+- lookahead
+
+lookahead_inner_opt:
+  conditions:
+    - ["optimizer", "lookahead"]
+  options: ["adamw", "adamod", "diffgrad", "sophiag"]
+
+# conditional options
+lookahead_k:
+  conditions:
+    - ["optimizer", "lookahead"]
+  options: ["6", "8"]
+
+lookahead_alpha:
+  conditions:
+    - ["optimizer", "lookahead"]
+  options: ["0.3", "0.5"]
+
+# conditional options
+sgd_nesterov:
+  conditions:
+    - ["optimizer", "sgd"]
+  options: [true, false]
+
+# Position encodings
+use_rotary_embeddings: [true]
+use_abs_pos_embeddings: [false]
+
+parameter_groups:
+  - dataset: ["shakespeare_char"]
+    max_iters: [2500]
+    eval_interval: [250]
+    time_remaining_mode: ["eval_cycle"]
+  - dataset: ["cosmopedia_100k"]
+    max_iters: [5000]
+    eval_interval: [5000]
+    time_remaining_mode: ["iteration"]
+
+device: ["cuda"]
+dtype: ["float16"]
+
+# boolean flags
+compile: [true]
+

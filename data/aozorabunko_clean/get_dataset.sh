@@ -7,7 +7,11 @@
 # 4. Set "--skip_empty" to true if you want to skip empty fields, or false if not needed.
 # 5. Set "--no_output_text" to true if you plan to process the intermediate json files in a custom manner.
 
-# Run the Python script with the specified arguments
+# install dependencies
+sudo apt install mecab mecab-ipadic-utf8 libmecab-dev
+pip install yakinori
+pip install unidic-lite
+pip install mecab-python3
 
 # Add url with dataset here:
 url="https://huggingface.co/datasets/globis-university/aozorabunko-clean/resolve/main/aozorabunko-dedupe-clean.jsonl.gz?download=true"
@@ -27,3 +31,8 @@ python3 ./utils/get_json_dataset.py \
   --direct_json_input "${filename%%.gz}" \
   --include_keys "text" \
   --value_prefix ""
+
+python3 extract_jsonl.py
+
+# Optional
+# python3 hiragana_converter.py

@@ -13,8 +13,6 @@ from tokenizers import (
     JsonByteTokenizerWithByteFallback,
 )
 from tqdm import tqdm
-import os
-
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Tokenize text data using different methods.")
@@ -44,9 +42,8 @@ def parse_arguments():
     parser.add_argument("--min_token", type=int, default=0, help="Minimum value for numeric tokens")
     parser.add_argument("--max_token", type=int, default=65535, help="Maximum value for numeric tokens")
     # tokenizer counts
-    parser.add_argument("--track_token_counts", action="store_true", help="Track how often each token appears and store in meta.pkl")
-    # Add argument for json tokens file
     parser.add_argument("--json_tokens_file", type=str, default=None, help="Path to the JSON file containing an array of tokens for json_byte_fallback mode")
+    parser.add_argument("-T", "--track_token_counts", action="store_true", help="Track how often each token appears and store in meta.pkl")
     return parser.parse_args()
 
 
@@ -92,10 +89,6 @@ def main():
         tokenizer = TiktokenTokenizer(args)
     elif args.method == "custom":
         tokenizer = CustomTokenizer(args)
-    elif args.method == "replace":
-        tokenizer = ReplaceTokenizer(args)
-    elif args.method == "lines":
-        tokenizer = LinesTokenizer(args)
     elif args.method == "char":
         tokenizer = CharTokenizer(args, train_data, val_data)
     elif args.method == "custom_char_byte_fallback":

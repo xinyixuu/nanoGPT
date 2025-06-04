@@ -15,6 +15,15 @@ from rich.table import Table
 LOG_DIR = Path("exploration_logs")
 LOG_DIR.mkdir(exist_ok=True)
 METRICS_FILENAME = "best_val_loss_and_iter.txt"
+METRIC_KEYS = [
+    "best_val_loss",
+    "best_val_iter",
+    "num_params",
+    "better_than_chance",
+    "btc_per_param",
+    "peak_gpu_mb",
+    "iter_latency_avg",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,7 +38,7 @@ def parse_args() -> argparse.Namespace:
         help="Path to the configuration file."
     )
     parser.add_argument(
-        '--config_format', choices=['json', 'yaml'], default='json',
+        '--config_format', choices=['json', 'yaml'], default='yaml',
         help="Configuration file format (json or yaml)."
     )
     parser.add_argument(
@@ -143,14 +152,10 @@ def read_metrics(out_dir: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Metrics file not found: {path}")
     line = path.read_text().strip()
-    loss, iteration, params, btc, btc_pp = [p.strip() for p in line.split(',')]
-    return {
-        'best_val_loss': float(loss),
-        'best_val_iter': int(iteration),
-        'num_params': int(params),
-        'better_than_chance': float(btc),
-        'btc_per_param': float(btc_pp),
-    }
+    parts = [p.strip() for p in line.split(',')]
+
+    casts = [float, int, int, float, float, float, float]
+    return {k: typ(v) for k, typ, v in zip(METRIC_KEYS, casts, parts)}
 
 
 def completed_runs(log_file: Path) -> set[str]:
@@ -210,6 +215,9 @@ def run_experiment(
     out_dir_name = f"{timestamp}_{run_name}" if timestamp else run_name
     combo['out_dir'] = os.path.join(args.output_dir, out_dir_name)
 
+    # Prepare tensorboard run name
+    combo['tensorboard_run_name'] = run_name
+
     # Show parameters
     console = Console()
     table = Table("Parameters", show_header=False)
@@ -229,10 +237,7 @@ def run_experiment(
     try:
         metrics = read_metrics(str(combo['out_dir']))
     except Exception:
-        metrics = {k: float('nan') for k in (
-            'best_val_loss','best_val_iter','num_params',
-            'better_than_chance','btc_per_param'
-        )}
+        metrics = {k: float("nan") for k in METRIC_KEYS}
 
     append_log(log_file, run_name, combo, metrics)
 

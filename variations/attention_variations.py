@@ -1,15 +1,18 @@
 # variations/attention_variations.py
 
 import math
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from variations.linear_variations import linear_dictionary
-from quantization.quantize import fake_quantize_act
-from quantization.quant_utils import set_variant, create_activation_buffers
-from variations.softmax_variations import softmax_dictionary
-from variations.position_encoding_variations import RotaryEmbedding, SymmetricalOverlapAngularPositions, FIRE
 
+from quantization.quant_utils import create_activation_buffers, set_variant
+from quantization.quantize import fake_quantize_act
+from variations.linear_variations import linear_dictionary
+from variations.position_encoding_variations import (
+    FIRE, RotaryEmbedding, SymmetricalOverlapAngularPositions)
+from variations.softmax_variations import softmax_dictionary
+from variations.triadic_modulation_variations import mod_fn_dict
 # Mamba related imports
 # if torch.cuda.is_available():
 #     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
@@ -18,6 +21,8 @@ from variations.position_encoding_variations import RotaryEmbedding, Symmetrical
 class CausalSelfAttention(nn.Module):
     def __init__(self, config, fire_pos_enc=None):
         super().__init__()
+
+        self.attn_logit_softcapping = config.attn_logit_softcapping
 
         self.full_quant_iteration = config.full_quant_iteration
         self.eval_interval = config.eval_interval
@@ -109,9 +114,15 @@ class CausalSelfAttention(nn.Module):
 
         # Flash Lobo
         self.use_flash_lobo = config.use_flash_lobo
+        self.use_flash_lobo_per_head = config.use_flash_lobo_per_head
         if self.use_flash_lobo:
             if config.use_flash_obo_const:
                 self.flash_lobo_log_const = config.flash_lobo_log_const # log C (0 -> C = 1)
+            elif config.use_flash_lobo_per_head:
+                # learnable parameter, one scalar per head
+                self.flash_lobo_log_const = nn.Parameter(
+                    torch.full( (self.n_head,), config.flash_lobo_log_const)
+                )
             else:
                 self.flash_lobo_log_const = nn.Parameter(torch.tensor(config.flash_lobo_log_const))  # log C  (0 → C = 1)
 
@@ -171,6 +182,10 @@ class CausalSelfAttention(nn.Module):
                 self.flash = False
                 print("flash attention removed due to Quantization")
                 break
+
+        if self.attn_logit_softcapping:
+            self.flash = False
+            print("flash attention removed due to attn logit softcapping")
 
         if self.disable_flash_attention:
             self.flash = False
@@ -295,7 +310,11 @@ class CausalSelfAttention(nn.Module):
 
                 # 2-b  Bias only that column with log C
                 attn_bias = q.new_zeros(1, self.n_head, 1, k.size(2))
-                attn_bias[..., 0] = self.flash_lobo_log_const    # first column only
+                if self.use_flash_lobo_per_head:
+                    attn_bias[..., 0] = self.flash_lobo_log_const.view(1, self.n_head, 1)
+                else:
+                    attn_bias[..., 0] = self.flash_lobo_log_const    # first column only
+
 
             # Efficient attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(
@@ -332,6 +351,12 @@ class CausalSelfAttention(nn.Module):
                 att = att * self.qk_norm_factor
             else:
                 att = att / head_dim
+
+            # apply logit softcapping after qk but before masking
+            if self.attn_logit_softcapping is not None:
+                att = att / self.attn_logit_softcapping
+                att = torch.tanh(att)
+                att = att * self.attn_logit_softcapping
 
             # apply masks
             if self.window_size is not None:
@@ -615,10 +640,47 @@ class InfiniteHeadAttention(nn.Module):
         super().__init__()
 
         self.n_head = config.n_head
+
+        # group query attention and fallback
+        if (config.n_kv_group is None):
+            self.n_kv_group = config.n_head
+        else:
+            assert config.n_embd % config.n_kv_group == 0
+            self.n_kv_group = config.n_kv_group
+
         self.n_embd = config.n_embd
         self.n_qk_head_dim = config.n_qk_head_dim
         self.n_v_head_dim = config.n_v_head_dim
 
+
+        # Concat Heads
+        self.use_concat_heads = config.use_concat_heads
+        self.n_cproj         = config.n_cproj
+
+        # QK Norm
+        self.use_qk_norm        = config.use_qk_norm
+        self.use_qk_norm_scale  = config.use_qk_norm_scale
+
+        # Flash Lobo
+        self.use_flash_lobo          = config.use_flash_lobo
+        self.use_flash_lobo_per_head = config.use_flash_lobo_per_head
+        self.use_flash_obo_const     = config.use_flash_obo_const
+
+        # Set Flash Lobo_const
+        if self.use_flash_lobo:
+            if self.use_flash_obo_const:
+                # constant of this value for all heads in this layer
+                self.flash_lobo_log_const = config.flash_lobo_log_const # log C (0 -> C = 1)
+            elif self.use_flash_lobo_per_head:
+                # learnable parameter, one scalar per head
+                self.flash_lobo_log_const = nn.Parameter(
+                    torch.full( (self.n_head,), config.flash_lobo_log_const)
+                )
+            else:
+                # single learnable parameter per layer
+                self.flash_lobo_log_const = nn.Parameter(torch.tensor(config.flash_lobo_log_const))  # log C  (0 → C = 1)
+
+        # Set nn.Linear Types for Wk, Wq, Wv and c_proj
         self.linear_variant_q = linear_dictionary[config.linear_variant_attn]
         self.linear_variant_k = linear_dictionary[config.linear_variant_attn]
         self.linear_variant_v = linear_dictionary[config.linear_variant_attn]
@@ -626,9 +688,29 @@ class InfiniteHeadAttention(nn.Module):
 
         # TODO: no reason for qk and v to have same dimension
         self.c_attn_q = self.linear_variant_q(self.n_embd, self.n_head * self.n_qk_head_dim, config, bias=config.bias)
-        self.c_attn_k = self.linear_variant_k(self.n_embd, self.n_head * self.n_qk_head_dim, config, bias=config.bias)
-        self.c_attn_v = self.linear_variant_v(self.n_embd, self.n_head * self.n_v_head_dim, config, bias=config.bias)
-        self.c_proj = self.linear_variant_attn_proj(self.n_v_head_dim, self.n_embd, config, bias=config.bias)
+        self.c_attn_k = self.linear_variant_k(self.n_embd, self.n_kv_group * self.n_qk_head_dim, config, bias=config.bias)
+        self.c_attn_v = self.linear_variant_v(self.n_embd, self.n_kv_group * self.n_v_head_dim, config, bias=config.bias)
+
+        if self.use_concat_heads:
+            print("use_concat_heads")
+            # Usually c_proj dim are (n_head * n_head dim = n_embd), here we have to provide the factorized version
+            self.c_proj = self.linear_variant_attn_proj(
+                self.n_head * self.n_v_head_dim, self.n_embd, config, bias=config.bias
+            )
+        elif self.n_cproj==1:
+            print("use n_cproj 1", self.n_v_head_dim, self.n_embd)
+            self.c_proj = self.linear_variant_attn_proj(self.n_v_head_dim, self.n_embd, config, bias=config.bias)
+        else:
+            print("use_cproj_list")
+            self.c_proj_list = nn.ModuleList(
+                [
+                    self.linear_variant_attn_proj(self.n_v_head_dim, self.n_embd, config, bias=config.bias)
+                    for _ in range(self.n_cproj)
+                ]
+            )
+
+        # option to turn off flash attention
+        self.disable_flash_attention = config.disable_flash_attention
 
         # Regularization
         self.attn_dropout = nn.Dropout(config.dropout)
@@ -637,11 +719,26 @@ class InfiniteHeadAttention(nn.Module):
 
         # Embedding
         self.n_embd = config.n_embd
-        self.dropout = config.dropout
 
         # Rotary Positional Embeddings
         self.rotary_emb_q = None
         self.rotary_emb_k = None
+
+        if config.use_rotary_embeddings:
+            # Note: "size" here is the size of the qk head dimension
+            if config.rope_variant == "soap":
+                self.sym_rot_num_angles = config.sym_rot_num_angles
+                self.rotary_emb_q = SymmetricalOverlapAngularPositions(config, size=self.n_qk_head_dim, num_angles=self.sym_rot_num_angles)
+                self.rotary_emb_k = SymmetricalOverlapAngularPositions(config, size=self.n_qk_head_dim, num_angles=self.sym_rot_num_angles)
+            elif config.rope_variant == "rope":
+                self.rotary_emb_q = RotaryEmbedding(config, size=self.n_qk_head_dim)
+                self.rotary_emb_k = RotaryEmbedding(config, size=self.n_qk_head_dim)
+
+        # qk norm factor
+        if self.use_qk_norm_scale:
+            L = config.block_size
+            g0 = math.log2(L*L - L)
+            self.qk_norm_factor = nn.Parameter(torch.tensor(g0))
 
         # Softmax Variant Selection
         self.softmax_variant_attn = config.softmax_variant_attn
@@ -659,120 +756,353 @@ class InfiniteHeadAttention(nn.Module):
         v = self.c_attn_v(x)
 
         q = q.view(B, T, self.n_head, self.n_qk_head_dim).transpose(1, 2) # (B, n_h, T, hs)
-        k = k.view(B, T, self.n_head, self.n_qk_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
-        v = v.view(B, T, self.n_head, self.n_v_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
+        k = k.view(B, T, self.n_kv_group, self.n_qk_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
+        v = v.view(B, T, self.n_kv_group, self.n_v_head_dim).transpose(1, 2) # (B, n_kv, T, hs)
+
+        # Apply Rotary Position Encodings
+        if (self.rotary_emb_q is not None) and (self.rotary_emb_k is not None):
+            q = self.rotary_emb_q(q)
+            k = self.rotary_emb_k(k)
+
+        # Apply QK Norm
+        if self.use_qk_norm:
+            q = q / (q.norm(dim=-1, keepdim=True) + 1e-6)
+            k = k / (k.norm(dim=-1, keepdim=True) + 1e-6)
 
         y = None
         att = None
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        # manual implementation of attention
-        att = (q @ k.transpose(-2, -1)) * (1.0 / torch.sqrt(torch.tensor([k.size(-1)], dtype=q.dtype, device=q.device)))
+        if not self.disable_flash_attention:
+            # Flash QK Norm
+            if self.use_qk_norm_scale:
+                # pre-scale Q so that built-in √dₕ division becomes our g scaling
+                sqrt_head_dim = math.sqrt(k.size(-1))
+                qk_scaling_factor = self.qk_norm_factor * sqrt_head_dim
+                q = q * qk_scaling_factor
 
-        # apply lower triangle attention mask
-        att = att.masked_fill(self.bias[:,:,:T,:T].to(x.device) == 0, float('-inf'))
+            # GQA
+            if self.n_kv_group != self.n_head:
+                repeat = self.n_head // self.n_kv_group
 
-        # softmax variation
-        if self.softmax_variant_attn != 'softmax':
-            att = self.softmax_layer_attn(att)
+                # (B, n_head, T, d) -> (B, T, n_head, d) -> contiguous
+                k = k.transpose(1, 2).contiguous()
+                v = v.transpose(1, 2).contiguous()
+
+                # view with n_kv_group then repeat-interleave to n_head
+                k = (
+                    k.view(B, T, self.n_kv_group, self.n_qk_head_dim)
+                    .repeat_interleave(repeat, dim=2)
+                    .transpose(1, 2)
+                )  # (B, n_head, T, d)
+                v = (
+                    v.view(B, T, self.n_kv_group, self.n_v_head_dim)
+                    .repeat_interleave(repeat, dim=2)
+                    .transpose(1, 2)
+                )  # (B, n_head, T, d)
+
+            # Flash Lobo
+            attn_bias = None
+            if self.use_flash_lobo:
+                # 2-a  Make dummy key/value column of zeros
+                dummy_k = q.new_zeros(B, k.size(1), 1, q.size(-1))
+                dummy_v = q.new_zeros(B, v.size(1), 1, v.size(-1))
+
+                k = torch.cat([dummy_k, k], dim=2)   # prepend → causal mask still valid
+                v = torch.cat([dummy_v, v], dim=2)
+
+                # 2-b  Bias only that column with log C
+                attn_bias = q.new_zeros(1, self.n_head, 1, k.size(2))
+                if self.use_flash_lobo_per_head:
+                    attn_bias[..., 0] = self.flash_lobo_log_const.view(1, self.n_head, 1)
+                else:
+                    attn_bias[..., 0] = self.flash_lobo_log_const    # first column only
+
+
+            # Efficient attention using Flash Attention CUDA kernels
+            y = torch.nn.functional.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_bias,
+                dropout_p=self.dropout if self.training else 0,
+                is_causal=True,
+            )
+
         else:
-            att = F.softmax(att, dim=-1)
+            # Manual implementation of attention
 
-        att = self.attn_dropout(att)
+            # ----- GQA support (repeat k & v when n_kv_group < n_head) -------
+            if self.n_kv_group != self.n_head:
+                repeat = self.n_head // self.n_kv_group
+                k_adjusted = k.repeat_interleave(repeat, dim=1)
+                v_adjusted = v.repeat_interleave(repeat, dim=1)
+            else:
+                k_adjusted = k
+                v_adjusted = v
 
-        y = (att @ v).sum(dim=1)  # Sum over all heads instead of concatenation
+            att = (q @ k_adjusted.transpose(-2, -1))
+
+            if self.use_qk_norm_scale:
+                # utilize learned qk_norm_scaling factor
+                att = att * self.qk_norm_factor
+            else:
+                sqrt_head_dim = math.sqrt(k.size(-1))
+                # divide by sqrt of head dimension if not
+                att = att / sqrt_head_dim
+
+            # apply lower triangle attention mask
+            att = att.masked_fill(self.bias[:,:,:T,:T].to(x.device) == 0, float('-inf'))
+
+            # softmax variation
+            if self.softmax_variant_attn != 'softmax':
+                att = self.softmax_layer_attn(att)
+            else:
+                att = F.softmax(att, dim=-1)
+
+            att = self.attn_dropout(att)
+
+            y = att @ v_adjusted # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+
+        # Concat Heads or Inf Concat Heads
+        if self.use_concat_heads:
+            # (B, nh, T, v_dim) → (B, T, nh*v_dim); avoid extra .contiguous()
+            # flatten heads → (B, T, n_head * n_v_head_dim)
+            y = y.transpose(1, 2).contiguous().view(B, T, self.n_head * self.n_v_head_dim)
+            y = self.c_proj(y)
+        elif self.n_cproj == 1:
+            # Sum heads first: (B, nh, T, v_dim) → (B, T, v_dim)
+            y = y.sum(dim=1)
+            y = self.c_proj(y)
+        else:
+            # Sum heads first: (B, nh, T, v_dim) → (B, T, v_dim)
+            y_sum = y.sum(dim=1)
+
+            # Parallel small projections then fuse; avoids Python-level loop
+            y = torch.stack([proj(y_sum) for proj in self.c_proj_list ], dim=0).sum(dim=0)
 
         # output projection
-        y = self.resid_dropout(self.c_proj(y))
+        y = self.resid_dropout(y)
 
         return y
 
+##############################################################################
+#  Multi-head Latent Attention (MLA) – DeepSeek-V2 implementation
+#  - low-rank joint compression of K & V (latent_kv_dim)
+#  - optional low-rank compression of Q (we keep full Q for simplicity)
+#  - decoupled RoPE branch (latent_rope_dim) shared across heads
+#  - dramatic KV-cache reduction while retaining MHA quality
+##############################################################################
 
-class InfiniteQueryAttention(nn.Module):
-    """Instead of concatenating heads, utilizing higher capacity, we assume the
-    vector features are independent of each other, and simply add the values.
 
-    This removes the constraint of having number_of_heads % embed_dim = 0, resulting in:
-      * a) removes the limit on the number of heads (before increasing heads too much leads to reduced emb_dim per head, and head utility)
-      * b) from a), this means we can keep adding heads until the model saturates the vector.
-      * c) while all heads need to be the same size, we have new param exploration, number of heads and the dimension per head.
-      * d) we can potentially even try removing the c_proj, if the embedding dimension chosen is the same as that of the model
-      * e) since the MLP/MoE has the majority of parameters, this may benefit
-             parameter efficiency by allowing more relations to be encoded into the
-             residual per attention layer.
-      * f) for smaller models, we can increase the embedding dim per head, to
-             match that of high quality 1024 and higher embedding heads, which has
-             been noted to be a bottleneck when digesting large trees of information
-             in a single layer e.g. multidigit addition.
+class MultiHeadLatentAttention(nn.Module):
+    """
+    Multi-head Latent Attention (MLA) – see §2.1 of the DeepSeek-V2 paper.
+    Only the architectural pieces needed for training/inference are included;
+    fast-KV-cache tricks (parameter re-folding at deployment) can be added
+    later without changing the forward pass.
+    """
+
+    def __init__(self, config, fire_pos_enc: nn.Module | None = None):
+        super().__init__()
+
+        # ── dimensions ──────────────────────────────────────────────────────
+        self.n_head         = config.n_head
+        self.d_head         = config.n_embd // config.n_head
+        self.d_latent_kv    = getattr(config, "latent_kv_dim", 4 * self.d_head)
+        self.d_rope         = getattr(config, "latent_rope_dim", self.d_head // 2)
+        self.dropout_p      = config.dropout
+
+        # ── projections ─────────────────────────────────────────────────────
+        # Q : normal per-head projection  (B,T,E) → (B,T,H·d_h)
+        self.q_proj  = nn.Linear(config.n_embd, self.n_head * self.d_head, bias=config.bias)
+
+        # RoPE query/key branches – a *small* extra dimension that carries
+        # positional signal (decoupled strategy in the paper)
+        self.q_rope_proj = nn.Linear(config.n_embd, self.n_head * self.d_rope, bias=config.bias)
+        self.k_rope_proj = nn.Linear(config.n_embd, self.d_rope,              bias=config.bias)
+
+        # Low-rank joint compression:  down-project to latent and up-project
+        self.kv_down_proj = nn.Linear(config.n_embd, self.d_latent_kv, bias=False)
+        self.k_up_proj    = nn.Linear(self.d_latent_kv, self.n_head * self.d_head, bias=False)
+        self.v_up_proj    = nn.Linear(self.d_latent_kv, self.n_head * self.d_head, bias=False)
+
+        # Output
+        self.out_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+
+        # Rotary embeddings only on the RoPE branches (tiny, shared)
+        self.rope_q = RotaryEmbedding(config, size=self.d_rope)
+        self.rope_k = RotaryEmbedding(config, size=self.d_rope)
+
+        self.attn_dropout = nn.Dropout(self.dropout_p)
+        self.resid_dropout = nn.Dropout(self.dropout_p)
+
+
+        # ───────────  Quiet-Attention style “+C” denominator  ────────────
+        # Learned *per-head* constant C = exp(lobo_log)  (log-space param)
+        self.use_lobo = getattr(config, "use_mla_lobo", False)
+        if self.use_lobo:
+            init = getattr(config, "mla_lobo_init", 0.0)
+            self.lobo_log = nn.Parameter(torch.full((self.n_head,), init))
+        else:
+            self.register_parameter("lobo_log", None)
+
+        # Pre-build causal mask for the worst-case block_size
+        self.register_buffer(
+            "causal_mask",
+            torch.tril(torch.ones(config.block_size, config.block_size)).view(1, 1, config.block_size, config.block_size),
+            persistent=False,
+        )
+
+    # --------------------------------------------------------------------- #
+    def _shape(self, x: torch.Tensor, heads: int, head_dim: int):
+        """(B,T,E) → (B,H,T,D)"""
+        B, T, _ = x.shape
+        return x.view(B, T, heads, head_dim).transpose(1, 2)
+
+    # --------------------------------------------------------------------- #
+    def forward(self, x: torch.Tensor, iter_num: int | None = None):
+        """
+        Args:
+            x: (B, T, E)
+        Returns:
+            y: (B, T, E)
+        """
+        B, T, _ = x.shape
+
+        # ── fast projections ───────────────────────────────────────────────
+        q_c = self._shape(self.q_proj(x), self.n_head, self.d_head)          # (B,H,T,d_h)
+        q_r = self._shape(self.q_rope_proj(x), self.n_head, self.d_rope)     # (B,H,T,d_r)
+
+        # latent-KV path
+        latent = self.kv_down_proj(x)                                        # (B,T,d_latent)
+        k_c = self._shape(self.k_up_proj(latent), self.n_head, self.d_head)  # (B,H,T,d_h)
+        v   = self._shape(self.v_up_proj(latent), self.n_head, self.d_head)  # (B,H,T,d_h)
+
+        # shared RoPE key (broadcast to every head)
+        k_r_shared = self.k_rope_proj(x)                                     # (B,T,d_r)
+        k_r_shared = self.rope_k(k_r_shared)                                 # apply RoPE
+        k_r = k_r_shared.unsqueeze(1).expand(-1, self.n_head, -1, -1)        # (B,H,T,d_r)
+
+        # RoPE for queries
+        q_r = self.rope_q(q_r)
+
+        # concat latent and RoPE parts
+        q = torch.cat([q_c, q_r], dim=-1)                                    # (B,H,T,d_h+d_r)
+        k = torch.cat([k_c, k_r], dim=-1)
+
+        # ── scaled dot-product attention (no Flash for clarity) ────────────
+        scores = (q @ k.transpose(-2, -1)) / math.sqrt(q.size(-1))           # (B,H,T,T)
+        causal = self.causal_mask[..., :T, :T]
+        scores = scores.masked_fill(causal == 0, float("-inf"))
+
+        if self.use_lobo:
+            # ---- Quiet-Attention softmax with learned “+C” ------------------------
+            scores_max  = scores.detach().max(dim=-1, keepdim=True).values       # stability
+            exp_scores  = torch.exp(scores - scores_max)                          # (B,H,T,T)
+
+            denom = exp_scores.sum(-1, keepdim=True)                              # (B,H,T,1)
+
+            C = torch.exp(self.lobo_log).view(1, -1, 1, 1)                   # (1,H,1,1)
+            attn = exp_scores / (denom + C)
+        else:
+            attn = torch.softmax(scores, dim=-1)
+
+        attn = self.attn_dropout(attn)
+
+        y = attn @ v                                                        # (B,H,T,d_h)
+        y = y.transpose(1, 2).contiguous().view(B, T, -1)                   # (B,T,E)
+        y = self.resid_dropout(self.out_proj(y))
+        return y
+
+###############################################################################
+#  Co4Attention  —  Triadic Modulation + Latent-to-Token Attention
+#  --------------------------------------------------------------
+#  Complexity  O(Lq · N)   (Lq = n_latent  ≪  seq_len N)
+#  The class deliberately avoids the heavy quantization / Flash / GQA plumbing
+#  present in CausalSelfAttention; if those features are needed, extend here.
+###############################################################################
+
+class Co4Attention(nn.Module):
+    """
+    Implementation of the Co4 mechanism (Adeel 2025 §4).
+    *   L learnable latent-query tokens
+    *   triadic loops between (Q, K, V) with MOD transfer-function
+    *   final latent-to-token dot-product attention
     """
     def __init__(self, config, fire_pos_enc=None):
         super().__init__()
 
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-        self.n_qk_head_dim = config.n_qk_head_dim
-        self.n_v_head_dim = config.n_v_head_dim
-        self.n_kv_group = config.n_kv_group or config.n_head
-        assert self.n_head % self.n_kv_group == 0
+        assert config.n_embd % config.n_head == 0, "n_embd must be divisible by n_head"
 
-        self.linear_variant_q = linear_dictionary[config.linear_variant_attn]
-        self.linear_variant_k = linear_dictionary[config.linear_variant_attn]
-        self.linear_variant_v = linear_dictionary[config.linear_variant_attn]
-        self.linear_variant_attn_proj = linear_dictionary[config.linear_variant_attn]
+        self.n_embd   = config.n_embd
+        self.n_head   = config.n_head
+        self.head_dim = config.n_embd // config.n_head
 
-        self.c_attn_q = self.linear_variant_q(self.n_embd, self.n_head * self.n_qk_head_dim, config, bias=config.bias)
-        self.c_attn_k = self.linear_variant_k(self.n_embd, self.n_kv_group * self.n_qk_head_dim, config, bias=config.bias)
-        self.c_attn_v = self.linear_variant_v(self.n_embd, self.n_kv_group * self.n_v_head_dim, config, bias=config.bias)
-        self.c_proj = self.linear_variant_attn_proj(self.n_v_head_dim, self.n_embd, config, bias=config.bias)
+        self.n_latent      = getattr(config, "n_latent", 4)
+        self.triadic_loops = getattr(config, "triadic_loops", 1)
+        mod_name           = getattr(config, "mod_fn", "cooperation")
+        self.mod_fn        = mod_fn_dict[mod_name]
+        print(mod_name)
 
-        self.attn_dropout = nn.Dropout(config.dropout)
+        # Projections
+        self.k_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+        self.v_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+        self.q_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+
+        # Learnable latent queries  (Lq, E)
+        self.latent = nn.Parameter(torch.randn(self.n_latent, config.n_embd) / math.sqrt(config.n_embd))
+
+        self.out_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
         self.resid_dropout = nn.Dropout(config.dropout)
-        self.dropout = config.dropout
 
-        self.rotary_emb_q = RotaryEmbedding(config, size=self.n_qk_head_dim) if config.use_rotary_embeddings else None
-        self.rotary_emb_k = RotaryEmbedding(config, size=self.n_qk_head_dim) if config.use_rotary_embeddings else None
+    # ─────────────────────────── helpers ────────────────────────────────
+    def _split_heads(self, x):
+        # (B,S,E) → (B,H,S,Hd)
+        B, S, _ = x.shape
+        return x.view(B, S, self.n_head, self.head_dim).transpose(1, 2)
 
-        self.softmax_variant_attn = config.softmax_variant_attn
-        if self.softmax_variant_attn != 'softmax':
-            self.softmax_layer_attn = softmax_dictionary[config.softmax_variant_attn](config)
+    def _merge_heads(self, x):
+        # (B,H,S,Hd) → (B,S,E)
+        B, _, S, _ = x.shape
+        return x.transpose(1, 2).contiguous().view(B, S, self.n_embd)
 
-        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                             .view(1, 1, config.block_size, config.block_size))
+    # ─────────────────────────── forward ────────────────────────────────
+    def forward(self, x, iter_num=None):
+        """
+        x : (B, N, E)
+        """
+        B, N, _ = x.shape
 
-    def forward(self, x, iter_num):
-        B, T, C = x.size()
+        k = self.k_proj(x)                         # (B, N, E)
+        v = self.v_proj(x)                         # (B, N, E)
+        q = self.latent.unsqueeze(0).expand(B, -1, -1)  # (B, Lq, E)
 
-        q = self.c_attn_q(x).view(B, T, self.n_head, self.n_qk_head_dim).transpose(1, 2)
-        k = self.c_attn_k(x).view(B, T, self.n_kv_group, self.n_qk_head_dim).transpose(1, 2)
-        v = self.c_attn_v(x).view(B, T, self.n_kv_group, self.n_v_head_dim).transpose(1, 2)
+        # --- triadic modulation --------------------------------------------------
+        for _ in range(self.triadic_loops):
+            c_q = 0.5 * (k.mean(1, keepdim=True) + v.mean(1, keepdim=True))  # (B,1,E)
+            q   = self.mod_fn(q, c_q)                                        # (B,Lq,E)
 
-        if self.rotary_emb_q and self.rotary_emb_k:
-            q = self.rotary_emb_q(q)
-            k = self.rotary_emb_k(k)
+            c_k = 0.5 * (q.mean(1, keepdim=True).repeat(1, N, 1) + v)
+            k   = self.mod_fn(k, c_k)                                        # (B,N,E)
 
-        if self.n_kv_group == 1:
-            k = k.expand(-1, self.n_head, -1, -1)
-            v = v.expand(-1, self.n_head, -1, -1)
-        elif self.n_kv_group != self.n_head:
-            repeat_factor = self.n_head // self.n_kv_group
-            k = k.repeat_interleave(repeat_factor, dim=1)
-            v = v.repeat_interleave(repeat_factor, dim=1)
+            c_v = 0.5 * (q.mean(1, keepdim=True).repeat(1, N, 1) + k)
+            v   = self.mod_fn(v, c_v)                                        # (B,N,E)
 
-        att = (q @ k.transpose(-2, -1)) * (1.0 / torch.sqrt(torch.tensor([self.n_qk_head_dim], dtype=q.dtype, device=q.device)))
-        att = att.masked_fill(self.bias[:, :, :T, :T].to(x.device) == 0, float('-inf'))
+        q = self.q_proj(q)                                                   # (B,Lq,E)
 
-        # softmax variation
-        if self.softmax_variant_attn != 'softmax':
-            att = self.softmax_layer_attn(att)
-        else:
-            att = F.softmax(att, dim=-1)
+        # --- latent-to-token attention ------------------------------------------
+        qh = self._split_heads(q)     # (B,H,Lq,Hd)
+        kh = self._split_heads(k)     # (B,H,N ,Hd)
+        vh = self._split_heads(v)     # (B,H,N ,Hd)
 
-        att = self.attn_dropout(att)
+        att = (qh @ kh.transpose(-2, -1)) / math.sqrt(self.head_dim)         # (B,H,Lq,N)
+        att = att.softmax(dim=-1)
 
-        y = (att @ v).sum(dim=1)  # Sum over all heads instead of concatenation
+        yh  = att @ vh                                                     # (B,H,Lq,Hd)
+        yh  = yh.mean(2, keepdim=True)                                      # (B,H,1,Hd)
+        y   = self._merge_heads(yh).repeat(1, N, 1)                          # (B,N,E)
 
-        # output projection
-        y = self.resid_dropout(self.c_proj(y))
-
+        y = self.resid_dropout(self.out_proj(y))
         return y
 
 attention_dictionary = {
@@ -781,5 +1111,6 @@ attention_dictionary = {
     # "ssm": MambaBlock,
     "identity": AttnIdentity,
     "infinite": InfiniteHeadAttention,
-    "iqa": InfiniteQueryAttention,
+    "mla": MultiHeadLatentAttention,
+    "co4": Co4Attention,
 }
