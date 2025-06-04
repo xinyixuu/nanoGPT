@@ -1,0 +1,35 @@
+# mlp_bias_comparison.yaml
+---
+# parameter_groups: define sets of overrides to apply on top of base params
+parameter_groups:
+  # Standard MLP - baseline sizes
+  - mlp_variant: ["mlp"]
+    mlp_size: [768]
+    mlp_up_bias: [true, false]
+    mlp_down_bias: [true, false]
+
+  # Swiglu - ~2/3 of MLP size for same param count
+  - mlp_variant: ["swiglu"]
+    mlp_size: [512]
+    mlp_up_bias: [true, false]
+    mlp_down_bias: [true, false]
+
+  # DualPath - ~2/3 of MLP size for same param count
+  - mlp_variant: ["dual_path"]
+    mlp_size: [512]
+    mlp_up_bias: [true, false]
+    mlp_down_bias: [true, false]
+
+# base hyperparameters (defaults)
+block_size: [512]
+n_layer: [12]
+n_head: [12]
+n_embd: [768]
+bias: [false]
+
+# device and compilation
+device: ["cuda"]
+compile: [true]
+
+# dataset configuration
+dataset: ["minipile"] 
