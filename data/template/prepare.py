@@ -10,6 +10,7 @@ from tokenizers import (
     CustomTokenizer,
     CharTokenizer,
     CustomCharTokenizerWithByteFallback,
+    JsonByteTokenizerWithByteFallback,
 )
 from tqdm import tqdm
 import os
@@ -18,7 +19,7 @@ import os
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Tokenize text data using different methods.")
     parser.add_argument("--tokens_file", type=str, default=None, help="Path to the file containing newline-separated tokens for tokenization")
-    parser.add_argument("--method", type=str, choices=["sentencepiece", "tiktoken", "char", "custom", "custom_char_byte_fallback", "numeric_range"], default="tiktoken", help="Tokenization method")
+    parser.add_argument("--method", type=str, choices=["sentencepiece", "tiktoken", "char", "custom", "custom_char_byte_fallback", "numeric_range", "json_byte_fallback"], default="tiktoken", help="Tokenization method")
     # SentencePiece only arguments
     parser.add_argument("--vocab_size", type=int, default=500, help="Vocabulary size for SentencePiece model")
     parser.add_argument("--spm_model_file", type=str, default=None, help="Path to the pre-trained SentencePiece model file")
@@ -44,6 +45,8 @@ def parse_arguments():
     parser.add_argument("--max_token", type=int, default=65535, help="Maximum value for numeric tokens")
     # tokenizer counts
     parser.add_argument("--track_token_counts", action="store_true", help="Track how often each token appears and store in meta.pkl")
+    # Add argument for json tokens file
+    parser.add_argument("--json_tokens_file", type=str, default=None, help="Path to the JSON file containing an array of tokens for json_byte_fallback mode")
     return parser.parse_args()
 
 
@@ -97,6 +100,8 @@ def main():
         tokenizer = CharTokenizer(args, train_data, val_data)
     elif args.method == "custom_char_byte_fallback":
         tokenizer = CustomCharTokenizerWithByteFallback(args)
+    elif args.method == "json_byte_fallback":
+        tokenizer = JsonByteTokenizerWithByteFallback(args)
     else:
         raise ValueError(f"Unknown tokenization method: {args.method}")
 
