@@ -4,6 +4,7 @@ import unittest
 import os
 import sys
 import pickle
+import json
 from tokenizers import (
     NumericRangeTokenizer,
     SentencePieceTokenizer,
@@ -11,6 +12,7 @@ from tokenizers import (
     CustomTokenizer,
     CharTokenizer,
     CustomCharTokenizerWithByteFallback,
+    JsonByteTokenizerWithByteFallback,
 )
 from argparse import Namespace
 from rich.console import Console
@@ -248,6 +250,43 @@ class TestTokenizers(unittest.TestCase):
         if os.path.exists(args.custom_chars_file):
             os.remove(args.custom_chars_file)
 
+    def test_json_byte_tokenizer_with_byte_fallback(self):
+        # Create a temporary JSON file with test tokens
+        json_tokens_file = "test_tokens.json"
+        test_tokens = ["Hello", "world", "This", "is", "a", "test"]
+        with open(json_tokens_file, 'w', encoding='utf-8') as f:
+            json.dump(test_tokens, f)
+
+        args = Namespace(json_tokens_file=json_tokens_file, track_token_counts=True)
+        test_string = "Hello world😊😊 This is a test"
+
+        tokenizer = JsonByteTokenizerWithByteFallback(args)
+        ids = tokenizer.tokenize(test_string)
+        detokenized = tokenizer.detokenize(ids)
+
+        console.print("[input]Input:[/input]")
+        console.print(test_string, style="input")
+        console.print("[output]Detokenized Output:[/output]")
+        console.print(detokenized, style="output")
+
+        # Get token counts from meta.pkl
+        with open("meta.pkl", "rb") as f:
+            meta = pickle.load(f)
+        token_counts = meta.get("token_counts", {})
+        itos = meta.get("itos", {})
+
+        # Print histogram
+        self._print_token_count_histogram(token_counts, itos)
+
+        self.assertEqual(test_string, detokenized)
+        self.assertEqual(meta["tokenizer"], "json_byte_fallback")
+        self.assertEqual(meta["custom_token_count"], len(test_tokens))
+
+        # Clean up
+        if os.path.exists(json_tokens_file):
+            os.remove(json_tokens_file)
+
+        console.print("JsonByteTokenizerWithByteFallback test passed.")
 
     # --------------------------------------------------------------------------
     # Tests for Token Counts (with histogram printing)
