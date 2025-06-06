@@ -330,11 +330,9 @@ class GPT(nn.Module):
                     std=self.config.embedding_std_init
                 )
             else:
-                if self.config.init_variant == None:
-                    print("No init_variant set, using hypercube")
-                    self.config.init_variant = "hypercube"
-
                 init_fn = init_dictionary[self.config.init_variant]
+                print(self.config.init_variant)
+
                 # Generate custom init matrix
                 weight_data = init_fn(self.config)
 
