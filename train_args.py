@@ -16,6 +16,16 @@ def parse_args():
     training_group = parser.add_argument_group('training_group')
     logging_group = parser.add_argument_group('logging_group')
 
+    # MLP Bias Configuration
+    model_group.add_argument('--mlp_up_bias', type=bool, default=None, action=argparse.BooleanOptionalAction, help='Whether to use bias in MLP up projections. If None, uses global bias setting.')
+    model_group.add_argument('--mlp_down_bias', type=bool, default=None, action=argparse.BooleanOptionalAction, help='Whether to use bias in MLP down projections. If None, uses global bias setting.')
+
+    # DualPath MLP Configuration
+    model_group.add_argument('--dual_path_x_offset', type=float, default=0.01, help='X-axis offset for DualPath activation functions')
+    model_group.add_argument('--dual_path_y_offset', type=float, default=0.0, help='Y-axis offset for DualPath activation functions')
+    model_group.add_argument('--learn_dual_path_x_offset', type=bool, default=False, help='Whether to learn the x-axis offset in DualPath')
+    model_group.add_argument('--learn_dual_path_y_offset', type=bool, default=False, help='Whether to learn the y-axis offset in DualPath')
+
     # Export Args
     ## Factored WTE
     model_group.add_argument('--import_wte_npy', default=None, type=str, help='Path to import the embedding table as a .npy file')
@@ -174,7 +184,7 @@ def parse_args():
     training_group.add_argument("--ademamix_beta2", type=float, default=0.999, help="β2 hyper-parameter for the Ademamix optimizer.")
     training_group.add_argument("--ademamix_beta3", type=float, default=0.9999, help="β3 hyper-parameter for the Ademamix optimizer.")
     training_group.add_argument("--ademamix_alpha", type=float, default=8, help="α (scaling factor) for the Ademamix optimizer.")
-    training_group.add_argument("--ademamix_warmup", type=int, default=2000, help="Number of warm-up steps for Ademamix’s learning-rate schedule.")
+    training_group.add_argument("--ademamix_warmup", type=int, default=2000, help="Number of warm-up steps for Ademamix's learning-rate schedule.")
     # --------  NADAM --------------------------------------------------
     training_group.add_argument("--nadam_betas", type=float, nargs=2, default=[0.9, 0.999], help="Betas for Nadam optimizer.")
     training_group.add_argument("--nadam_eps", type=float, default=1e-8, help="Epsilon for Nadam optimizer.")

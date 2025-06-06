@@ -1,0 +1,24 @@
+# dual_path_sweep.yaml
+---
+# parameter_groups: define sets of overrides to apply on top of base params
+parameter_groups:
+  - mlp_variant: ["dual_path"]
+    dual_path_x_offset: [0.01, 0.1, 1.0]
+    dual_path_y_offset: [-0.1, 0.0, 0.1]
+    learn_dual_path_x_offset: [true, false]
+    learn_dual_path_y_offset: [true, false]
+
+# MLP specific parameters
+activation_variant: ["relu", "gelu", "softplus"]
+
+# training configuration
+dataset: "minipile"
+max_iters: 10000
+lr_decay_iters: 10000
+warmup_iters: 1000
+decay_lr: [true]
+eval_interval: 10000
+eta_variant: ["iteration"]
+
+# compilation
+compile: [true]
