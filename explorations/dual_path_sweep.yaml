@@ -18,4 +18,4 @@ eval_interval: [10000]
 eta_variant: ["iteration"]
 
 # compilation
-compile: [true] 
+compile: [true]
