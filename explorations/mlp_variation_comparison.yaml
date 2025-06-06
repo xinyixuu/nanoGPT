@@ -14,27 +14,15 @@ parameter_groups:
   - mlp_variant: ["dual_path"]
     mlp_size: [512, 683, 1024]
 
-# base hyperparameters
-block_size: [256]
-n_layer: [6]
-n_head: [6]
-n_embd: [384]
-
-# training configuration
-batch_size: [64]
-gradient_accumulation_steps: [1]
-eval_interval: [10000]
-eta_variant: ["iteration"]
-
 # compilation
 compile: [true]
 
 # training configuration
-learning_rate: [6e-4]
-min_lr: [6e-5]
 max_iters: [10000]
 lr_decay_iters: [10000]
-warmup_iters: [100]
+eval_interval: [10000]
+eta_variant: ["iteration"]
+warmup_iters: [1000]
 decay_lr: [true]
 
 # dataset configuration
