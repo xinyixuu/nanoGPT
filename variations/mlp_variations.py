@@ -15,8 +15,6 @@ class OriginalMLP(nn.Module):
         self.full_quant_iteration = config.full_quant_iteration
         self.eval_interval = config.eval_interval
 
-        # Select "mlp variant"
-        self.mlp_variant = config.mlp_variant
         self.use_mlp_res = config.mlp_res
 
         self.start_quant_level = config.start_quant_level
@@ -85,56 +83,28 @@ class OriginalMLP(nn.Module):
             quant_method = self.quantization_mlp_dict["activations_quant_method"]
             x = fake_quantize_act(self, "mlp_act_input", x, num_bits, quant_method, iter_num)
 
-        if self.mlp_variant == "mlp":
-            x = self.c_fc(x)
+        x = self.c_fc(x)
 
-            if self.quantization_mlp_dict["quantize_mlp_act_activation_input"]:
-                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"]
-                quant_method = self.quantization_mlp_dict["activations_quant_method"]
-                x = fake_quantize_act(self, "mlp_act_activation_input", x, num_bits, quant_method, iter_num)
+        if self.quantization_mlp_dict["quantize_mlp_act_activation_input"]:
+            num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"]
+            quant_method = self.quantization_mlp_dict["activations_quant_method"]
+            x = fake_quantize_act(self, "mlp_act_activation_input", x, num_bits, quant_method, iter_num)
 
-            x = self.activation_variant(x)
+        x = self.activation_variant(x)
 
-            if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
-                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
-                quant_method = self.quantization_mlp_dict["activations_quant_method"]
-                x = fake_quantize_act(self, "mlp_act_activation_output", x, num_bits, quant_method, iter_num)
+        if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
+            num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
+            quant_method = self.quantization_mlp_dict["activations_quant_method"]
+            x = fake_quantize_act(self, "mlp_act_activation_output", x, num_bits, quant_method, iter_num)
 
-            # MLP Residual
-            if self.use_mlp_res:
-                if mlp_res is None:
-                    mlp_res = torch.zeros_like(x)
-                mlp_res = x + mlp_res
-                x = mlp_res
+        # MLP Residual
+        if self.use_mlp_res:
+            if mlp_res is None:
+                mlp_res = torch.zeros_like(x)
+            mlp_res = x + mlp_res
+            x = mlp_res
 
-            x = self.c_proj(x)
-
-        elif self.mlp_variant == "swiglu":
-            x_in1 = self.c_fc(x)
-
-            if self.quantization_mlp_dict["quantize_mlp_act_activation_input"]:
-                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"]
-                quant_method = self.quantization_mlp_dict["activations_quant_method"]
-                x_in1 = fake_quantize_act(self, "mlp_act_activation_input", x_in1, num_bits, quant_method, iter_num)
-
-            x_in1 = self.activation_variant(x_in1)
-
-            if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
-                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
-                quant_method = self.quantization_mlp_dict["activations_quant_method"]
-                x_in1 = fake_quantize_act(self, "mlp_act_activation_output", x_in1, num_bits, quant_method, iter_num)
-
-            x_in2 = self.c_fc(x)
-            x_out = x_in1 * x_in2
-
-            # MLP Residual on the x_out
-            if self.use_mlp_res:
-                if mlp_res is None:
-                    mlp_res = torch.zeros_like(x_out)
-                x_out = mlp_res + x_out
-                mlp_res = x_out
-
-            x = self.c_proj(x_out)
+        x = self.c_proj(x)
 
         x = self.dropout(x)
 
