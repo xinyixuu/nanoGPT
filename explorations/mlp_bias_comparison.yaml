@@ -27,9 +27,14 @@ n_head: [12]
 n_embd: [768]
 bias: [false]
 
-# device and compilation
-device: ["cuda"]
-compile: [true]
+# training configuration
+dataset: "minipile"
+max_iters: 10000
+lr_decay_iters: 10000
+warmup_iters: 1000
+decay_lr: [true]
+eval_interval: 10000
+eta_variant: ["iteration"]
 
-# dataset configuration
-dataset: ["minipile"]
+# compilation
+compile: [true]
