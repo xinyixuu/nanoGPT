@@ -32,4 +32,4 @@ device: ["cuda"]
 compile: [true]
 
 # dataset configuration
-dataset: ["minipile"] 
+dataset: ["minipile"]
