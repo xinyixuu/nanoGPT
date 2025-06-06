@@ -17,8 +17,8 @@ def parse_args():
     logging_group = parser.add_argument_group('logging_group')
 
     # MLP Bias Configuration
-    model_group.add_argument('--mlp_up_bias', type=bool, default=None, help='Whether to use bias in MLP up projections. If None, uses global bias setting.')
-    model_group.add_argument('--mlp_down_bias', type=bool, default=None, help='Whether to use bias in MLP down projections. If None, uses global bias setting.')
+    model_group.add_argument('--mlp_up_bias', type=bool, default=None, action=argparse.BooleanOptionalAction, help='Whether to use bias in MLP up projections. If None, uses global bias setting.')
+    model_group.add_argument('--mlp_down_bias', type=bool, default=None, action=argparse.BooleanOptionalAction, help='Whether to use bias in MLP down projections. If None, uses global bias setting.')
 
     # DualPath MLP Configuration
     model_group.add_argument('--dual_path_x_offset', type=float, default=0.01, help='X-axis offset for DualPath activation functions')
