@@ -125,9 +125,15 @@ class DualPathMLP(nn.Module):
         self.activation_variant = activation_dictionary[config.activation_variant](config=config)
         
         # Dual path specific parameters
-        self.activation_x_offset = nn.Parameter(torch.tensor(config.dual_path_x_offset)) if config.learn_dual_path_x_offset else torch.tensor(config.dual_path_x_offset)
-        self.activation_y_offset = nn.Parameter(torch.tensor(config.dual_path_y_offset)) if config.learn_dual_path_y_offset else torch.tensor(config.dual_path_y_offset)
+        if config.learn_dual_path_x_offset:
+            self.activation_x_offset = nn.Parameter(torch.tensor(config.dual_path_x_offset))
+        else:
+            self.register_buffer("activation_x_offset", torch.tensor(config.dual_path_x_offset))
 
+        if config.learn_dual_path_y_offset:
+            self.activation_y_offset = nn.Parameter(torch.tensor(config.dual_path_y_offset))
+        else:
+            self.register_buffer("activation_y_offset", torch.tensor(config.dual_path_y_offset))
         # Sets the class of linear for MLP
         self.linear_variant_mlp_up = linear_dictionary[set_variant(config.linear_variant_mlp_up, config.linear_variant_mlp)]
         self.linear_variant_mlp_down = linear_dictionary[set_variant(config.linear_variant_mlp_down, config.linear_variant_mlp)]
