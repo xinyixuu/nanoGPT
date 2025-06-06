@@ -12,9 +12,12 @@ parameter_groups:
 activation_variant: ["relu", "gelu", "softplus"]
 
 # training configuration
-batch_size: [64]
-gradient_accumulation_steps: [1]
-eval_interval: [10000]
+dataset: "minipile"
+max_iters: 10000
+lr_decay_iters: 10000
+warmup_iters: 1000
+decay_lr: [true]
+eval_interval: 10000
 eta_variant: ["iteration"]
 
 # compilation
