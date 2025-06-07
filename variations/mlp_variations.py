@@ -16,6 +16,7 @@ class OriginalMLP(nn.Module):
         self.eval_interval = config.eval_interval
 
         self.use_mlp_res = config.mlp_res
+        self.n_down_projs = config.n_down_projs
 
         self.start_quant_level = config.start_quant_level
         self.quant_scheduler = config.quant_scheduler
@@ -65,14 +66,17 @@ class OriginalMLP(nn.Module):
             bias=use_up_bias
         )
         
-        self.c_proj = self.linear_variant_mlp_down(
-            mlp_expansion_size, 
-            config.n_embd, 
-            config, 
-            self.quantization_mlp_dict["quantize_linear_mlp_down_method"], 
-            self.quantization_mlp_dict["quantize_linear_mlp_down_bits"], 
-            bias=use_down_bias
-        )
+        # Create multiple down projections
+        self.c_projs = nn.ModuleList([
+            self.linear_variant_mlp_down(
+                mlp_expansion_size, 
+                config.n_embd, 
+                config, 
+                self.quantization_mlp_dict["quantize_linear_mlp_down_method"], 
+                self.quantization_mlp_dict["quantize_linear_mlp_down_bits"], 
+                bias=use_down_bias
+            ) for _ in range(self.n_down_projs)
+        ])
 
         self.dropout = nn.Dropout(config.dropout)
 
@@ -104,7 +108,11 @@ class OriginalMLP(nn.Module):
             mlp_res = x + mlp_res
             x = mlp_res
 
-        x = self.c_proj(x)
+        # Apply multiple down projections and sum their outputs
+        x_out = 0
+        for c_proj in self.c_projs:
+            x_out += c_proj(x)
+        x = x_out / self.n_down_projs  # Average the outputs
 
         x = self.dropout(x)
 
@@ -241,6 +249,7 @@ class Swiglu(nn.Module):
 
         self.start_quant_level = config.start_quant_level
         self.quant_scheduler = config.quant_scheduler
+        self.n_down_projs = config.n_down_projs
 
         # Select activation variant
         self.activation_variant = activation_dictionary[config.activation_variant](config=config)
@@ -296,14 +305,17 @@ class Swiglu(nn.Module):
             bias=use_up_bias
         )
         
-        self.c_fc_out = self.linear_variant_mlp_down(
-            mlp_expansion_size, 
-            config.n_embd, 
-            config, 
-            self.quantization_mlp_dict["quantize_linear_mlp_down_method"], 
-            self.quantization_mlp_dict["quantize_linear_mlp_down_bits"],
-            bias=use_down_bias
-        )
+        # Create multiple down projections
+        self.c_fc_outs = nn.ModuleList([
+            self.linear_variant_mlp_down(
+                mlp_expansion_size, 
+                config.n_embd, 
+                config, 
+                self.quantization_mlp_dict["quantize_linear_mlp_down_method"], 
+                self.quantization_mlp_dict["quantize_linear_mlp_down_bits"],
+                bias=use_down_bias
+            ) for _ in range(self.n_down_projs)
+        ])
 
         self.dropout = nn.Dropout(config.dropout)
 
@@ -337,7 +349,11 @@ class Swiglu(nn.Module):
         x_out = mlp_res + x_out
         mlp_res = x_out
 
-        x = self.c_fc_out(x_out)
+        # Apply multiple down projections and sum their outputs
+        x_final = 0
+        for c_fc_out in self.c_fc_outs:
+            x_final += c_fc_out(x_out)
+        x = x_final / self.n_down_projs  # Average the outputs
 
         x = self.dropout(x)
 
