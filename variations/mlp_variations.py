@@ -109,7 +109,7 @@ class OriginalMLP(nn.Module):
             x = mlp_res
 
         # Apply multiple down projections and sum their outputs
-        x_out = torch.zeros_like(x)
+        x_out = 0
         for c_proj in self.c_projs:
             x_out += c_proj(x)
         x = x_out / self.n_down_projs  # Average the outputs
