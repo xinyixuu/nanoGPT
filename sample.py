@@ -307,26 +307,26 @@ def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, sel
     plt.close()  # Close the plot to free up memory.
 
 
-def save_minmax_timeseries_chart(logit_values, out_dir, k_tag, sample_idx):
+def save_raw_logits_chart(raw_logit_values, out_dir, k_tag, sample_idx):
     """
-    Generates and saves a line chart of chosen-token logits over time.
+    Generates and saves a line chart of the raw, pre-temperature chosen-token logits over time.
     """
     # Ensure there's data to plot
-    if not logit_values:
+    if not raw_logit_values:
         return
 
     # Convert list of single-item tensors to a numpy array
-    logits_np = torch.tensor(logit_values).cpu().numpy()
+    logits_np = torch.tensor(raw_logit_values).cpu().numpy()
     steps = np.arange(len(logits_np))
 
     plt.figure(figsize=(16, 9))
 
-    plt.plot(steps, logits_np, marker='o', linestyle='-', label=f'Sample {sample_idx+1}, Top-K: {k_tag}')
+    plt.plot(steps, logits_np, marker='o', linestyle='-', label=f'Sample {sample_idx+1}, K-Setting: {k_tag}')
 
     # The Y-axis is automatically scaled by matplotlib to the min and max of the data
-    plt.ylabel("Raw Logit Value")
+    plt.ylabel("Raw Model Logit (Pre-Temperature)")
     plt.xlabel("Generation Step")
-    plt.title(f"Chosen Token Logits Over Time (for Min-Max Scaling)")
+    plt.title(f"Raw Chosen-Token Model Logits Over Time")
     plt.grid(True)
     plt.legend()
 
@@ -335,7 +335,7 @@ def save_minmax_timeseries_chart(logit_values, out_dir, k_tag, sample_idx):
     os.makedirs(charts_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    out_path = os.path.join(charts_dir, f"minmax_logits_k{k_tag}_sample{sample_idx+1}_{timestamp}.png")
+    out_path = os.path.join(charts_dir, f"raw_logits_k{k_tag}_sample{sample_idx+1}_{timestamp}.png")
 
     plt.tight_layout()
     plt.savefig(out_path)
@@ -466,6 +466,7 @@ def sample_with_existing_model(
             tokens_for_color: List[int] = []
             full_rows: List[torch.Tensor] = []
             topk_rows: List[torch.Tensor] = []
+            pre_temp_scalar_rows: List[torch.Tensor] = []
             scalar_rows: List[torch.Tensor] = []
             ranks_list: List[int] = []  # NEW
 
@@ -477,9 +478,11 @@ def sample_with_existing_model(
                         else x[:, -model.config.block_size :]
                     )
 
-                    logits, _ = model(idx_cond)
-                    logits = logits[:, -1, :] / temperature
+                    model_logits, _ = model(idx_cond)
+                    raw_logits_row = model_logits[:, -1, :]      # Raw logits from model
+                    logits = raw_logits_row / temperature        # Scaled logits for sampling
                     full_row = logits[0].clone()               # pre-mask
+
 
                     # Apply the selected truncation logic
                     if args.softmax_threshold is not None:
@@ -525,6 +528,8 @@ def sample_with_existing_model(
                         full_rows.append(full_row)
                         topk_rows.append(topk_row)
                         scalar_rows.append(full_row[chosen])
+                        if args.show_minmax_chart:
+                            pre_temp_scalar_rows.append(raw_logits_row[0, chosen])
                         ranks_list.append(rank)
 
                     if show_heatmaps:
@@ -544,10 +549,10 @@ def sample_with_existing_model(
                         )
 
             # ---------- save minmax chart if requested ----------------------
-            if args.show_minmax_chart and scalar_rows:
-                save_minmax_timeseries_chart(
-                    scalar_rows, out_dir, k_tag, sample_idx
-                )
+            if args.show_minmax_chart and pre_temp_scalar_rows:
+                save_raw_logits_chart(
+                    pre_temp_scalar_rows, out_dir, k_tag, sample_idx
+                 )
 
             # ---------- decode plain text -----------------------------------
             plain_text = decode(x[0].tolist())
