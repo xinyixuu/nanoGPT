@@ -318,6 +318,16 @@ def parse_args():
     training_group.add_argument('--temperature', type=float, default=0.8, help="Temperature for predictions (1.0 = normal, < 1.0 = less random).")
     training_group.add_argument('--top_k', type=int, nargs='+', default=[1, 2, 5, 10], help="Retain only the top_k most likely tokens (used in sample.py).")
     training_group.add_argument('--softmax_threshold', type=float, nargs='?', const=0.5, default=None, help="Enable softmax threshold sampling. Only considers tokens with a probability within this percentage of the top probability. Use without a value for default 50%% (0.5), or provide one e.g. '--softmax_threshold 0.2'. Overrides --top_k.")
+    training_group.add_argument(
+        '--cosine_penalty',
+        type=float,
+        nargs='*',
+        default=None,
+        help="Apply a penalty to logits based on cosine similarity to recent tokens. "
+             "Use alone for defaults (N=5, alpha=1.0). "
+             "Optionally provide lookback window N and penalty strength alpha. Ex: --cosine_penalty 5 1.5"
+    )
+
     training_group.add_argument('--eval_dataset', type=str, default=None, help="Optional dataset name for custom evaluation splits.")
     training_group.add_argument('--quantization_data_file', type=str, default=None, help="If set, export quantized weights/activations to a specified file (pkl).")
 

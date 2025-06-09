@@ -55,6 +55,17 @@ def parse_args():
     parser.add_argument('--token_boundary', type=str, default=None, help="optional separator between emitted tokens")
     parser.add_argument('--print_model_info', default=True, action=argparse.BooleanOptionalAction, help="print info about model before infernece")
 
+    parser.add_argument(
+        '--cosine_penalty',
+        type=float,
+        nargs='*',
+        default=None,
+        help="Apply a penalty to logits based on cosine similarity to recent tokens. "
+            "Use alone for defaults (N=5, alpha=1.0). "
+             "Optionally provide lookback window N and penalty strength alpha. Ex: --cosine_penalty 5 1.5"
+    )
+
+
     # Output Confidence
     parser.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k', 'rank', 'dot_product',  'all'],
                         help="Mode to colorize text: 'minmax' (default), 'softmax', or 'softmax_top_k' for softmax only over the top k vals. "
@@ -448,6 +459,8 @@ def sample_with_existing_model(
 
         for sample_idx in range(num_samples):
             # ------------- LSV per-sample section -------------------
+            kl_divergences = [] # To store the impact of the cosine penalty
+
             if args is not None:
                 if args.use_lsv:
                     model.set_lsv_index(sample_idx % args.lsv_size)
@@ -485,6 +498,40 @@ def sample_with_existing_model(
 
                     model_logits, _ = model(idx_cond)
                     raw_logits_row = model_logits[:, -1, :]      # Raw logits from model
+
+                    # --- Apply Cosine Similarity Penalty (if enabled) ---
+                    if args.cosine_penalty is not None:
+                        N = 5 if len(args.cosine_penalty) < 1 else int(args.cosine_penalty[0])
+                        alpha = 1.0 if len(args.cosine_penalty) < 2 else args.cosine_penalty[1]
+
+                        # Calculate original probabilities for comparison
+                        probs_before = F.softmax(raw_logits_row / temperature, dim=-1)
+
+
+                        # Apply penalty as long as there are tokens in the context and N > 0
+                        if x.size(1) > 0 and N > 0:
+                            # Python's negative slicing gracefully handles cases where x.size(1) < N
+                            last_n_tokens = x[0, -N:]
+
+                            embedding_matrix = model.transformer.wte.weight
+
+                            # Normalize embeddings
+                            last_n_embeds = F.normalize(embedding_matrix[last_n_tokens], p=2, dim=1)
+                            all_embeds = F.normalize(embedding_matrix, p=2, dim=1)
+
+                            # Calculate max cosine similarity for each candidate against the last N tokens
+                            sim_matrix = torch.matmul(all_embeds, last_n_embeds.T)
+                            max_sim_per_candidate, _ = torch.max(sim_matrix, dim=1)
+                            penalty = alpha * max_sim_per_candidate
+                            raw_logits_row = raw_logits_row - penalty
+
+                            # Calculate KL divergence to measure the change
+                            probs_after = F.softmax(raw_logits_row / temperature, dim=-1)
+                            # Add a small epsilon to avoid log(0)
+                            kl_div = F.kl_div(torch.log(probs_after + 1e-9), probs_before, reduction='sum')
+                            kl_divergences.append(kl_div.item())
+
+
                     logits = raw_logits_row / temperature        # Scaled logits for sampling
                     full_row = logits[0].clone()               # pre-mask
 
@@ -553,6 +600,11 @@ def sample_with_existing_model(
 
                         )
 
+            # ---------- Print summary statistics for this sample ------------------
+            if kl_divergences:
+                avg_kl = np.mean(kl_divergences)
+                console.print(f"\n[bold yellow]Cosine Penalty Impact (Avg KL Divergence):[/bold yellow] [bold cyan]{avg_kl:.4f}[/bold cyan]")
+
             # ---------- save minmax chart if requested ----------------------
             if args.show_minmax_chart and pre_temp_scalar_rows:
                 save_raw_logits_chart(
@@ -572,9 +624,10 @@ def sample_with_existing_model(
                     dot_product_values = [0.0] # First token has no prior, assign neutral value.
                     embedding_matrix = model.transformer.wte.weight
                     for i in range(1, len(tokens_for_color)):
-                        prev_embedding = embedding_matrix[tokens_for_color[i-1]]
-                        current_embedding = embedding_matrix[tokens_for_color[i]]
-                        dot_product_values.append(torch.dot(prev_embedding, current_embedding).item())
+                        prev_vec = F.normalize(embedding_matrix[tokens_for_color[i-1]], p=2, dim=0)
+                        current_vec = F.normalize(embedding_matrix[tokens_for_color[i]], p=2, dim=0)
+                        # The dot product of two unit vectors is their cosine similarity.
+                        dot_product_values.append(torch.dot(prev_vec, current_vec).item())
 
                 for cm in modes_to_apply:
                     # Select the appropriate data source for the current colorization mode
