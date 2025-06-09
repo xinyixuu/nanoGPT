@@ -196,13 +196,17 @@ def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
         text.append(token_str, style=f"bold #{r:02x}{g:02x}00")
     return text
 
-def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, selected_token):
+def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, selected_token, top_k_value):
     """
     Generates and saves a chart (heatmap or barchart) of token probabilities for a single generation step.
-    This corrected version plots only the top-k most probable tokens to ensure readability.
+    This corrected version plots only the top-k most probable tokens based on the generation setting.
     """
-    # Define a reasonable number of top tokens to display in the chart.
-    k_to_plot = 40
+    # Use the top_k value from generation, with a sensible default if it's None.
+    # Ensure k_to_plot does not exceed the vocabulary size.
+    vocab_size = probs.size(-1)
+    k_to_plot = top_k_value
+    k_to_plot = min(k_to_plot, vocab_size)
+
 
     # Get the top k probabilities and indices from the probability distribution.
     # `probs` has shape (1, vocab_size), so we flatten it.
@@ -219,13 +223,14 @@ def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, sel
         annot_data = np.array(top_tokens).reshape(1, -1)
         sns.heatmap(top_probs.cpu().numpy().reshape(1, -1), annot=annot_data, fmt='', cmap='viridis', cbar_kws={'label': 'Probability'})
         plt.yticks([]) # Hide y-axis ticks as they are not meaningful here.
-        plt.title(f"Step {step}: Top-{k_to_plot} Token Probabilities (Heatmap)")
+        plt.title(f"Step {step}: Top-{k_to_plot} Token Probabilities (Heatmap from Top-K setting: {top_k_value})")
 
     elif chart_type == 'barchart':
         # For a barchart (histogram), plot the probabilities for the top tokens.
         colors = sns.color_palette('viridis', n_colors=k_to_plot)
         bars = plt.bar(top_tokens, top_probs.cpu().numpy(), color=colors)
         plt.ylabel("Probability")
+        plt.ylim(0.0, 1.0) # Set y-axis from 0.0 to 1.0 for probabilities
         plt.xticks(rotation=45, ha="right") # Rotate labels to prevent overlap.
 
         # Highlight the bar for the token that was actually selected.
@@ -238,7 +243,7 @@ def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, sel
             # This can happen if the selected token is not in the top k_to_plot,
             # especially with high temperature or if k used for sampling is > k_to_plot.
             print(f"Note: Selected token '{selected_token}' not in top {k_to_plot} for visualization at step {step}.")
-        plt.title(f"Step {step}: Top-{k_to_plot} Token Probabilities (Bar Chart)")
+        plt.title(f"Step {step}: Top-{k_to_plot} Token Probabilities (Bar Chart from Top-K setting: {top_k_value})")
 
     # Add a more descriptive x-axis label.
     last_tokens_decoded = decode(idx[0, -last_k_tokens:].tolist())
@@ -414,6 +419,7 @@ def sample_with_existing_model(
                             last_k_tokens,
                             chart_type,
                             sel_txt,
+                            current_k,
                         )
 
             # ---------- decode plain text -----------------------------------
