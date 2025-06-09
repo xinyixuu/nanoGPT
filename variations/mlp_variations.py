@@ -58,25 +58,23 @@ class OriginalMLP(nn.Module):
 
         # Instantiate Linear Layers with configurable bias
         self.c_fc = self.linear_variant_mlp_up(
-            config.n_embd, 
-            mlp_expansion_size, 
-            config, 
-            self.quantization_mlp_dict["quantize_linear_mlp_up_method"], 
-            self.quantization_mlp_dict["quantize_linear_mlp_up_bits"], 
+            config.n_embd,
+            mlp_expansion_size,
+            config,
+            self.quantization_mlp_dict["quantize_linear_mlp_up_method"],
+            self.quantization_mlp_dict["quantize_linear_mlp_up_bits"],
             bias=use_up_bias
         )
-        
-        # Create multiple down projections
-        self.c_projs = nn.ModuleList([
-            self.linear_variant_mlp_down(
-                mlp_expansion_size, 
-                config.n_embd, 
-                config, 
-                self.quantization_mlp_dict["quantize_linear_mlp_down_method"], 
-                self.quantization_mlp_dict["quantize_linear_mlp_down_bits"], 
-                bias=use_down_bias
-            ) for _ in range(self.n_down_projs)
-        ])
+
+        # Fused down projection
+        self.c_proj = self.linear_variant_mlp_down(
+            mlp_expansion_size,
+            config.n_embd * self.n_down_projs,
+            config,
+            self.quantization_mlp_dict["quantize_linear_mlp_down_method"],
+            self.quantization_mlp_dict["quantize_linear_mlp_down_bits"],
+            bias=use_down_bias,
+        )
 
         self.dropout = nn.Dropout(config.dropout)
 
@@ -108,11 +106,12 @@ class OriginalMLP(nn.Module):
             mlp_res = x + mlp_res
             x = mlp_res
 
-        # Apply multiple down projections and sum their outputs
-        x_out = 0
-        for c_proj in self.c_projs:
-            x_out += c_proj(x)
-        x = x_out / self.n_down_projs  # Average the outputs
+        # Apply fused down projection and sum the outputs
+        x = self.c_proj(x)
+        if self.n_down_projs > 1:
+            batch_size, seq_len, _ = x.shape
+            x = x.view(batch_size, seq_len, self.n_down_projs, -1)
+            x = x.sum(dim=2)
 
         x = self.dropout(x)
 
@@ -131,7 +130,7 @@ class DualPathMLP(nn.Module):
 
         # Select activation variant
         self.activation_variant = activation_dictionary[config.activation_variant](config=config)
-        
+
         # Dual path specific parameters
         if config.learn_dual_path_x_offset:
             self.activation_x_offset = nn.Parameter(torch.tensor(config.dual_path_x_offset))
@@ -172,30 +171,30 @@ class DualPathMLP(nn.Module):
 
         # Instantiate Linear Layers with configurable bias
         self.c_fc = self.linear_variant_mlp_up(
-            config.n_embd, 
-            mlp_expansion_size, 
-            config, 
-            self.quantization_mlp_dict["quantize_linear_mlp_up_method"], 
-            self.quantization_mlp_dict["quantize_linear_mlp_up_bits"], 
+            config.n_embd,
+            mlp_expansion_size,
+            config,
+            self.quantization_mlp_dict["quantize_linear_mlp_up_method"],
+            self.quantization_mlp_dict["quantize_linear_mlp_up_bits"],
             bias=config.mlp_up_bias
         )
-        
+
         # Two separate projection layers for each activation path
         self.c_proj1 = self.linear_variant_mlp_down(
-            mlp_expansion_size, 
-            config.n_embd, 
-            config, 
-            self.quantization_mlp_dict["quantize_linear_mlp_down_method"], 
-            self.quantization_mlp_dict["quantize_linear_mlp_down_bits"], 
+            mlp_expansion_size,
+            config.n_embd,
+            config,
+            self.quantization_mlp_dict["quantize_linear_mlp_down_method"],
+            self.quantization_mlp_dict["quantize_linear_mlp_down_bits"],
             bias=config.mlp_down_bias
         )
-        
+
         self.c_proj2 = self.linear_variant_mlp_down(
-            mlp_expansion_size, 
-            config.n_embd, 
-            config, 
-            self.quantization_mlp_dict["quantize_linear_mlp_down_method"], 
-            self.quantization_mlp_dict["quantize_linear_mlp_down_bits"], 
+            mlp_expansion_size,
+            config.n_embd,
+            config,
+            self.quantization_mlp_dict["quantize_linear_mlp_down_method"],
+            self.quantization_mlp_dict["quantize_linear_mlp_down_bits"],
             bias=config.mlp_down_bias
         )
 
@@ -288,34 +287,32 @@ class Swiglu(nn.Module):
 
         # Instantiate Linear Layers with configurable bias
         self.c_fc_in1 = self.linear_variant_mlp_up(
-            config.n_embd, 
-            mlp_expansion_size, 
-            config, 
-            self.quantization_mlp_dict["quantize_linear_mlp_up_method"], 
+            config.n_embd,
+            mlp_expansion_size,
+            config,
+            self.quantization_mlp_dict["quantize_linear_mlp_up_method"],
             self.quantization_mlp_dict["quantize_linear_mlp_up_bits"],
             bias=use_up_bias
         )
-        
+
         self.c_fc_in2 = self.linear_variant_mlp_up(
-            config.n_embd, 
-            mlp_expansion_size, 
-            config, 
-            self.quantization_mlp_dict["quantize_linear_mlp_up_method"], 
+            config.n_embd,
+            mlp_expansion_size,
+            config,
+            self.quantization_mlp_dict["quantize_linear_mlp_up_method"],
             self.quantization_mlp_dict["quantize_linear_mlp_up_bits"],
             bias=use_up_bias
         )
-        
-        # Create multiple down projections
-        self.c_fc_outs = nn.ModuleList([
-            self.linear_variant_mlp_down(
-                mlp_expansion_size, 
-                config.n_embd, 
-                config, 
-                self.quantization_mlp_dict["quantize_linear_mlp_down_method"], 
-                self.quantization_mlp_dict["quantize_linear_mlp_down_bits"],
-                bias=use_down_bias
-            ) for _ in range(self.n_down_projs)
-        ])
+
+        # Fused down projection
+        self.c_fc_out = self.linear_variant_mlp_down(
+            mlp_expansion_size,
+            config.n_embd * self.n_down_projs,
+            config,
+            self.quantization_mlp_dict["quantize_linear_mlp_down_method"],
+            self.quantization_mlp_dict["quantize_linear_mlp_down_bits"],
+            bias=use_down_bias,
+        )
 
         self.dropout = nn.Dropout(config.dropout)
 
@@ -349,11 +346,12 @@ class Swiglu(nn.Module):
         x_out = mlp_res + x_out
         mlp_res = x_out
 
-        # Apply multiple down projections and sum their outputs
-        x_final = 0
-        for c_fc_out in self.c_fc_outs:
-            x_final += c_fc_out(x_out)
-        x = x_final / self.n_down_projs  # Average the outputs
+        # Apply fused down projection and sum the outputs
+        x = self.c_fc_out(x_out)
+        if self.n_down_projs > 1:
+            batch_size, seq_len, _ = x.shape
+            x = x.view(batch_size, seq_len, self.n_down_projs, -1)
+            x = x.sum(dim=2)
 
         x = self.dropout(x)
 
