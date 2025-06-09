@@ -24,4 +24,3 @@ sample_each_eval: [true]
 max_sample_tokens: [800]
 colorize_output: [true]
 colorize_mode: ["all"]
-

@@ -13,10 +13,33 @@ class GPTConfig:
     n_head: int = 12
     n_kv_group: int = 12
     n_embd: int = 768
+    n_down_projs: int = 1  # Number of down projections in MLP/SwiGLU
 
     # For multicontext training
     multicontext: bool = False
     vocab_sizes: List[int] = field(default_factory=lambda: []) # Used in place of vocab
+
+    # MLP bias configuration
+    mlp_up_bias: bool | None = None  # If None, uses global bias setting
+    mlp_down_bias: bool | None = None  # If None, uses global bias setting
+
+    # DualPathMLP specific parameters
+    dual_path_x_offset: float = 0.01
+    dual_path_y_offset: float = 0.0
+    learn_dual_path_x_offset: bool = False
+    learn_dual_path_y_offset: bool = False
+
+    ## MLA Variations
+    mla_latent_dim: int | None = None   # d_c  (proj dimension of the shared latent)
+    mla_rotary_dim: int       = 32      # d_r  (# rotary channels per head)
+
+    use_mla_lobo: bool = False          # turns the feature on/off
+    mla_lobo_init: float = 0.0          # log-space initial value (like flash_lobo_log_const)
+
+    ## CO4 attention variation
+    n_latent: int = None
+    triadic_loops: int = None
+    mod_fn: str = "causal"
 
     ## Inf attention variation
     n_qk_head_dim: int = None
@@ -150,9 +173,11 @@ class GPTConfig:
     # MLP
     shared_mlp_size: int = 1
     shared_mlp_sym: bool = False
+    shared_mlp_seq: int = 1
     # ATTN
     shared_attn_size: int = 1
     shared_attn_sym: bool = False
+    shared_attn_seq: int = 1
 
     # Softmax Alternatives and Options
     softmax_variant_attn: str = "softmax" # Choices: "softmax" "softermax" "sigsoftmax" "polymax" "strongermax" "consmax"
@@ -320,7 +345,7 @@ class GPTConfig:
     linear_std_init: float= 0.02
 
     ## Embedding initialization options
-    init_variant: str = None
+    init_variant: str = "gaussian"
     init_scale: float = 0.01
     init_wte_npy: str = "wte.npy"
 

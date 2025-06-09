@@ -16,6 +16,16 @@ def parse_args():
     training_group = parser.add_argument_group('training_group')
     logging_group = parser.add_argument_group('logging_group')
 
+    # MLP Bias Configuration
+    model_group.add_argument('--mlp_up_bias', default=None, action=argparse.BooleanOptionalAction, help='Whether to use bias in MLP up projections. If None, uses global bias setting.')
+    model_group.add_argument('--mlp_down_bias', default=None, action=argparse.BooleanOptionalAction, help='Whether to use bias in MLP down projections. If None, uses global bias setting.')
+
+    # DualPath MLP Configuration
+    model_group.add_argument('--dual_path_x_offset', type=float, default=0.01, help='X-axis offset for DualPath activation functions')
+    model_group.add_argument('--dual_path_y_offset', type=float, default=0.0, help='Y-axis offset for DualPath activation functions')
+    model_group.add_argument('--learn_dual_path_x_offset', default=False, action=argparse.BooleanOptionalAction, help='Whether to learn the x-axis offset in DualPath')
+    model_group.add_argument('--learn_dual_path_y_offset', default=False, action=argparse.BooleanOptionalAction, help='Whether to learn the y-axis offset in DualPath')
+
     # Export Args
     ## Factored WTE
     model_group.add_argument('--import_wte_npy', default=None, type=str, help='Path to import the embedding table as a .npy file')
@@ -37,7 +47,7 @@ def parse_args():
     training_group.add_argument('--eval_only', default=False, action=argparse.BooleanOptionalAction)
 
     # latency / ETA estimate options
-    training_group.add_argument('--time_remaining_mode', choices=['iteration', 'eval_cycle'], default='eval_cycle', help="iteration - estimates only based on training iterations -- use if doing one eval at the end; eval_cycle -- use if doing multiple evals, will use a single cycle for the estimation.")
+    training_group.add_argument('--eta_variant', choices=['iteration', 'eval_cycle'], default='eval_cycle', help="iteration - estimates only based on training iterations -- use if doing one eval at the end; eval_cycle -- use if doing multiple evals, will use a single cycle for the estimation.")
     training_group.add_argument('--iteration_window', default=100, type=int)
     training_group.add_argument('--eval_cycle_window', default=5, type=int)
 
@@ -145,6 +155,10 @@ def parse_args():
             "sgdw",
             "shampoo",
             "swats",
+            "sophiag",
+            "soap",
+            "var_adaptive_lr",
+            "lookahead",
             ]
 
     training_group.add_argument("--optimizer", type=str, default="adamw",
@@ -170,7 +184,7 @@ def parse_args():
     training_group.add_argument("--ademamix_beta2", type=float, default=0.999, help="β2 hyper-parameter for the Ademamix optimizer.")
     training_group.add_argument("--ademamix_beta3", type=float, default=0.9999, help="β3 hyper-parameter for the Ademamix optimizer.")
     training_group.add_argument("--ademamix_alpha", type=float, default=8, help="α (scaling factor) for the Ademamix optimizer.")
-    training_group.add_argument("--ademamix_warmup", type=int, default=2000, help="Number of warm-up steps for Ademamix’s learning-rate schedule.")
+    training_group.add_argument("--ademamix_warmup", type=int, default=2000, help="Number of warm-up steps for Ademamix's learning-rate schedule.")
     # --------  NADAM --------------------------------------------------
     training_group.add_argument("--nadam_betas", type=float, nargs=2, default=[0.9, 0.999], help="Betas for Nadam optimizer.")
     training_group.add_argument("--nadam_eps", type=float, default=1e-8, help="Epsilon for Nadam optimizer.")
@@ -204,6 +218,16 @@ def parse_args():
     training_group.add_argument("--adafactor_scale_param", action=argparse.BooleanOptionalAction, default=True, help="Enable parameter-scale adaptive LR.")
     training_group.add_argument("--adafactor_relative_step", action=argparse.BooleanOptionalAction, default=True, help="Use relative-step schedule if learning rate is not supplied.")
     training_group.add_argument("--adafactor_warmup_init", action=argparse.BooleanOptionalAction, default=False, help="Use warm-up initialisation of learning rate.")
+    # Sophia-G
+    training_group.add_argument("--sophiag_beta1", type=float, default=0.96)
+    training_group.add_argument("--sophiag_beta2", type=float, default=0.99)
+    training_group.add_argument("--sophiag_rho",   type=float, default=0.04)
+    training_group.add_argument("--sophiag_update_freq", type=int, default=10)
+    # SOAP
+    training_group.add_argument("--soap_graft_lr", type=float, default=1.0)
+    # Variance Adaptive Lr
+    training_group.add_argument("--varlr_beta", type=float, default=0.9, help="EMA smoothing for VarianceAdaptiveLR optimizer")
+
 
     # AdaBelief -----------------------------------------------------------
     training_group.add_argument("--adabelief_eps", type=float, default=1e-16, help="AdaBelief epsilon.")
@@ -217,6 +241,19 @@ def parse_args():
     training_group.add_argument("--apollo_update_proj_gap", type=int, default=200, help="# of optimisation steps between projector refresh.")
     training_group.add_argument("--apollo_proj_type", type=str, default="std", choices=["std", "gaussian", "rademacher"], help="Distribution for generating the projection matrix.")
     training_group.add_argument("--apollo_apply_to_all", action=argparse.BooleanOptionalAction, default=False, help="If set, apply low-rank Apollo updates to *all* " "parameters instead of only tensors tagged with " "`.lowrank = True`.")
+    training_group.add_argument("--lookahead_inner_opt",
+                                type=str,
+                                default="adamw",
+                                choices=optimizer_variations,
+                                help="Inner/fast optimiser that Lookahead will wrap.")
+    training_group.add_argument("--lookahead_k",
+                                type=int,
+                                default=6,
+                                help="Number of inner-optimiser steps before a slow weight sync.")
+    training_group.add_argument("--lookahead_alpha",
+                                type=float,
+                                default=0.5,
+                                help="Interpolation factor for the slow update (0 < α ≤ 1).")
 
 
     # from torch-optimizer (common)
@@ -288,6 +325,7 @@ def parse_args():
     model_group.add_argument('--n_head', default=6, type=int)
     model_group.add_argument('--n_kv_group', default=None, type=int)
     model_group.add_argument('--n_embd', default=384, type=int, help="Size of embeddings in decoder layer and wte unless n_embd_wte is set." )
+    model_group.add_argument('--n_down_projs', default=1, type=int, help="Number of down projections in MLP/SwiGLU")
     model_group.add_argument('--n_embd_wte', default=None, type=int, help="If different from n_embd, an adapter table will be automatically created")
     model_group.add_argument('--n_embd_wte_scale_tying', default=True, action=argparse.BooleanOptionalAction, help="Enable weight tying for scale up and scale down matrices, only has effects if n_embd_wte is not 'None'.")
     model_group.add_argument('--wte_weight_tying', default=True, action=argparse.BooleanOptionalAction, help="Enable weight tying for non-factorized wte")
@@ -342,6 +380,7 @@ def parse_args():
             "mlp",
             "kan",
             "swiglu",
+            "dual_path",
             "identity",
             ]
 
@@ -360,8 +399,10 @@ def parse_args():
     # Shared Parameter Settings
     model_group.add_argument('--shared_mlp_size', default=1, type=int, help="every 'k' contiguous blocks of mlp are shared")
     model_group.add_argument('--shared_mlp_sym', default=False, action=argparse.BooleanOptionalAction)
+    model_group.add_argument('--shared_mlp_seq', default=1, type=int, help="Sequence length for cyclic sharing of MLP layers")
     model_group.add_argument('--shared_attn_size', default=1, type=int, help="every 'k' contiguous blocks of attn are shared")
     model_group.add_argument('--shared_attn_sym', default=False, action=argparse.BooleanOptionalAction, help="symmetrical attention sharing")
+    model_group.add_argument('--shared_attn_seq', default=1, type=int, help="Sequence length for cyclic sharing of attention layers")
 
     # NORM VARIATIONS
     norm_variations = [
@@ -463,7 +504,8 @@ def parse_args():
                           "ssm",
                           "identity",
                           "infinite",
-                          "iqa",
+                          "mla",
+                          "co4",
                           ]
 
     model_group.add_argument(
@@ -481,6 +523,33 @@ def parse_args():
         choices=attention_variants,
         help="Which attention variant to use for the Transformer blocks."
     )
+
+    ## MLA Variations
+    # ── inside   model_group = parser.add_argument_group('model_group')  … ──
+    model_group.add_argument(
+        '--mla_latent_dim',
+        type=int,
+        default=None,
+        help="d_c: projected latent size for MLA (defaults to n_embd//4)."
+    )
+    model_group.add_argument(
+        '--mla_rotary_dim',
+        type=int,
+        default=32,
+        help="d_r: rotary-branch dimensionality used by MLA."
+    )
+
+    ### MLA LoBo ------------------------------------------------------------------
+    model_group.add_argument("--use_mla_lobo",        action=argparse.BooleanOptionalAction, default=False)
+    model_group.add_argument("--mla_lobo_init",       type=float, default=0.0)
+
+
+    ## CO4 Variations
+    model_group.add_argument("--n_latent",     type=int, default=4, help="number of latent queries  Lq")
+    model_group.add_argument("--triadic_loops",type=int, default=1, help="how many Q-K-V refinement passes")
+    model_group.add_argument("--mod_fn",       type=str, default="cooperation",
+                        choices=["cooperation","tm1","tm2","tm3","tm4"],
+                        help="which MOD transfer-function to use")
 
     ## Infinite Attention variation
     model_group.add_argument('--n_qk_head_dim', default=None, type=int)

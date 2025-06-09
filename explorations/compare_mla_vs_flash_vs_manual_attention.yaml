@@ -1,0 +1,38 @@
+# ── compare_manual-vs-flash-vs-mla.yaml ──────────────────────────────────────
+# Base hyper-params that stay the same for every run
+block_size: [512]
+n_layer:   [12]
+n_head:    [12]
+n_embd:    [768]
+dataset:   ["minipile"]
+device:    ["cuda"]
+dtype:     ["float16", "bfloat16"]
+max_iters: [20000]
+eval_interval: [20000]
+compile:   [true]
+
+# Sweep across three *parameter-groups*
+parameter_groups:
+
+  # 1) Causal attention, **manual** and SDPA (Flash disabled) (no lobo)
+  - attention_variant:       ["causal"]
+    disable_flash_attention: [true, false]
+
+  # 2) Causal flash-attention **with** flash_Lobo
+  - attention_variant:       ["causal"]
+    disable_flash_attention: [false]
+    use_flash_lobo:          [true]
+    use_flash_lobo_per_head: [true]
+    flash_lobo_log_const:    [1.0, 0.0, -1.0]
+
+  # 3) Multi-Latent Attention (MLA) with and without lobo
+  - attention_variant: ["mla"]
+    disable_flash_attention: [true]
+    mla_latent_dim:         [64, 128, 256]   # d_c  – latent size
+    mla_rotary_dim:         [32, 64]         # d_r  – rotary channels per head
+    # ----- LoBo grid -----
+    use_mla_lobo:        [true, false]
+    mla_lobo_init:       [1.0, 0.0, -1.0]   # log-space (~2.718, ~1.0  and  ~0.14)
+
+# Random Seeds
+# seed:                       {range: {start: 0, end: 2, step: 1}}

@@ -96,7 +96,7 @@ class ETAEstimator:
         # ------------------------------------------------------------------ #
         # 2)   Remaining-time forecast
         # ------------------------------------------------------------------ #
-        if self.args.time_remaining_mode == "iteration" or not self.cycle_latency_avg:
+        if self.args.eta_variant == "iteration" or not self.cycle_latency_avg:
             # (fallbacks to iteration mode until we have enough cycles)
             iter_ms = self.iter_latency_avg or (dt * 1000.0)
 
@@ -111,7 +111,7 @@ class ETAEstimator:
         if self.warmup_eval_cycles > 0:
                 self.warmup_eval_cycles -= 1
         else:
-            if (self.args.time_remaining_mode == "eval_cycle") and is_eval_boundary:
+            if (self.args.eta_variant == "eval_cycle") and is_eval_boundary:
                     self.time_remaining_ms = self.evaluations_remaining * self.cycle_latency_avg
                     # subtract the current iteration (already completed)
                     self.time_remaining_ms = max(0.0, self.time_remaining_ms - self.iter_latency_avg)

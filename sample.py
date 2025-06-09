@@ -613,8 +613,8 @@ def main():
         # Need to create a completely "default" GPTConfig and overwrite using model_variations
         gptconf = GPTConfig()
         variation_dict = model_variation_dictionary[args.init_from]
-        for k in variation_dict:
-            gptconf[k] = variation_dict[k]
+        for k, v in variation_dict.items():
+            setattr(gptconf, k, v)
         model = GPT.from_pretrained(gptconf, model_type=args.init_from)
 
     # Load meta information if available
@@ -631,6 +631,13 @@ def main():
             if os.path.exists(meta_path):
                 load_meta = True
                 break
+
+    # For using gpt2 pretrained models
+    if args.init_from.startswith('gpt2'):
+        # use tiktoken for gpt2
+        enc = tiktoken.get_encoding("gpt2")
+        encode = lambda s: enc.encode(s, allowed_special={""})
+        decode = lambda l: enc.decode(l)
 
     if load_meta:
         print(f"Loading meta from {meta_path}...")
@@ -660,7 +667,6 @@ def main():
             stoi, itos = meta['stoi'], meta['itos']
             encode = lambda s: [stoi[c] for c in s]
             decode = lambda l: ''.join([itos[i] for i in l])
-
 
     if args.start.startswith('FILE:'):
         with open(args.start[5:], 'r', encoding='utf-8') as f:
@@ -832,7 +838,6 @@ def main():
                     with open(meta_path, "rb") as f:
                         meta = pickle.load(f)
                     if 'tokenizer' in meta and meta['tokenizer'] == 'tiktoken':
-                        import tiktoken
                         enc_obj = tiktoken.get_encoding(meta['tiktoken_encoding'])
                         decode_i = lambda l: enc_obj.decode(l)
                     else:
