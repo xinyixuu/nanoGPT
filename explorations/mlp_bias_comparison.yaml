@@ -10,6 +10,8 @@ parameter_groups:
     activation_variant: ["gelu", "pfla_le"]
     learn_mlp_x_offset: [true]
     learn_mlp_y_offset: [true]
+    mlp_down_projs: [1, 2, 3]
+
 
   # Swiglu - ~2/3 of MLP size for same param count
   - mlp_variant: ["swiglu"]
@@ -19,6 +21,7 @@ parameter_groups:
     activation_variant: ["silu", "identity", "pfla_le"]
     learn_mlp_x_offset: [true]
     learn_mlp_y_offset: [true]
+    mlp_down_projs: [1, 2, 3]
 
   # DualPath - ~2/3 of MLP size for same param count
   - mlp_variant: ["dual_path"]

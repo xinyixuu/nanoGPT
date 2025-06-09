@@ -13,7 +13,7 @@ class GPTConfig:
     n_head: int = 12
     n_kv_group: int = 12
     n_embd: int = 768
-    n_down_projs: int = 1  # Number of down projections in MLP/SwiGLU
+    mlp_down_projs: int = 1  # Number of down projections in MLP/SwiGLU
 
     # For multicontext training
     multicontext: bool = False
