@@ -20,11 +20,11 @@ def parse_args():
     model_group.add_argument('--mlp_up_bias', default=None, action=argparse.BooleanOptionalAction, help='Whether to use bias in MLP up projections. If None, uses global bias setting.')
     model_group.add_argument('--mlp_down_bias', default=None, action=argparse.BooleanOptionalAction, help='Whether to use bias in MLP down projections. If None, uses global bias setting.')
 
-    # DualPath MLP Configuration
-    model_group.add_argument('--dual_path_x_offset', type=float, default=0.01, help='X-axis offset for DualPath activation functions')
-    model_group.add_argument('--dual_path_y_offset', type=float, default=0.0, help='Y-axis offset for DualPath activation functions')
-    model_group.add_argument('--learn_dual_path_x_offset', default=False, action=argparse.BooleanOptionalAction, help='Whether to learn the x-axis offset in DualPath')
-    model_group.add_argument('--learn_dual_path_y_offset', default=False, action=argparse.BooleanOptionalAction, help='Whether to learn the y-axis offset in DualPath')
+    # MLP x y Offset
+    model_group.add_argument('--mlp_x_offset', type=float, default=0.0, help='X-axis offset for mlp activation functions')
+    model_group.add_argument('--mlp_y_offset', type=float, default=0.0, help='Y-axis offset for mlp activation functions')
+    model_group.add_argument('--learn_mlp_x_offset', default=False, action=argparse.BooleanOptionalAction, help='Whether to learn the x-axis offset for mlp')
+    model_group.add_argument('--learn_mlp_y_offset', default=False, action=argparse.BooleanOptionalAction, help='Whether to learn the y-axis offset for mlp')
 
     # Export Args
     ## Factored WTE

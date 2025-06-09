@@ -24,6 +24,17 @@ class OriginalMLP(nn.Module):
         # Select activation variant
         self.activation_variant = activation_dictionary[config.activation_variant](config=config)
 
+        # Add learnable or fixed offsets for the activation function
+        if config.learn_mlp_x_offset:
+            self.activation_x_offset = nn.Parameter(torch.tensor(config.mlp_x_offset))
+        else:
+            self.register_buffer("activation_x_offset", torch.tensor(config.mlp_x_offset))
+
+        if config.learn_mlp_y_offset:
+            self.activation_y_offset = nn.Parameter(torch.tensor(config.mlp_y_offset))
+        else:
+            self.register_buffer("activation_y_offset", torch.tensor(config.mlp_y_offset))
+
         # Sets the class of linear for MLP
         self.linear_variant_mlp_up = linear_dictionary[set_variant(config.linear_variant_mlp_up, config.linear_variant_mlp)]
         self.linear_variant_mlp_down = linear_dictionary[set_variant(config.linear_variant_mlp_down, config.linear_variant_mlp)]
@@ -92,7 +103,8 @@ class OriginalMLP(nn.Module):
             quant_method = self.quantization_mlp_dict["activations_quant_method"]
             x = fake_quantize_act(self, "mlp_act_activation_input", x, num_bits, quant_method, iter_num)
 
-        x = self.activation_variant(x)
+        # Apply offsets to the activation function
+        x = self.activation_variant(x - self.activation_x_offset) - self.activation_y_offset
 
         if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
             num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
@@ -132,15 +144,16 @@ class DualPathMLP(nn.Module):
         self.activation_variant = activation_dictionary[config.activation_variant](config=config)
 
         # Dual path specific parameters
-        if config.learn_dual_path_x_offset:
-            self.activation_x_offset = nn.Parameter(torch.tensor(config.dual_path_x_offset))
+        if config.learn_mlp_x_offset:
+            self.activation_x_offset = nn.Parameter(torch.tensor(config.mlp_x_offset))
         else:
-            self.register_buffer("activation_x_offset", torch.tensor(config.dual_path_x_offset))
+            self.register_buffer("activation_x_offset", torch.tensor(config.mlp_x_offset))
 
-        if config.learn_dual_path_y_offset:
-            self.activation_y_offset = nn.Parameter(torch.tensor(config.dual_path_y_offset))
+        if config.learn_mlp_y_offset:
+            self.activation_y_offset = nn.Parameter(torch.tensor(config.mlp_y_offset))
         else:
-            self.register_buffer("activation_y_offset", torch.tensor(config.dual_path_y_offset))
+            self.register_buffer("activation_y_offset", torch.tensor(config.mlp_y_offset))
+
         # Sets the class of linear for MLP
         self.linear_variant_mlp_up = linear_dictionary[set_variant(config.linear_variant_mlp_up, config.linear_variant_mlp)]
         self.linear_variant_mlp_down = linear_dictionary[set_variant(config.linear_variant_mlp_down, config.linear_variant_mlp)]
@@ -253,6 +266,17 @@ class Swiglu(nn.Module):
         # Select activation variant
         self.activation_variant = activation_dictionary[config.activation_variant](config=config)
 
+        # Add learnable or fixed offsets for the activation function
+        if config.learn_mlp_x_offset:
+            self.activation_x_offset = nn.Parameter(torch.tensor(config.mlp_x_offset))
+        else:
+            self.register_buffer("activation_x_offset", torch.tensor(config.mlp_x_offset))
+
+        if config.learn_mlp_y_offset:
+            self.activation_y_offset = nn.Parameter(torch.tensor(config.mlp_y_offset))
+        else:
+            self.register_buffer("activation_y_offset", torch.tensor(config.mlp_y_offset))
+
         # Sets the class of linear for MLP
         self.linear_variant_mlp_up = linear_dictionary[set_variant(config.linear_variant_mlp_up, config.linear_variant_mlp)]
         self.linear_variant_mlp_down = linear_dictionary[set_variant(config.linear_variant_mlp_down, config.linear_variant_mlp)]
@@ -330,7 +354,7 @@ class Swiglu(nn.Module):
             quant_method = self.quantization_mlp_dict["activations_quant_method"]
             x_in1 = fake_quantize_act(self, "mlp_act_activation_input", x_in1, num_bits, quant_method, iter_num)
 
-        x_in1 = self.activation_variant(x_in1)
+        x_in1 = self.activation_variant(x_in1 - self.activation_x_offset) - self.activation_y_offset
 
         if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
             num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
