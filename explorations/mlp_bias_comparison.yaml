@@ -5,26 +5,27 @@ parameter_groups:
   # Standard MLP - baseline sizes
   - mlp_variant: ["mlp"]
     mlp_size: [1536]
-    mlp_up_bias: [true, false]
-    mlp_down_bias: [true, false]
-    activation_variant: ["silu"]
+    mlp_up_bias: [true]
+    mlp_down_bias: [true]
+    activation_variant: ["gelu", "pfla_le"]
     learn_mlp_x_offset: [true]
     learn_mlp_y_offset: [true]
 
   # Swiglu - ~2/3 of MLP size for same param count
   - mlp_variant: ["swiglu"]
     mlp_size: [1024]
-    mlp_up_bias: [true, false]
-    mlp_down_bias: [true, false]
-    activation_variant: ["silu", "identity"]
+    mlp_up_bias: [true]
+    mlp_down_bias: [false]
+    activation_variant: ["silu", "identity", "pfla_le"]
     learn_mlp_x_offset: [true]
     learn_mlp_y_offset: [true]
 
   # DualPath - ~2/3 of MLP size for same param count
   - mlp_variant: ["dual_path"]
     mlp_size: [1024]
-    mlp_up_bias: [true, false]
-    mlp_down_bias: [true, false]
+    mlp_up_bias: [true]
+    mlp_down_bias: [true]
+    activation_variant: ["pfla_le"]
     learn_mlp_x_offset: [true]
     learn_mlp_y_offset: [true]
 
