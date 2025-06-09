@@ -66,6 +66,15 @@ def parse_args():
     # Visualizations
     parser.add_argument('--show_heatmaps', action=argparse.BooleanOptionalAction, help="Show heatmaps of top-k choices for each token")
     parser.add_argument('--show_minmax_chart', action=argparse.BooleanOptionalAction, help="Output a line chart of the chosen-token logits used for minmax colorization")
+    parser.add_argument(
+        '--softmax_threshold',
+        type=float,
+        nargs='?',
+        const=0.5, # default value if flag is present without a value
+        default=None, # default value if flag is not present
+        help="Enable softmax threshold sampling. Only considers tokens with a probability within this percentage of the top probability. "
+             "Use without a value for default 50%% (0.5), or provide one e.g. '--softmax_threshold 0.2'. Overrides --top_k.")
+
 
 
 
@@ -198,60 +207,94 @@ def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
         text.append(token_str, style=f"bold #{r:02x}{g:02x}00")
     return text
 
-def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, selected_token, top_k_value):
+def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, selected_token, top_k_value, args):
     """
-    Generates and saves a chart (heatmap or barchart) of token probabilities for a single generation step.
-    This corrected version plots only the top-k most probable tokens based on the generation setting.
+    Generates and saves a chart of token probabilities for a single generation step.
+
+    This function adapts its visualization based on the sampling method specified in `args`.
+    - If `softmax_threshold` is used, it visualizes the actual pool of candidate tokens.
+    - If `top_k` is used, it visualizes the top `k` most likely tokens.
+
+    Args:
+        probs (torch.Tensor): The final probability distribution tensor (shape: 1, vocab_size)
+                              used for sampling the next token.
+        idx (torch.Tensor): The tensor of all generated token IDs so far.
+        decode (function): A function to decode a list of token IDs into a string.
+        step (int): The current generation step number.
+        out_dir (str): The base output directory to save charts into.
+        last_k_tokens (int): The number of recent tokens to show in the chart's context label.
+        chart_type (str): The type of chart to generate ('heatmap' or 'barchart').
+        selected_token (str): The string representation of the token that was actually chosen.
+        top_k_value (int or None): The `k` value used for top-k sampling.
+        args (argparse.Namespace): The command-line arguments, used to check the sampling mode.
     """
-    # Use the top_k value from generation, with a sensible default if it's None.
-    # Ensure k_to_plot does not exceed the vocabulary size.
+    # --- 1. Determine Visualization Parameters based on Sampling Mode ---
     vocab_size = probs.size(-1)
-    k_to_plot = top_k_value
-    k_to_plot = min(k_to_plot, vocab_size)
+    chart_title = ""
+    num_candidates = 0
 
+    if args.softmax_threshold is not None:
+        # Mode: Softmax Threshold Sampling
+        # Visualize the actual candidate pool (tokens with non-zero probability).
+        num_candidates = torch.count_nonzero(probs).item()
+        # Cap the number of plotted tokens for readability.
+        k_to_plot = min(num_candidates, 60)
+        chart_title = f"Top {k_to_plot} of {num_candidates} Candidates (Softmax Threshold)"
+    else:
+        # Mode: Top-K or No Sampling Truncation
+        # Use the provided top_k_value to determine how many tokens to show.
+        k_to_plot = top_k_value
+        if k_to_plot is None:
+            # If no top_k was specified, use a reasonable default for visualization.
+            k_to_plot = 40
+        k_to_plot = min(k_to_plot, vocab_size)
+        chart_title = f"Top-{k_to_plot} Probabilities (Top-K Setting: {top_k_value})"
 
-    # Get the top k probabilities and indices from the probability distribution.
-    # `probs` has shape (1, vocab_size), so we flatten it.
+    # --- 2. Prepare Data for Plotting ---
+    # Get the top k probabilities and their corresponding indices from the final distribution.
+    # This works for both modes because we want to see the most likely candidates.
     top_probs, top_indices = torch.topk(probs.flatten(), k=k_to_plot)
-
-    # Decode the token indices to get their string representation.
     top_tokens = [decode([i.item()]) for i in top_indices]
 
-    # Create the plot with a larger figure size for readability.
+    # --- 3. Generate and Save the Chart ---
     plt.figure(figsize=(16, 9))
 
     if chart_type == 'heatmap':
-        # For a heatmap, show the top k_to_plot tokens and their probabilities.
         annot_data = np.array(top_tokens).reshape(1, -1)
-        sns.heatmap(top_probs.cpu().numpy().reshape(1, -1), annot=annot_data, fmt='', cmap='viridis', cbar_kws={'label': 'Probability'})
-        plt.yticks([]) # Hide y-axis ticks as they are not meaningful here.
-        plt.title(f"Step {step}: Top-{k_to_plot} Token Probabilities (Heatmap from Top-K setting: {top_k_value})")
+        sns.heatmap(
+            top_probs.cpu().numpy().reshape(1, -1),
+            annot=annot_data,
+            fmt='',
+            cmap='viridis',
+            cbar_kws={'label': 'Probability'}
+        )
+        plt.yticks([])  # Hide y-axis ticks as they are not meaningful here.
+        plt.title(f"Step {step}: {chart_title} (Heatmap)")
 
     elif chart_type == 'barchart':
-        # For a barchart (histogram), plot the probabilities for the top tokens.
         colors = sns.color_palette('viridis', n_colors=k_to_plot)
         bars = plt.bar(top_tokens, top_probs.cpu().numpy(), color=colors)
         plt.ylabel("Probability")
-        plt.ylim(0.0, 1.0) # Set y-axis from 0.0 to 1.0 for probabilities
-        plt.xticks(rotation=45, ha="right") # Rotate labels to prevent overlap.
+        plt.ylim(0.0, 1.0)  # Ensure a consistent y-axis scale for probabilities.
+        plt.xticks(rotation=45, ha="right")  # Prevent x-axis label overlap.
 
         # Highlight the bar for the token that was actually selected.
         try:
-            # Find the selected token within the top-k list.
             selected_token_index = top_tokens.index(selected_token)
             bars[selected_token_index].set_edgecolor('red')
             bars[selected_token_index].set_linewidth(2)
         except ValueError:
             # This can happen if the selected token is not in the top k_to_plot,
-            # especially with high temperature or if k used for sampling is > k_to_plot.
+            # which is unlikely but possible with unusual settings.
             print(f"Note: Selected token '{selected_token}' not in top {k_to_plot} for visualization at step {step}.")
-        plt.title(f"Step {step}: Top-{k_to_plot} Token Probabilities (Bar Chart from Top-K setting: {top_k_value})")
+        plt.title(f"Step {step}: {chart_title} (Bar Chart)")
 
-    # Add a more descriptive x-axis label.
+    # Add a descriptive x-axis label showing the recent generation context.
     last_tokens_decoded = decode(idx[0, -last_k_tokens:].tolist())
-    plt.xlabel(f"Top Token Candidates (Context: ...{last_tokens_decoded})")
+    plt.xlabel(f"Token Candidates (Context: ...{last_tokens_decoded})")
 
-    # Save the figure to a dedicated 'charts' subdirectory.
+    # --- 4. Save to File ---
+    # Ensure the 'charts' subdirectory exists.
     charts_dir = os.path.join(out_dir, 'charts')
     os.makedirs(charts_dir, exist_ok=True)
 
@@ -259,9 +302,10 @@ def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, sel
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     out_path = os.path.join(charts_dir, f"step_{step}_{timestamp}.png")
 
-    plt.tight_layout() # Adjust layout to prevent labels from being cut off.
+    plt.tight_layout()  # Adjust layout to prevent labels from being cut off.
     plt.savefig(out_path)
-    plt.close()
+    plt.close()  # Close the plot to free up memory.
+
 
 def save_minmax_timeseries_chart(logit_values, out_dir, k_tag, sample_idx):
     """
@@ -369,11 +413,19 @@ def sample_with_existing_model(
         "minmax" | "softmax" | "softmax_top_k" | **"rank"** | "all"
     """
 
-    # 1. normalise `top_k` into a deduplicated list
-    if top_k is None or isinstance(top_k, int):
-        k_values: List[Optional[int]] = [top_k]
+    console = Console()
+
+    # Determine sampling strategy. Softmax threshold overrides top_k.
+    if args.softmax_threshold is not None:
+        console.print(f"[yellow]Info:[/yellow] Using softmax threshold sampling ({args.softmax_threshold:.2f}). --top_k will be ignored.")
+        # Force the loop to run once with a null k-value
+        k_values: List[Optional[int]] = [None]
     else:
-        k_values = list(dict.fromkeys(top_k))
+    # Use the standard top_k logic
+        if top_k is None or isinstance(top_k, int):
+            k_values: List[Optional[int]] = [top_k]
+        else:
+            k_values = list(dict.fromkeys(top_k)) # Deduplicate
 
     console = Console()
     model.eval()
@@ -382,7 +434,12 @@ def sample_with_existing_model(
     modes_to_apply = valid_modes if colorize_mode == "all" else [colorize_mode]
 
     for current_k in k_values:
-        k_tag = "no_topk" if current_k is None else f"{current_k}"
+        # Set a tag for logging/filenames based on the active sampling mode
+        if args.softmax_threshold is not None:
+            k_tag = f"sm_thresh_{args.softmax_threshold:.2f}"
+        else:
+            k_tag = "no_topk" if current_k is None else f"top_k_{current_k}"
+
 
         for sample_idx in range(num_samples):
             # ------------- LSV per-sample section -------------------
@@ -424,13 +481,39 @@ def sample_with_existing_model(
                     logits = logits[:, -1, :] / temperature
                     full_row = logits[0].clone()               # pre-mask
 
-                    if current_k is not None:
-                        v, _ = torch.topk(logits, min(current_k, logits.size(-1)))
-                        logits[logits < v[:, [-1]]] = -float("inf")
+                    # Apply the selected truncation logic
+                    if args.softmax_threshold is not None:
+                        # Calculate probabilities and find the threshold
+                        probs = F.softmax(logits, dim=-1)
+                        max_prob = torch.max(probs)
+                        prob_threshold = max_prob * args.softmax_threshold
+                        # Set probabilities of tokens below the threshold to 0
+                        probs[probs < prob_threshold] = 0
+
 
                     topk_row = logits[0].clone()               # post-mask
-                    probs = F.softmax(logits, dim=-1)
-                    idx_next = torch.multinomial(probs, num_samples=1)
+                    if args.softmax_threshold is not None:
+                        # Calculate probabilities and find the threshold
+                        probs = F.softmax(logits, dim=-1)
+                        max_prob = torch.max(probs)
+                        prob_threshold = max_prob * args.softmax_threshold
+                        # Set probabilities of tokens below the threshold to 0
+                        probs[probs < prob_threshold] = 0
+                        # Sample from the modified, unnormalized distribution of probabilities
+                        idx_next = torch.multinomial(probs, num_samples=1)
+                        # For colorization, we can still use the unmasked logits
+                        topk_row = logits[0].clone()
+                    elif current_k is not None:
+                        v, _ = torch.topk(logits, min(current_k, logits.size(-1)))
+                        logits[logits < v[:, [-1]]] = -float("inf")
+                        topk_row = logits[0].clone()               # post-mask
+                        probs = F.softmax(logits, dim=-1) # Re-softmax after masking
+                        idx_next = torch.multinomial(probs, num_samples=1)
+                    else: # No truncation / default case
+                        topk_row = logits[0].clone()
+                        probs = F.softmax(logits, dim=-1)
+                        idx_next = torch.multinomial(probs, num_samples=1)
+
                     x = torch.cat((x, idx_next), dim=1)
 
                     if colorize_output:
@@ -456,6 +539,8 @@ def sample_with_existing_model(
                             chart_type,
                             sel_txt,
                             current_k,
+                            args,
+
                         )
 
             # ---------- save minmax chart if requested ----------------------
