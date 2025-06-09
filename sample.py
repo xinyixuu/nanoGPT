@@ -65,6 +65,8 @@ def parse_args():
 
     # Visualizations
     parser.add_argument('--show_heatmaps', action=argparse.BooleanOptionalAction, help="Show heatmaps of top-k choices for each token")
+    parser.add_argument('--show_minmax_chart', action=argparse.BooleanOptionalAction, help="Output a line chart of the chosen-token logits used for minmax colorization")
+
 
 
     # Steering Vector Related
@@ -261,6 +263,40 @@ def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, sel
     plt.savefig(out_path)
     plt.close()
 
+def save_minmax_timeseries_chart(logit_values, out_dir, k_tag, sample_idx):
+    """
+    Generates and saves a line chart of chosen-token logits over time.
+    """
+    # Ensure there's data to plot
+    if not logit_values:
+        return
+
+    # Convert list of single-item tensors to a numpy array
+    logits_np = torch.tensor(logit_values).cpu().numpy()
+    steps = np.arange(len(logits_np))
+
+    plt.figure(figsize=(16, 9))
+
+    plt.plot(steps, logits_np, marker='o', linestyle='-', label=f'Sample {sample_idx+1}, Top-K: {k_tag}')
+
+    # The Y-axis is automatically scaled by matplotlib to the min and max of the data
+    plt.ylabel("Raw Logit Value")
+    plt.xlabel("Generation Step")
+    plt.title(f"Chosen Token Logits Over Time (for Min-Max Scaling)")
+    plt.grid(True)
+    plt.legend()
+
+    # Save the figure to the 'charts' subdirectory
+    charts_dir = os.path.join(out_dir, 'charts')
+    os.makedirs(charts_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    out_path = os.path.join(charts_dir, f"minmax_logits_k{k_tag}_sample{sample_idx+1}_{timestamp}.png")
+
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+
 def _colorize_rank(
     token_ids: List[int],
     ranks: List[int],
@@ -421,6 +457,12 @@ def sample_with_existing_model(
                             sel_txt,
                             current_k,
                         )
+
+            # ---------- save minmax chart if requested ----------------------
+            if args.show_minmax_chart and scalar_rows:
+                save_minmax_timeseries_chart(
+                    scalar_rows, out_dir, k_tag, sample_idx
+                )
 
             # ---------- decode plain text -----------------------------------
             plain_text = decode(x[0].tolist())
