@@ -56,7 +56,7 @@ def parse_args():
     parser.add_argument('--print_model_info', default=True, action=argparse.BooleanOptionalAction, help="print info about model before infernece")
 
     # Output Confidence
-    parser.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k', 'rank', 'all'],
+    parser.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k', 'rank', 'dot_product',  'all'],
                         help="Mode to colorize text: 'minmax' (default), 'softmax', or 'softmax_top_k' for softmax only over the top k vals. "
                         "Requires --colorize_output (enabled by default).")
     parser.add_argument('--colorize_output', default=False, action=argparse.BooleanOptionalAction,
@@ -163,12 +163,13 @@ def append_to_sample_file(sample_file, output_line, start_token, k_tag, iter_num
 
         file.write(header + output_line + '\n\n')
 
-def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
+def colorize_text(tokens, data_for_color, decode, colorize_mode='minmax'):
+
     """
     Colorizes each token according to one of two modes:
-      - 'minmax': raw_logits is a 1D list/array of chosen-token logits.
+      - 'minmax': data_for_color is a 1D list/array of chosen-token logits.
                   We min-max normalize them across time, then map to R->G colors.
-      - 'softmax': raw_logits is a 2D list/array (T, vocab_size) containing
+      - 'softmax': data_for_color is a 2D list/array (T, vocab_size) containing
                    the *full* distribution at each step. We extract the chosen
                    token's probability for each step, then min-max normalize.
     """
@@ -177,10 +178,11 @@ def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
     norm_values = None
 
     if colorize_mode == 'softmax' or colorize_mode == 'softmax_top_k':
-        # raw_logits is shape (T, vocab_size) per step
+        # data_for_color is shape (T, vocab_size) per step
         # gather the chosen token’s probability each step
         # then apply min–max to those probabilities
-        dist_tensor = torch.stack(raw_logits, dim=0)  # shape (T, vocab_size)
+        dist_tensor = torch.stack(data_for_color, dim=0)  # shape (T, vocab_size)
+
         chosen_probs = []
         for i, dist_row in enumerate(dist_tensor):
             # print(dist_row)
@@ -192,9 +194,9 @@ def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
 
         norm_values = values
 
-    if colorize_mode == 'minmax':
-        # raw_logits is shape (T,) with each chosen-token logit
-        values = torch.tensor(raw_logits, dtype=torch.float32)
+    if colorize_mode == 'minmax' or colorize_mode == 'dot_product':
+        # data_for_color is shape (T,) with each chosen-token score (logit or dot product)
+        values = torch.tensor(data_for_color, dtype=torch.float32)
 
         # Normalize the chosen values (probabilities or logits) to [0..1]
         norm_values = (values - values.min()) / (values.max() - values.min() + 1e-6)
@@ -410,14 +412,16 @@ def sample_with_existing_model(
         • None  – no truncation.
         • list  – run once per k in the list (duplicates filtered).
     colorize_mode :
-        "minmax" | "softmax" | "softmax_top_k" | **"rank"** | "all"
+        "minmax" | "softmax" | "softmax_top_k" | "dot_product" | **"rank"** | "all"
     """
 
     console = Console()
 
+    softmax_threshold = args.softmax_threshold
+
     # Determine sampling strategy. Softmax threshold overrides top_k.
-    if args.softmax_threshold is not None:
-        console.print(f"[yellow]Info:[/yellow] Using softmax threshold sampling ({args.softmax_threshold:.2f}). --top_k will be ignored.")
+    if softmax_threshold is not None:
+        console.print(f"[yellow]Info:[/yellow] Using softmax threshold sampling ({softmax_threshold:.2f}). --top_k will be ignored.")
         # Force the loop to run once with a null k-value
         k_values: List[Optional[int]] = [None]
     else:
@@ -430,13 +434,14 @@ def sample_with_existing_model(
     console = Console()
     model.eval()
 
-    valid_modes = ["minmax", "softmax", "softmax_top_k", "rank"]
+    valid_modes = ["minmax", "softmax", "softmax_top_k", "dot_product", "rank"]
     modes_to_apply = valid_modes if colorize_mode == "all" else [colorize_mode]
+
 
     for current_k in k_values:
         # Set a tag for logging/filenames based on the active sampling mode
-        if args.softmax_threshold is not None:
-            k_tag = f"sm_thresh_{args.softmax_threshold:.2f}"
+        if softmax_threshold is not None:
+            k_tag = f"sm_thresh_{softmax_threshold:.2f}"
         else:
             k_tag = "no_topk" if current_k is None else f"top_k_{current_k}"
 
@@ -485,21 +490,21 @@ def sample_with_existing_model(
 
 
                     # Apply the selected truncation logic
-                    if args.softmax_threshold is not None:
+                    if softmax_threshold is not None:
                         # Calculate probabilities and find the threshold
                         probs = F.softmax(logits, dim=-1)
                         max_prob = torch.max(probs)
-                        prob_threshold = max_prob * args.softmax_threshold
+                        prob_threshold = max_prob * softmax_threshold
                         # Set probabilities of tokens below the threshold to 0
                         probs[probs < prob_threshold] = 0
 
 
                     topk_row = logits[0].clone()               # post-mask
-                    if args.softmax_threshold is not None:
+                    if softmax_threshold is not None:
                         # Calculate probabilities and find the threshold
                         probs = F.softmax(logits, dim=-1)
                         max_prob = torch.max(probs)
-                        prob_threshold = max_prob * args.softmax_threshold
+                        prob_threshold = max_prob * softmax_threshold
                         # Set probabilities of tokens below the threshold to 0
                         probs[probs < prob_threshold] = 0
                         # Sample from the modified, unnormalized distribution of probabilities
@@ -561,33 +566,42 @@ def sample_with_existing_model(
 
             # ---------- colourised outputs ----------------------------------
             if colorize_output:
+                # --- Pre-calculate any special data sources for colorization ---
+                dot_product_values = None
+                if 'dot_product' in modes_to_apply and len(tokens_for_color) > 1:
+                    dot_product_values = [0.0] # First token has no prior, assign neutral value.
+                    embedding_matrix = model.transformer.wte.weight
+                    for i in range(1, len(tokens_for_color)):
+                        prev_embedding = embedding_matrix[tokens_for_color[i-1]]
+                        current_embedding = embedding_matrix[tokens_for_color[i]]
+                        dot_product_values.append(torch.dot(prev_embedding, current_embedding).item())
+
                 for cm in modes_to_apply:
+                    # Select the appropriate data source for the current colorization mode
+                    data_for_color = None
                     if cm == "minmax":
-                        logits_for_color = scalar_rows
-                        coloured = colorize_text(              # type: ignore
-                            tokens_for_color,
-                            logits_for_color,
-                            decode,
-                            colorize_mode=cm,
-                        )
+                        data_for_color = scalar_rows
                     elif cm == "softmax":
-                        coloured = colorize_text(              # type: ignore
-                            tokens_for_color,
-                            full_rows,
-                            decode,
-                            colorize_mode=cm,
-                        )
+                        data_for_color = full_rows
                     elif cm == "softmax_top_k":
-                        coloured = colorize_text(              # type: ignore
-                            tokens_for_color,
-                            topk_rows,
-                            decode,
-                            colorize_mode=cm,
-                        )
-                    else:  # "rank"
-                        coloured = _colorize_rank(
-                            tokens_for_color, ranks_list, decode, current_k
-                        )
+                        data_for_color = topk_rows
+                    elif cm == "dot_product":
+                        data_for_color = dot_product_values
+
+                    if data_for_color is not None:
+                         coloured = colorize_text(              # type: ignore
+                             tokens_for_color,
+                             data_for_color,
+                             decode,
+                             colorize_mode=cm,
+                         )
+                    elif cm == "rank":
+                         coloured = _colorize_rank(
+                             tokens_for_color, ranks_list, decode, current_k
+                         )
+                    else:
+                        continue # Should not happen if data_for_color is None
+
 
                     fgcolor="bold light_slate_blue"
                     bgcolor="bold cyan"
@@ -619,8 +633,6 @@ def sample_with_existing_model(
                     best_val_loss,
                     f"{run_name}_{k_tag}" if run_name else k_tag,
                 )
-
-
 
 
 def interactive_generation(model, start_ids, device, max_new_tokens, temperature, top_k, stop_string, decode, encode):

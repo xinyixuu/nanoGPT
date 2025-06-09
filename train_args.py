@@ -309,6 +309,7 @@ def parse_args():
     training_group.add_argument('--colorize_output', default=True, action=argparse.BooleanOptionalAction, help="Colorize tokens based on predicted probabilities.")
     training_group.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k', 'rank', 'all'], help="Colorization mode for tokens (see sample.py).")
     training_group.add_argument('--show_heatmaps', default=False, action=argparse.BooleanOptionalAction, help="Show heatmaps (or bar charts) of top-k token probabilities.")
+    training_group.add_argument('--show_minmax_chart', default=False, action=argparse.BooleanOptionalAction, help="show timeseries of raw logit values")
     training_group.add_argument('--chart_type', type=str, default='heatmap', choices=['heatmap', 'barchart'], help="Type of chart to display if --show_heatmaps is set.")
     training_group.add_argument('--last_k_tokens', type=int, default=10, help="Number of last tokens to display in heatmaps or bar charts.")
     training_group.add_argument('--sample_file', type=str, default="sample.txt", help="Output file for inference samples (if you want to save them).")
@@ -316,6 +317,7 @@ def parse_args():
     training_group.add_argument('--num_samples', type=int, default=1, help="Number of generated samples during sampling.")
     training_group.add_argument('--temperature', type=float, default=0.8, help="Temperature for predictions (1.0 = normal, < 1.0 = less random).")
     training_group.add_argument('--top_k', type=int, nargs='+', default=[1, 2, 5, 10], help="Retain only the top_k most likely tokens (used in sample.py).")
+    training_group.add_argument('--softmax_threshold', type=float, nargs='?', const=0.5, default=None, help="Enable softmax threshold sampling. Only considers tokens with a probability within this percentage of the top probability. Use without a value for default 50%% (0.5), or provide one e.g. '--softmax_threshold 0.2'. Overrides --top_k.")
     training_group.add_argument('--eval_dataset', type=str, default=None, help="Optional dataset name for custom evaluation splits.")
     training_group.add_argument('--quantization_data_file', type=str, default=None, help="If set, export quantized weights/activations to a specified file (pkl).")
 
