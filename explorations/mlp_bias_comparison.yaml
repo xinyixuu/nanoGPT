@@ -4,27 +4,31 @@
 parameter_groups:
   # Standard MLP - baseline sizes
   - mlp_variant: ["mlp"]
-    mlp_size: [768]
+    mlp_size: [1536]
     mlp_up_bias: [true, false]
     mlp_down_bias: [true, false]
+    activation_variant: ["silu"]
 
   # Swiglu - ~2/3 of MLP size for same param count
   - mlp_variant: ["swiglu"]
-    mlp_size: [512]
+    mlp_size: [1024]
     mlp_up_bias: [true, false]
     mlp_down_bias: [true, false]
+    activation_variant: ["silu", "identity"]
 
   # DualPath - ~2/3 of MLP size for same param count
   - mlp_variant: ["dual_path"]
-    mlp_size: [512]
+    mlp_size: [1024]
     mlp_up_bias: [true, false]
     mlp_down_bias: [true, false]
+    learn_dual_path_x_offset: [true]
+    learn_dual_path_y_offset: [true]
 
 # base hyperparameters (defaults)
-block_size: [256]
-n_layer: [6]
-n_head: [6]
-n_embd: [384]
+block_size: [512]
+n_layer: [12]
+n_head: [12]
+n_embd: [768]
 bias: [false]
 
 # pos embeddings
