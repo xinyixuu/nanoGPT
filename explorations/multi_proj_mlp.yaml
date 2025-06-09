@@ -22,6 +22,7 @@ compile: [true]
 # Logging settings
 eval_interval: [10000]
 max_iters: [10000]
+eta_variant: ["iteration"]
 
 # Positional embeddings
 use_rotary_embeddings: [true]
@@ -32,4 +33,5 @@ seed:
   range:
     start: 1337
     end: 1339
-    step: 1 
+    step: 1
+
