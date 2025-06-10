@@ -310,6 +310,7 @@ def parse_args():
     training_group.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k', 'rank', 'all'], help="Colorization mode for tokens (see sample.py).")
     training_group.add_argument('--show_minmax_chart', default=False, action=argparse.BooleanOptionalAction, help="Show timeseries for minmax")
     training_group.add_argument('--show_heatmaps', default=False, action=argparse.BooleanOptionalAction, help="Show heatmaps (or bar charts) of top-k token probabilities.")
+    training_group.add_argument('--show_minmax_chart', default=False, action=argparse.BooleanOptionalAction, help="show timeseries of raw logit values")
     training_group.add_argument('--chart_type', type=str, default='heatmap', choices=['heatmap', 'barchart'], help="Type of chart to display if --show_heatmaps is set.")
     training_group.add_argument('--last_k_tokens', type=int, default=10, help="Number of last tokens to display in heatmaps or bar charts.")
     training_group.add_argument('--sample_file', type=str, default="sample.txt", help="Output file for inference samples (if you want to save them).")
@@ -318,6 +319,15 @@ def parse_args():
     training_group.add_argument('--temperature', type=float, default=0.8, help="Temperature for predictions (1.0 = normal, < 1.0 = less random).")
     training_group.add_argument('--top_k', type=int, nargs='+', default=[1, 2, 5, 10], help="Retain only the top_k most likely tokens (used in sample.py).")
     training_group.add_argument('--softmax_threshold', type=float, default=None, help="Retain only the top_k most likely tokens (used in sample.py).")
+    training_group.add_argument(
+        '--cosine_penalty',
+        type=float,
+        nargs='*',
+        default=None,
+        help="Apply a penalty to logits based on cosine similarity to recent tokens. "
+             "Use alone for defaults (N=5, alpha=1.0). "
+             "Optionally provide lookback window N and penalty strength alpha. Ex: --cosine_penalty 5 1.5"
+    )
     training_group.add_argument('--eval_dataset', type=str, default=None, help="Optional dataset name for custom evaluation splits.")
     training_group.add_argument('--quantization_data_file', type=str, default=None, help="If set, export quantized weights/activations to a specified file (pkl).")
 
@@ -390,7 +400,6 @@ def parse_args():
     model_group.add_argument("--mlp_variant", type=str, default="mlp", choices=mlp_variants, help="MLP variation type")
     model_group.add_argument("--mlp_expansion_factor", type=int, default=4, help="If MLP like variant is used, set the expansion factor for the linear transformations, default is 4.")
     model_group.add_argument("--mlp_size", type=int, default=None, help="If not None, is used instead of mlp_expansion_factor")
-    model_group.add_argument("--mlp_size_layerlist", nargs='+', action=LayerListAction, default=None, help="Override mlp_size per layer, cycling through the list. " "Example: --mlp_size_layerlist 100 200 300")
     model_group.add_argument('--mlp_res', default=False, action=argparse.BooleanOptionalAction)
 
     ## KAN Options
@@ -486,14 +495,10 @@ def parse_args():
     model_group.add_argument("--pla_right_bound", type=float, default=2.0)
 
     ## PiecewiseFullyLearnableActivation - pfla
-    model_group.add_argument("--pfla_num_points", type=int, default=200)
-    model_group.add_argument("--pfla_left_bound", type=float, default=-100.0)
-    model_group.add_argument("--pfla_right_bound", type=float, default=100.0)
+    model_group.add_argument("--pfla_num_points", type=int, default=50)
+    model_group.add_argument("--pfla_left_bound", type=float, default=-10.0)
+    model_group.add_argument("--pfla_right_bound", type=float, default=10.0)
 
-    ## PiecewiseFullyLearnableActivationLearnedEnds - pflale
-    model_group.add_argument("--pfla_le_num_points",   type=int,  default=30)
-    model_group.add_argument("--pfla_le_left_bound",  type=float, default=-10.0)
-    model_group.add_argument("--pfla_le_right_bound", type=float, default=10.0)
 
     ## LearnedSplineActivation - lsa
     model_group.add_argument("--lsa_num_knots", type=int, default=30)
@@ -552,6 +557,12 @@ def parse_args():
     model_group.add_argument("--mod_fn",       type=str, default="cooperation",
                         choices=["cooperation","tm1","tm2","tm3","tm4"],
                         help="which MOD transfer-function to use")
+
+    # LayerLists
+    model_group.add_argument("--n_qk_head_dim_layerlist", nargs='+', action=LayerListAction, default=None)
+    model_group.add_argument("--n_head_layerlist", nargs='+', action=LayerListAction, default=None, help="Override n_head per layer, cycling through the list.")
+    model_group.add_argument("--mlp_size_layerlist", nargs='+', action=LayerListAction, default=None, help="Override mlp_size per layer, cycling through the list. " "Example: --mlp_size_layerlist 100 200 300")
+    model_group.add_argument("--n_v_head_dim_layerlist", nargs='+', action=LayerListAction, default=None)
 
     ## Infinite Attention variation
     model_group.add_argument('--n_qk_head_dim', default=None, type=int)

@@ -55,8 +55,19 @@ def parse_args():
     parser.add_argument('--token_boundary', type=str, default=None, help="optional separator between emitted tokens")
     parser.add_argument('--print_model_info', default=True, action=argparse.BooleanOptionalAction, help="print info about model before infernece")
 
+    parser.add_argument(
+        '--cosine_penalty',
+        type=float,
+        nargs='*',
+        default=None,
+        help="Apply a penalty to logits based on cosine similarity to recent tokens. "
+            "Use alone for defaults (N=5, alpha=1.0). "
+             "Optionally provide lookback window N and penalty strength alpha. Ex: --cosine_penalty 5 1.5"
+    )
+
+
     # Output Confidence
-    parser.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k', 'rank', 'all'],
+    parser.add_argument('--colorize_mode', type=str, default='minmax', choices=['minmax', 'softmax', 'softmax_top_k', 'rank', 'dot_product',  'all'],
                         help="Mode to colorize text: 'minmax' (default), 'softmax', or 'softmax_top_k' for softmax only over the top k vals. "
                         "Requires --colorize_output (enabled by default).")
     parser.add_argument('--colorize_output', default=False, action=argparse.BooleanOptionalAction,
@@ -163,12 +174,13 @@ def append_to_sample_file(sample_file, output_line, start_token, k_tag, iter_num
 
         file.write(header + output_line + '\n\n')
 
-def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
+def colorize_text(tokens, data_for_color, decode, colorize_mode='minmax'):
+
     """
     Colorizes each token according to one of two modes:
-      - 'minmax': raw_logits is a 1D list/array of chosen-token logits.
+      - 'minmax': data_for_color is a 1D list/array of chosen-token logits.
                   We min-max normalize them across time, then map to R->G colors.
-      - 'softmax': raw_logits is a 2D list/array (T, vocab_size) containing
+      - 'softmax': data_for_color is a 2D list/array (T, vocab_size) containing
                    the *full* distribution at each step. We extract the chosen
                    token's probability for each step, then min-max normalize.
     """
@@ -177,10 +189,11 @@ def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
     norm_values = None
 
     if colorize_mode == 'softmax' or colorize_mode == 'softmax_top_k':
-        # raw_logits is shape (T, vocab_size) per step
+        # data_for_color is shape (T, vocab_size) per step
         # gather the chosen token’s probability each step
         # then apply min–max to those probabilities
-        dist_tensor = torch.stack(raw_logits, dim=0)  # shape (T, vocab_size)
+        dist_tensor = torch.stack(data_for_color, dim=0)  # shape (T, vocab_size)
+
         chosen_probs = []
         for i, dist_row in enumerate(dist_tensor):
             # print(dist_row)
@@ -192,9 +205,9 @@ def colorize_text(tokens, raw_logits, decode, colorize_mode='minmax'):
 
         norm_values = values
 
-    if colorize_mode == 'minmax':
-        # raw_logits is shape (T,) with each chosen-token logit
-        values = torch.tensor(raw_logits, dtype=torch.float32)
+    if colorize_mode == 'minmax' or colorize_mode == 'dot_product':
+        # data_for_color is shape (T,) with each chosen-token score (logit or dot product)
+        values = torch.tensor(data_for_color, dtype=torch.float32)
 
         # Normalize the chosen values (probabilities or logits) to [0..1]
         norm_values = (values - values.min()) / (values.max() - values.min() + 1e-6)
@@ -307,26 +320,27 @@ def save_chart(probs, idx, decode, step, out_dir, last_k_tokens, chart_type, sel
     plt.close()  # Close the plot to free up memory.
 
 
-def save_minmax_timeseries_chart(logit_values, out_dir, k_tag, sample_idx):
+def save_raw_logits_chart(raw_logit_values, out_dir, k_tag, sample_idx):
     """
-    Generates and saves a line chart of chosen-token logits over time.
+    Generates and saves a line chart of the raw, pre-temperature chosen-token logits over time.
     """
     # Ensure there's data to plot
-    if not logit_values:
+    if not raw_logit_values:
         return
 
     # Convert list of single-item tensors to a numpy array
-    logits_np = torch.tensor(logit_values).cpu().numpy()
+    logits_np = torch.tensor(raw_logit_values).cpu().numpy()
+
     steps = np.arange(len(logits_np))
 
     plt.figure(figsize=(16, 9))
 
-    plt.plot(steps, logits_np, marker='o', linestyle='-', label=f'Sample {sample_idx+1}, Top-K: {k_tag}')
+    plt.plot(steps, logits_np, marker='o', linestyle='-', label=f'Sample {sample_idx+1}, K-Setting: {k_tag}')
 
     # The Y-axis is automatically scaled by matplotlib to the min and max of the data
-    plt.ylabel("Raw Logit Value")
+    plt.ylabel("Raw Model Logit (Pre-Temperature)")
     plt.xlabel("Generation Step")
-    plt.title(f"Chosen Token Logits Over Time (for Min-Max Scaling)")
+    plt.title(f"Raw Chosen-Token Model Logits Over Time")
     plt.grid(True)
     plt.legend()
 
@@ -335,7 +349,7 @@ def save_minmax_timeseries_chart(logit_values, out_dir, k_tag, sample_idx):
     os.makedirs(charts_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    out_path = os.path.join(charts_dir, f"minmax_logits_k{k_tag}_sample{sample_idx+1}_{timestamp}.png")
+    out_path = os.path.join(charts_dir, f"raw_logits_k{k_tag}_sample{sample_idx+1}_{timestamp}.png")
 
     plt.tight_layout()
     plt.savefig(out_path)
@@ -410,7 +424,7 @@ def sample_with_existing_model(
         • None  – no truncation.
         • list  – run once per k in the list (duplicates filtered).
     colorize_mode :
-        "minmax" | "softmax" | "softmax_top_k" | **"rank"** | "all"
+        "minmax" | "softmax" | "softmax_top_k" | "dot_product" | **"rank"** | "all"
     """
 
     console = Console()
@@ -430,8 +444,9 @@ def sample_with_existing_model(
     console = Console()
     model.eval()
 
-    valid_modes = ["minmax", "softmax", "softmax_top_k", "rank"]
+    valid_modes = ["minmax", "softmax", "softmax_top_k", "dot_product", "rank"]
     modes_to_apply = valid_modes if colorize_mode == "all" else [colorize_mode]
+
 
     for current_k in k_values:
         # Set a tag for logging/filenames based on the active sampling mode
@@ -443,6 +458,8 @@ def sample_with_existing_model(
 
         for sample_idx in range(num_samples):
             # ------------- LSV per-sample section -------------------
+            kl_divergences = [] # To store the impact of the cosine penalty
+
             if args is not None:
                 if args.use_lsv:
                     model.set_lsv_index(sample_idx % args.lsv_size)
@@ -466,6 +483,7 @@ def sample_with_existing_model(
             tokens_for_color: List[int] = []
             full_rows: List[torch.Tensor] = []
             topk_rows: List[torch.Tensor] = []
+            pre_temp_scalar_rows: List[torch.Tensor] = []
             scalar_rows: List[torch.Tensor] = []
             ranks_list: List[int] = []  # NEW
 
@@ -477,9 +495,45 @@ def sample_with_existing_model(
                         else x[:, -model.config.block_size :]
                     )
 
-                    logits, _ = model(idx_cond)
-                    logits = logits[:, -1, :] / temperature
+                    model_logits, _ = model(idx_cond)
+                    raw_logits_row = model_logits[:, -1, :]      # Raw logits from model
+
+                    # --- Apply Cosine Similarity Penalty (if enabled) ---
+                    if args.cosine_penalty is not None:
+                        N = 5 if len(args.cosine_penalty) < 1 else int(args.cosine_penalty[0])
+                        alpha = 1.0 if len(args.cosine_penalty) < 2 else args.cosine_penalty[1]
+
+                        # Calculate original probabilities for comparison
+                        probs_before = F.softmax(raw_logits_row / temperature, dim=-1)
+
+
+                        # Apply penalty as long as there are tokens in the context and N > 0
+                        if x.size(1) > 0 and N > 0:
+                            # Python's negative slicing gracefully handles cases where x.size(1) < N
+                            last_n_tokens = x[0, -N:]
+
+                            embedding_matrix = model.transformer.wte.weight
+
+                            # Normalize embeddings
+                            last_n_embeds = F.normalize(embedding_matrix[last_n_tokens], p=2, dim=1)
+                            all_embeds = F.normalize(embedding_matrix, p=2, dim=1)
+
+                            # Calculate max cosine similarity for each candidate against the last N tokens
+                            sim_matrix = torch.matmul(all_embeds, last_n_embeds.T)
+                            max_sim_per_candidate, _ = torch.max(sim_matrix, dim=1)
+                            penalty = alpha * max_sim_per_candidate
+                            raw_logits_row = raw_logits_row - penalty
+
+                            # Calculate KL divergence to measure the change
+                            probs_after = F.softmax(raw_logits_row / temperature, dim=-1)
+                            # Add a small epsilon to avoid log(0)
+                            kl_div = F.kl_div(torch.log(probs_after + 1e-9), probs_before, reduction='sum')
+                            kl_divergences.append(kl_div.item())
+
+
+                    logits = raw_logits_row / temperature        # Scaled logits for sampling
                     full_row = logits[0].clone()               # pre-mask
+
 
                     # Apply the selected truncation logic
                     if args.softmax_threshold is not None:
@@ -492,6 +546,7 @@ def sample_with_existing_model(
 
 
                     topk_row = logits[0].clone()               # post-mask
+
                     if args.softmax_threshold is not None:
                         # Calculate probabilities and find the threshold
                         probs = F.softmax(logits, dim=-1)
@@ -525,6 +580,8 @@ def sample_with_existing_model(
                         full_rows.append(full_row)
                         topk_rows.append(topk_row)
                         scalar_rows.append(full_row[chosen])
+                        if args.show_minmax_chart:
+                            pre_temp_scalar_rows.append(raw_logits_row[0, chosen])
                         ranks_list.append(rank)
 
                     if show_heatmaps:
@@ -543,11 +600,17 @@ def sample_with_existing_model(
 
                         )
 
+            # ---------- Print summary statistics for this sample ------------------
+            if kl_divergences:
+                avg_kl = np.mean(kl_divergences)
+                console.print(f"\n[bold yellow]Cosine Penalty Impact (Avg KL Divergence):[/bold yellow] [bold cyan]{avg_kl:.4f}[/bold cyan]")
+
             # ---------- save minmax chart if requested ----------------------
-            if args.show_minmax_chart and scalar_rows:
-                save_minmax_timeseries_chart(
-                    scalar_rows, out_dir, k_tag, sample_idx
-                )
+            if args.show_minmax_chart and pre_temp_scalar_rows:
+                save_raw_logits_chart(
+                    pre_temp_scalar_rows, out_dir, k_tag, sample_idx
+                 )
+
 
             # ---------- decode plain text -----------------------------------
             plain_text = decode(x[0].tolist())
@@ -556,33 +619,43 @@ def sample_with_existing_model(
 
             # ---------- colourised outputs ----------------------------------
             if colorize_output:
+                # --- Pre-calculate any special data sources for colorization ---
+                dot_product_values = None
+                if 'dot_product' in modes_to_apply and len(tokens_for_color) > 1:
+                    dot_product_values = [0.0] # First token has no prior, assign neutral value.
+                    embedding_matrix = model.transformer.wte.weight
+                    for i in range(1, len(tokens_for_color)):
+                        prev_vec = F.normalize(embedding_matrix[tokens_for_color[i-1]], p=2, dim=0)
+                        current_vec = F.normalize(embedding_matrix[tokens_for_color[i]], p=2, dim=0)
+                        # The dot product of two unit vectors is their cosine similarity.
+                        dot_product_values.append(torch.dot(prev_vec, current_vec).item())
+
                 for cm in modes_to_apply:
+                    # Select the appropriate data source for the current colorization mode
+                    data_for_color = None
                     if cm == "minmax":
-                        logits_for_color = scalar_rows
-                        coloured = colorize_text(              # type: ignore
-                            tokens_for_color,
-                            logits_for_color,
-                            decode,
-                            colorize_mode=cm,
-                        )
+                        data_for_color = scalar_rows
                     elif cm == "softmax":
-                        coloured = colorize_text(              # type: ignore
-                            tokens_for_color,
-                            full_rows,
-                            decode,
-                            colorize_mode=cm,
-                        )
+                        data_for_color = full_rows
                     elif cm == "softmax_top_k":
-                        coloured = colorize_text(              # type: ignore
-                            tokens_for_color,
-                            topk_rows,
-                            decode,
-                            colorize_mode=cm,
-                        )
-                    else:  # "rank"
-                        coloured = _colorize_rank(
-                            tokens_for_color, ranks_list, decode, current_k
-                        )
+                        data_for_color = topk_rows
+                    elif cm == "dot_product":
+                        data_for_color = dot_product_values
+
+                    if data_for_color is not None:
+                         coloured = colorize_text(              # type: ignore
+                             tokens_for_color,
+                             data_for_color,
+                             decode,
+                             colorize_mode=cm,
+                         )
+                    elif cm == "rank":
+                         coloured = _colorize_rank(
+                             tokens_for_color, ranks_list, decode, current_k
+                         )
+                    else:
+                        continue # Should not happen if data_for_color is None
+
 
                     fgcolor="bold light_slate_blue"
                     bgcolor="bold cyan"
@@ -614,8 +687,6 @@ def sample_with_existing_model(
                     best_val_loss,
                     f"{run_name}_{k_tag}" if run_name else k_tag,
                 )
-
-
 
 
 def interactive_generation(model, start_ids, device, max_new_tokens, temperature, top_k, stop_string, decode, encode):
