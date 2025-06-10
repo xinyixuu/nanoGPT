@@ -483,14 +483,10 @@ def parse_args():
     model_group.add_argument("--pla_right_bound", type=float, default=2.0)
 
     ## PiecewiseFullyLearnableActivation - pfla
-    model_group.add_argument("--pfla_num_points", type=int, default=200)
-    model_group.add_argument("--pfla_left_bound", type=float, default=-100.0)
-    model_group.add_argument("--pfla_right_bound", type=float, default=100.0)
+    model_group.add_argument("--pfla_num_points", type=int, default=50)
+    model_group.add_argument("--pfla_left_bound", type=float, default=-10.0)
+    model_group.add_argument("--pfla_right_bound", type=float, default=10.0)
 
-    ## PiecewiseFullyLearnableActivationLearnedEnds - pflale
-    model_group.add_argument("--pfla_le_num_points",   type=int,  default=30)
-    model_group.add_argument("--pfla_le_left_bound",  type=float, default=-10.0)
-    model_group.add_argument("--pfla_le_right_bound", type=float, default=10.0)
 
     ## LearnedSplineActivation - lsa
     model_group.add_argument("--lsa_num_knots", type=int, default=30)

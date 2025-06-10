@@ -7,10 +7,9 @@ parameter_groups:
     mlp_size: [1536]
     mlp_up_bias: [true]
     mlp_down_bias: [true]
-    activation_variant: ["gelu", "pfla_le"]
+    activation_variant: ["pfla"]
     learn_mlp_x_offset: [true]
     learn_mlp_y_offset: [true]
-    mlp_down_projs: [1, 2, 3]
 
 
   # Swiglu - ~2/3 of MLP size for same param count
@@ -18,19 +17,23 @@ parameter_groups:
     mlp_size: [1024]
     mlp_up_bias: [true]
     mlp_down_bias: [false]
-    activation_variant: ["silu", "identity", "pfla_le"]
+    activation_variant: ["pfla"]
     learn_mlp_x_offset: [true]
     learn_mlp_y_offset: [true]
-    mlp_down_projs: [1, 2, 3]
 
   # DualPath - ~2/3 of MLP size for same param count
   - mlp_variant: ["dual_path"]
     mlp_size: [1024]
     mlp_up_bias: [true]
     mlp_down_bias: [true]
-    activation_variant: ["pfla_le"]
+    activation_variant: ["pfla"]
     learn_mlp_x_offset: [true]
     learn_mlp_y_offset: [true]
+
+# pfla
+pfla_num_points: 20
+pfla_left_bound: -5.0
+pfla_right_bound: 5.0
 
 # Position embeddings
 use_rotary_embeddings: [true]
@@ -42,10 +45,6 @@ n_layer: [12]
 n_head: [12]
 n_embd: [768]
 bias: [false]
-
-# pos embeddings
-use_rotary_embeddings: [true]
-use_abs_pos_embeddings: [false]
 
 # training configuration
 dataset: "minipile"
