@@ -113,7 +113,9 @@ if ckpt.get("optimizer") and not getattr(args, "reset_optim", False):
     optimizer.load_state_dict(ckpt["optimizer"])
 
 
-best_val_loss = ckpt["best_val_loss"]
+best_val_loss = ckpt["best_val_loss"].item()
+print("best_val_loss", best_val_loss)
+best_val_loss=5.00 # TODO: set a flag so that we can choose to definitely start saving checkpoints in recurrent mode
 iter_num      = ckpt["iter_num"]          # not used, but preserved
 
 block_size = gpt_conf.block_size
@@ -206,6 +208,27 @@ def run_epoch(split):
             if global_step % args.log_interval == 0:
                 print(f"iter {global_step:>7} | "
                       f"loss {loss.item():.4f}")
+            # ─── validation & checkpoint ───────────────────────────────
+            if global_step % args.eval_interval == 0:
+                model.eval()
+                with torch.no_grad():
+                    val = run_epoch("val")          # one full pass
+
+                if tb:
+                    tb.add_scalar("loss/val", val, global_step)
+
+                if val < 5.00:
+                    print(val)
+                    best_val_loss = val
+                    torch.save(
+                        {"model": model.state_dict(),
+                         "model_args": ckpt["model_args"],
+                         "iter_num":   global_step,
+                         "best_val_loss": best_val_loss},
+                        best_ckpt_path)
+                    print(f"  ➜ new best @ step {global_step}; "
+                          f"checkpoint saved to {best_ckpt_path}")
+
 
         else:
 
