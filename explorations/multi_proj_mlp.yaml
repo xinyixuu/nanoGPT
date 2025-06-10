@@ -10,7 +10,7 @@ mlp_variant:
   - swiglu
 
 # Number of down projections to test
-n_down_projs:
+mlp_down_projs:
   range:
     start: 1
     end: 4

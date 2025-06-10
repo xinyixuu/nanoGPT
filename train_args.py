@@ -20,11 +20,11 @@ def parse_args():
     model_group.add_argument('--mlp_up_bias', default=None, action=argparse.BooleanOptionalAction, help='Whether to use bias in MLP up projections. If None, uses global bias setting.')
     model_group.add_argument('--mlp_down_bias', default=None, action=argparse.BooleanOptionalAction, help='Whether to use bias in MLP down projections. If None, uses global bias setting.')
 
-    # DualPath MLP Configuration
-    model_group.add_argument('--dual_path_x_offset', type=float, default=0.01, help='X-axis offset for DualPath activation functions')
-    model_group.add_argument('--dual_path_y_offset', type=float, default=0.0, help='Y-axis offset for DualPath activation functions')
-    model_group.add_argument('--learn_dual_path_x_offset', default=False, action=argparse.BooleanOptionalAction, help='Whether to learn the x-axis offset in DualPath')
-    model_group.add_argument('--learn_dual_path_y_offset', default=False, action=argparse.BooleanOptionalAction, help='Whether to learn the y-axis offset in DualPath')
+    # MLP x y Offset
+    model_group.add_argument('--mlp_x_offset', type=float, default=0.0, help='X-axis offset for mlp activation functions')
+    model_group.add_argument('--mlp_y_offset', type=float, default=0.0, help='Y-axis offset for mlp activation functions')
+    model_group.add_argument('--learn_mlp_x_offset', default=False, action=argparse.BooleanOptionalAction, help='Whether to learn the x-axis offset for mlp')
+    model_group.add_argument('--learn_mlp_y_offset', default=False, action=argparse.BooleanOptionalAction, help='Whether to learn the y-axis offset for mlp')
 
     # Export Args
     ## Factored WTE
@@ -325,7 +325,7 @@ def parse_args():
     model_group.add_argument('--n_head', default=6, type=int)
     model_group.add_argument('--n_kv_group', default=None, type=int)
     model_group.add_argument('--n_embd', default=384, type=int, help="Size of embeddings in decoder layer and wte unless n_embd_wte is set." )
-    model_group.add_argument('--n_down_projs', default=1, type=int, help="Number of down projections in MLP/SwiGLU")
+    model_group.add_argument('--mlp_down_projs', default=1, type=int, help="Number of down projections in MLP/SwiGLU")
     model_group.add_argument('--n_embd_wte', default=None, type=int, help="If different from n_embd, an adapter table will be automatically created")
     model_group.add_argument('--n_embd_wte_scale_tying', default=True, action=argparse.BooleanOptionalAction, help="Enable weight tying for scale up and scale down matrices, only has effects if n_embd_wte is not 'None'.")
     model_group.add_argument('--wte_weight_tying', default=True, action=argparse.BooleanOptionalAction, help="Enable weight tying for non-factorized wte")

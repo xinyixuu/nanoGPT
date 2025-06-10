@@ -13,7 +13,7 @@ class GPTConfig:
     n_head: int = 12
     n_kv_group: int = 12
     n_embd: int = 768
-    n_down_projs: int = 1  # Number of down projections in MLP/SwiGLU
+    mlp_down_projs: int = 1  # Number of down projections in MLP/SwiGLU
 
     # For multicontext training
     multicontext: bool = False
@@ -23,11 +23,11 @@ class GPTConfig:
     mlp_up_bias: bool | None = None  # If None, uses global bias setting
     mlp_down_bias: bool | None = None  # If None, uses global bias setting
 
-    # DualPathMLP specific parameters
-    dual_path_x_offset: float = 0.01
-    dual_path_y_offset: float = 0.0
-    learn_dual_path_x_offset: bool = False
-    learn_dual_path_y_offset: bool = False
+    # FFN offset parameters
+    mlp_x_offset: float = 0.0
+    mlp_y_offset: float = 0.0
+    learn_mlp_x_offset: bool = False
+    learn_mlp_y_offset: bool = False
 
     ## MLA Variations
     mla_latent_dim: int | None = None   # d_c  (proj dimension of the shared latent)
