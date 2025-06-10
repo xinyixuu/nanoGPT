@@ -75,8 +75,8 @@ def parse_args():
                     "Disable with --no-colorize-output.")
 
     # Visualizations
-    parser.add_argument('--show_heatmaps', action=argparse.BooleanOptionalAction, help="Show heatmaps of top-k choices for each token")
-    parser.add_argument('--show_minmax_chart', action=argparse.BooleanOptionalAction, help="Output a line chart of the chosen-token logits used for minmax colorization")
+    parser.add_argument('--show_heatmaps', default=False, action=argparse.BooleanOptionalAction, help="Show heatmaps of top-k choices for each token")
+    parser.add_argument('--show_minmax_chart', default=False, action=argparse.BooleanOptionalAction, help="Output a line chart of the chosen-token logits used for minmax colorization")
     parser.add_argument(
         '--softmax_threshold',
         type=float,
