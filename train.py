@@ -474,6 +474,7 @@ class Trainer:
                     iter_num=self.iter_num,
                     best_val_loss=self.best_val_loss,
                     run_name=self.args.tensorboard_run_name,
+                    args=self.args,
                 )
 
         self.model.train()
