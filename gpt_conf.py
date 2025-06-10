@@ -321,11 +321,6 @@ class GPTConfig:
     pfla_left_bound: float = -100.0
     pfla_right_bound: float = 100.0
 
-    ## PiecewiseFullyLearnableActivationLearnedEnds - pflale
-    pfla_le_num_points: int = 30
-    pfla_le_left_bound: float = -10.0
-    pfla_le_right_bound: float = 10.0
-
     ## LearnedSplineActivation - lsa
     lsa_num_knots: int = 30
 
