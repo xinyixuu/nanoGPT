@@ -388,7 +388,6 @@ def parse_args():
     model_group.add_argument("--mlp_variant", type=str, default="mlp", choices=mlp_variants, help="MLP variation type")
     model_group.add_argument("--mlp_expansion_factor", type=int, default=4, help="If MLP like variant is used, set the expansion factor for the linear transformations, default is 4.")
     model_group.add_argument("--mlp_size", type=int, default=None, help="If not None, is used instead of mlp_expansion_factor")
-    model_group.add_argument("--mlp_size_layerlist", nargs='+', action=LayerListAction, default=None, help="Override mlp_size per layer, cycling through the list. " "Example: --mlp_size_layerlist 100 200 300")
     model_group.add_argument('--mlp_res', default=False, action=argparse.BooleanOptionalAction)
 
     ## KAN Options
@@ -550,6 +549,12 @@ def parse_args():
     model_group.add_argument("--mod_fn",       type=str, default="cooperation",
                         choices=["cooperation","tm1","tm2","tm3","tm4"],
                         help="which MOD transfer-function to use")
+
+    # LayerLists
+    model_group.add_argument("--n_qk_head_dim_layerlist", nargs='+', action=LayerListAction, default=None)
+    model_group.add_argument("--n_head_layerlist", nargs='+', action=LayerListAction, default=None, help="Override n_head per layer, cycling through the list.")
+    model_group.add_argument("--mlp_size_layerlist", nargs='+', action=LayerListAction, default=None, help="Override mlp_size per layer, cycling through the list. " "Example: --mlp_size_layerlist 100 200 300")
+    model_group.add_argument("--n_v_head_dim_layerlist", nargs='+', action=LayerListAction, default=None)
 
     ## Infinite Attention variation
     model_group.add_argument('--n_qk_head_dim', default=None, type=int)
