@@ -330,6 +330,7 @@ def save_raw_logits_chart(raw_logit_values, out_dir, k_tag, sample_idx):
 
     # Convert list of single-item tensors to a numpy array
     logits_np = torch.tensor(raw_logit_values).cpu().numpy()
+
     steps = np.arange(len(logits_np))
 
     plt.figure(figsize=(16, 9))
@@ -428,11 +429,9 @@ def sample_with_existing_model(
 
     console = Console()
 
-    softmax_threshold = args.softmax_threshold
-
     # Determine sampling strategy. Softmax threshold overrides top_k.
-    if softmax_threshold is not None:
-        console.print(f"[yellow]Info:[/yellow] Using softmax threshold sampling ({softmax_threshold:.2f}). --top_k will be ignored.")
+    if args.softmax_threshold is not None:
+        console.print(f"[yellow]Info:[/yellow] Using softmax threshold sampling ({args.softmax_threshold:.2f}). --top_k will be ignored.")
         # Force the loop to run once with a null k-value
         k_values: List[Optional[int]] = [None]
     else:
@@ -451,8 +450,8 @@ def sample_with_existing_model(
 
     for current_k in k_values:
         # Set a tag for logging/filenames based on the active sampling mode
-        if softmax_threshold is not None:
-            k_tag = f"sm_thresh_{softmax_threshold:.2f}"
+        if args.softmax_threshold is not None:
+            k_tag = f"sm_thresh_{args.softmax_threshold:.2f}"
         else:
             k_tag = "no_topk" if current_k is None else f"top_k_{current_k}"
 
@@ -537,21 +536,22 @@ def sample_with_existing_model(
 
 
                     # Apply the selected truncation logic
-                    if softmax_threshold is not None:
+                    if args.softmax_threshold is not None:
                         # Calculate probabilities and find the threshold
                         probs = F.softmax(logits, dim=-1)
                         max_prob = torch.max(probs)
-                        prob_threshold = max_prob * softmax_threshold
+                        prob_threshold = max_prob * args.softmax_threshold
                         # Set probabilities of tokens below the threshold to 0
                         probs[probs < prob_threshold] = 0
 
 
                     topk_row = logits[0].clone()               # post-mask
-                    if softmax_threshold is not None:
+
+                    if args.softmax_threshold is not None:
                         # Calculate probabilities and find the threshold
                         probs = F.softmax(logits, dim=-1)
                         max_prob = torch.max(probs)
-                        prob_threshold = max_prob * softmax_threshold
+                        prob_threshold = max_prob * args.softmax_threshold
                         # Set probabilities of tokens below the threshold to 0
                         probs[probs < prob_threshold] = 0
                         # Sample from the modified, unnormalized distribution of probabilities
@@ -610,6 +610,7 @@ def sample_with_existing_model(
                 save_raw_logits_chart(
                     pre_temp_scalar_rows, out_dir, k_tag, sample_idx
                  )
+
 
             # ---------- decode plain text -----------------------------------
             plain_text = decode(x[0].tolist())
