@@ -35,6 +35,9 @@ pfla_num_points: 20
 pfla_left_bound: -5.0
 pfla_right_bound: 5.0
 
+# Position embeddings
+use_rotary_embeddings: [true]
+use_abs_pos_embeddings: [false]
 
 # base hyperparameters (defaults)
 block_size: [512]
@@ -42,10 +45,6 @@ n_layer: [12]
 n_head: [12]
 n_embd: [768]
 bias: [false]
-
-# pos embeddings
-use_rotary_embeddings: [true]
-use_abs_pos_embeddings: [false]
 
 # training configuration
 dataset: "minipile"

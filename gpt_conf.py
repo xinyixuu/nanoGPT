@@ -15,6 +15,12 @@ class GPTConfig:
     n_embd: int = 768
     mlp_down_projs: int = 1  # Number of down projections in MLP/SwiGLU
 
+    # Layerlists
+    n_head_layerlist: List[int] = field(default_factory=list)
+    n_qk_head_dim_layerlist: List[int] = field(default_factory=list)
+    n_v_head_dim_layerlist: List[int] = field(default_factory=list)
+    mlp_size_layerlist: List[int] = field(default_factory=list)
+
     # For multicontext training
     multicontext: bool = False
     vocab_sizes: List[int] = field(default_factory=lambda: []) # Used in place of vocab
@@ -161,7 +167,6 @@ class GPTConfig:
     mlp_variant: str = "mlp"
     mlp_expansion_factor: int = 4
     mlp_size: int = None
-    mlp_size_layerlist: List[int] = field(default_factory=list)
     mlp_res: bool = False
 
     ## KAN Option
