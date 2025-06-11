@@ -232,7 +232,7 @@ class DualPathMLP(nn.Module):
         x1 = self.c_proj1(x1)
 
         # Second activation path - shifted left and negated input
-        x2 = self.activation_variant(-x + self.activation_x_offset) - self.activation_y_offset
+        x2 = -self.activation_variant(-(x + self.activation_x_offset)) - self.activation_y_offset
         x2 = self.c_proj2(x2)
 
         # Combine paths
