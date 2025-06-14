@@ -216,10 +216,13 @@ class Trainer:
 
             gptconf = GPTConfig(**self.model_args)
             self.model = GPT(gptconf)
+            self.model.to(self.device)
+
             self.iter_num = 0 # for starting from scratch
             self.best_val_loss = 1e9 # really big number
 
             self.optimizer = self.create_optimizer()
+            self.scaler = torch.amp.GradScaler(self.device_type, enabled=(self.args.dtype == 'float16'))
             self.scheduler = self.create_scheduler()
 
         elif self.args.init_from in ['resume', "prev_run"] :
@@ -256,8 +259,11 @@ class Trainer:
             if self.args.lsv_focused_training:
                 self.model.freeze_non_lsv_parameters()
 
+            self.model.to(self.device)
             # Ensure optimizer and scheduler are initialized before loading state
             self.optimizer = self.create_optimizer()
+            self.scaler = torch.amp.GradScaler(self.device_type, enabled=(self.args.dtype == 'float16'))
+
             self.scheduler = self.create_scheduler()
 
             if "optimizer" in checkpoint and checkpoint["optimizer"] is not None:
@@ -285,12 +291,14 @@ class Trainer:
 
             gptconf = GPTConfig(**self.model_args)
             self.model = GPT.from_pretrained(gptconf, model_type=self.args.gpt2_type)
+            self.model.to(self.device)
             self.load_data()
 
             if self.args.lsv_focused_training:
                 self.model.freeze_non_lsv_parameters()
 
             self.optimizer = self.create_optimizer()
+            self.scaler = torch.amp.GradScaler(self.device_type, enabled=(self.args.dtype == 'float16'))
             self.scheduler = self.create_scheduler()
 
         if self.args.block_size < self.model.config.block_size:
@@ -307,7 +315,6 @@ class Trainer:
             # Initialize GNS for later
             self.gns = None
 
-        self.model.to(self.device)
 
         # Get Model Size
         self.model.num_param = self.model.get_num_params(non_embedding=False)
@@ -318,9 +325,6 @@ class Trainer:
             print_model_blocks(self.model)
             print_module_structure(self.model)
             print_model_tree(self.model, print_params=True)
-
-        # Optimizer
-        self.scaler = torch.amp.GradScaler(self.device_type, enabled=(self.args.dtype == 'float16'))
 
         if self.args.compile:
             print("compiling the model... (takes a ~minute)")
@@ -474,6 +478,7 @@ class Trainer:
                     iter_num=self.iter_num,
                     best_val_loss=self.best_val_loss,
                     run_name=self.args.tensorboard_run_name,
+                    args=self.args,
                 )
 
         self.model.train()
