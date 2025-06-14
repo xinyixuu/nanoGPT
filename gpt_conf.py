@@ -13,7 +13,13 @@ class GPTConfig:
     n_head: int = 12
     n_kv_group: int = 12
     n_embd: int = 768
-    n_down_projs: int = 1  # Number of down projections in MLP/SwiGLU
+    mlp_down_projs: int = 1  # Number of down projections in MLP/SwiGLU
+
+    # Layerlists
+    n_head_layerlist: List[int] = field(default_factory=list)
+    n_qk_head_dim_layerlist: List[int] = field(default_factory=list)
+    n_v_head_dim_layerlist: List[int] = field(default_factory=list)
+    mlp_size_layerlist: List[int] = field(default_factory=list)
 
     # For multicontext training
     multicontext: bool = False
@@ -23,11 +29,11 @@ class GPTConfig:
     mlp_up_bias: bool | None = None  # If None, uses global bias setting
     mlp_down_bias: bool | None = None  # If None, uses global bias setting
 
-    # DualPathMLP specific parameters
-    dual_path_x_offset: float = 0.01
-    dual_path_y_offset: float = 0.0
-    learn_dual_path_x_offset: bool = False
-    learn_dual_path_y_offset: bool = False
+    # FFN offset parameters
+    mlp_x_offset: float = 0.0
+    mlp_y_offset: float = 0.0
+    learn_mlp_x_offset: bool = False
+    learn_mlp_y_offset: bool = False
 
     ## MLA Variations
     mla_latent_dim: int | None = None   # d_c  (proj dimension of the shared latent)
@@ -161,7 +167,6 @@ class GPTConfig:
     mlp_variant: str = "mlp"
     mlp_expansion_factor: int = 4
     mlp_size: int = None
-    mlp_size_layerlist: List[int] = field(default_factory=list)
     mlp_res: bool = False
 
     ## KAN Option
@@ -320,11 +325,6 @@ class GPTConfig:
     pfla_num_points: int = 200
     pfla_left_bound: float = -100.0
     pfla_right_bound: float = 100.0
-
-    ## PiecewiseFullyLearnableActivationLearnedEnds - pflale
-    pfla_le_num_points: int = 30
-    pfla_le_left_bound: float = -10.0
-    pfla_le_right_bound: float = 10.0
 
     ## LearnedSplineActivation - lsa
     lsa_num_knots: int = 30

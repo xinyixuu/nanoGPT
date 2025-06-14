@@ -4,32 +4,47 @@
 parameter_groups:
   # Standard MLP - baseline sizes
   - mlp_variant: ["mlp"]
-    mlp_size: [768]
-    mlp_up_bias: [true, false]
-    mlp_down_bias: [true, false]
+    mlp_size: [1536]
+    mlp_up_bias: [true]
+    mlp_down_bias: [true]
+    activation_variant: ["pfla"]
+    learn_mlp_x_offset: [true]
+    learn_mlp_y_offset: [true]
+
 
   # Swiglu - ~2/3 of MLP size for same param count
   - mlp_variant: ["swiglu"]
-    mlp_size: [512]
-    mlp_up_bias: [true, false]
-    mlp_down_bias: [true, false]
+    mlp_size: [1024]
+    mlp_up_bias: [true]
+    mlp_down_bias: [false]
+    activation_variant: ["pfla"]
+    learn_mlp_x_offset: [true]
+    learn_mlp_y_offset: [true]
 
   # DualPath - ~2/3 of MLP size for same param count
   - mlp_variant: ["dual_path"]
-    mlp_size: [512]
-    mlp_up_bias: [true, false]
-    mlp_down_bias: [true, false]
+    mlp_size: [1024]
+    mlp_up_bias: [true]
+    mlp_down_bias: [true]
+    activation_variant: ["pfla"]
+    learn_mlp_x_offset: [true]
+    learn_mlp_y_offset: [true]
 
-# base hyperparameters (defaults)
-block_size: [256]
-n_layer: [6]
-n_head: [6]
-n_embd: [384]
-bias: [false]
+# pfla
+pfla_num_points: 20
+pfla_left_bound: -5.0
+pfla_right_bound: 5.0
 
-# pos embeddings
+# Position embeddings
 use_rotary_embeddings: [true]
 use_abs_pos_embeddings: [false]
+
+# base hyperparameters (defaults)
+block_size: [512]
+n_layer: [12]
+n_head: [12]
+n_embd: [768]
+bias: [false]
 
 # training configuration
 dataset: "minipile"

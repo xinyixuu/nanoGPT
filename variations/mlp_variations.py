@@ -16,13 +16,24 @@ class OriginalMLP(nn.Module):
         self.eval_interval = config.eval_interval
 
         self.use_mlp_res = config.mlp_res
-        self.n_down_projs = config.n_down_projs
+        self.mlp_down_projs = config.mlp_down_projs
 
         self.start_quant_level = config.start_quant_level
         self.quant_scheduler = config.quant_scheduler
 
         # Select activation variant
         self.activation_variant = activation_dictionary[config.activation_variant](config=config)
+
+        # Add learnable or fixed offsets for the activation function
+        if config.learn_mlp_x_offset:
+            self.activation_x_offset = nn.Parameter(torch.tensor(config.mlp_x_offset))
+        else:
+            self.register_buffer("activation_x_offset", torch.tensor(config.mlp_x_offset))
+
+        if config.learn_mlp_y_offset:
+            self.activation_y_offset = nn.Parameter(torch.tensor(config.mlp_y_offset))
+        else:
+            self.register_buffer("activation_y_offset", torch.tensor(config.mlp_y_offset))
 
         # Sets the class of linear for MLP
         self.linear_variant_mlp_up = linear_dictionary[set_variant(config.linear_variant_mlp_up, config.linear_variant_mlp)]
@@ -69,7 +80,7 @@ class OriginalMLP(nn.Module):
         # Fused down projection
         self.c_proj = self.linear_variant_mlp_down(
             mlp_expansion_size,
-            config.n_embd * self.n_down_projs,
+            config.n_embd * self.mlp_down_projs,
             config,
             self.quantization_mlp_dict["quantize_linear_mlp_down_method"],
             self.quantization_mlp_dict["quantize_linear_mlp_down_bits"],
@@ -92,7 +103,8 @@ class OriginalMLP(nn.Module):
             quant_method = self.quantization_mlp_dict["activations_quant_method"]
             x = fake_quantize_act(self, "mlp_act_activation_input", x, num_bits, quant_method, iter_num)
 
-        x = self.activation_variant(x)
+        # Apply offsets to the activation function
+        x = self.activation_variant(x - self.activation_x_offset) - self.activation_y_offset
 
         if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
             num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
@@ -108,9 +120,9 @@ class OriginalMLP(nn.Module):
 
         # Apply fused down projection and sum the outputs
         x = self.c_proj(x)
-        if self.n_down_projs > 1:
+        if self.mlp_down_projs > 1:
             batch_size, seq_len, _ = x.shape
-            x = x.view(batch_size, seq_len, self.n_down_projs, -1)
+            x = x.view(batch_size, seq_len, self.mlp_down_projs, -1)
             x = x.sum(dim=2)
 
         x = self.dropout(x)
@@ -132,15 +144,16 @@ class DualPathMLP(nn.Module):
         self.activation_variant = activation_dictionary[config.activation_variant](config=config)
 
         # Dual path specific parameters
-        if config.learn_dual_path_x_offset:
-            self.activation_x_offset = nn.Parameter(torch.tensor(config.dual_path_x_offset))
+        if config.learn_mlp_x_offset:
+            self.activation_x_offset = nn.Parameter(torch.tensor(config.mlp_x_offset))
         else:
-            self.register_buffer("activation_x_offset", torch.tensor(config.dual_path_x_offset))
+            self.register_buffer("activation_x_offset", torch.tensor(config.mlp_x_offset))
 
-        if config.learn_dual_path_y_offset:
-            self.activation_y_offset = nn.Parameter(torch.tensor(config.dual_path_y_offset))
+        if config.learn_mlp_y_offset:
+            self.activation_y_offset = nn.Parameter(torch.tensor(config.mlp_y_offset))
         else:
-            self.register_buffer("activation_y_offset", torch.tensor(config.dual_path_y_offset))
+            self.register_buffer("activation_y_offset", torch.tensor(config.mlp_y_offset))
+
         # Sets the class of linear for MLP
         self.linear_variant_mlp_up = linear_dictionary[set_variant(config.linear_variant_mlp_up, config.linear_variant_mlp)]
         self.linear_variant_mlp_down = linear_dictionary[set_variant(config.linear_variant_mlp_down, config.linear_variant_mlp)]
@@ -219,7 +232,7 @@ class DualPathMLP(nn.Module):
         x1 = self.c_proj1(x1)
 
         # Second activation path - shifted left and negated input
-        x2 = self.activation_variant(-x + self.activation_x_offset) - self.activation_y_offset
+        x2 = -self.activation_variant(-(x + self.activation_x_offset)) - self.activation_y_offset
         x2 = self.c_proj2(x2)
 
         # Combine paths
@@ -248,10 +261,21 @@ class Swiglu(nn.Module):
 
         self.start_quant_level = config.start_quant_level
         self.quant_scheduler = config.quant_scheduler
-        self.n_down_projs = config.n_down_projs
+        self.mlp_down_projs = config.mlp_down_projs
 
         # Select activation variant
         self.activation_variant = activation_dictionary[config.activation_variant](config=config)
+
+        # Add learnable or fixed offsets for the activation function
+        if config.learn_mlp_x_offset:
+            self.activation_x_offset = nn.Parameter(torch.tensor(config.mlp_x_offset))
+        else:
+            self.register_buffer("activation_x_offset", torch.tensor(config.mlp_x_offset))
+
+        if config.learn_mlp_y_offset:
+            self.activation_y_offset = nn.Parameter(torch.tensor(config.mlp_y_offset))
+        else:
+            self.register_buffer("activation_y_offset", torch.tensor(config.mlp_y_offset))
 
         # Sets the class of linear for MLP
         self.linear_variant_mlp_up = linear_dictionary[set_variant(config.linear_variant_mlp_up, config.linear_variant_mlp)]
@@ -307,7 +331,7 @@ class Swiglu(nn.Module):
         # Fused down projection
         self.c_fc_out = self.linear_variant_mlp_down(
             mlp_expansion_size,
-            config.n_embd * self.n_down_projs,
+            config.n_embd * self.mlp_down_projs,
             config,
             self.quantization_mlp_dict["quantize_linear_mlp_down_method"],
             self.quantization_mlp_dict["quantize_linear_mlp_down_bits"],
@@ -330,7 +354,7 @@ class Swiglu(nn.Module):
             quant_method = self.quantization_mlp_dict["activations_quant_method"]
             x_in1 = fake_quantize_act(self, "mlp_act_activation_input", x_in1, num_bits, quant_method, iter_num)
 
-        x_in1 = self.activation_variant(x_in1)
+        x_in1 = self.activation_variant(x_in1 - self.activation_x_offset) - self.activation_y_offset
 
         if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
             num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
@@ -348,9 +372,9 @@ class Swiglu(nn.Module):
 
         # Apply fused down projection and sum the outputs
         x = self.c_fc_out(x_out)
-        if self.n_down_projs > 1:
+        if self.mlp_down_projs > 1:
             batch_size, seq_len, _ = x.shape
-            x = x.view(batch_size, seq_len, self.n_down_projs, -1)
+            x = x.view(batch_size, seq_len, self.mlp_down_projs, -1)
             x = x.sum(dim=2)
 
         x = self.dropout(x)
