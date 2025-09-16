@@ -248,6 +248,9 @@ def build_command(combo: dict) -> list[str]:
         elif isinstance(v, list):
             for x in v:
                 cmd += [f"--{k}", str(x)]
+                # Use nargs='+' style: --arg val1 val2 val3
+                cmd.append(f"--{k}")
+                cmd.extend([str(x) for x in v])
         else:
             cmd += [f"--{k}", str(v)]
     return cmd
