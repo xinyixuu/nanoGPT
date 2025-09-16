@@ -1,0 +1,20 @@
+# multokenization.yaml
+---
+# Base hyperparameters
+dataset: [commonvoice_en, byte_en, snac_cven, commonvoice_zh, snac_cvko]
+batch_size: [8]
+learning_rate: [6e-4]
+decay_lr: [true]
+min_lr: [6e-5]
+n_layer: [12]
+n_head: [12]
+n_embd: [768]
+block_size: [256]
+use_rotary_embeddings: [true]
+use_abs_pos_embeddings: [false]
+max_sample_tokens: [100]
+max_iters: [10000]
+warmup_iters: [1000]
+eval_interval: [1000]
+sample_each_eval: [true]
+compile: [true]
