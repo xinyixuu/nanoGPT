@@ -1,4 +1,4 @@
-# multokenization.yaml
+# explorations/multokenization_single.yaml
 ---
 # Base hyperparameters
 dataset: [commonvoice_en, byte_en, snac_cven, commonvoice_zh, snac_cvko]
