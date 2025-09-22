@@ -17,7 +17,7 @@ fi
 popd
 
 # obtain and tokenize commonvoice_en
-pushd data/commonvoice_zh
+pushd data/commonvoice_en
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
   bash get_ipa.sh
 else
@@ -26,15 +26,15 @@ fi
 popd
 
 # obtain and tokenize snac_cvko
-pushd data/snac_cvko
+pushd data/snac_cven
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
-  bash get_text.sh
+  bash get_dataset.sh
 else
   echo "train.bin val.bin and meta.pkl already found for snac_cvko"
 fi
 popd
 
-python3 optimization_and_search/run_experiments.py -c explorations/multokenization_diff.yaml -o for_test
+python3 optimization_and_search/run_experiments.py -c explorations/multokenization.yaml -o out_multitokization_same
 
 # python3 train.py \
 #   --training_mode multidataset \
