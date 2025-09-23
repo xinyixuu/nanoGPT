@@ -1,7 +1,7 @@
 # explorations/multokenization_single.yaml
 ---
 # Base hyperparameters
-dataset: [commonvoice_en, byte_en, snac_cven, commonvoice_zh, snac_cvko]
+dataset: [commonvoice_en, commonvoice_zh, commonvoice_ko, commonvoice_ja]
 batch_size: [8]
 learning_rate: [6e-4]
 decay_lr: [true]
@@ -12,6 +12,10 @@ n_embd: [768]
 block_size: [256]
 use_rotary_embeddings: [true]
 use_abs_pos_embeddings: [false]
+use_qk_norm: [true]
+use_qk_norm_scale: [true]
+use_peri_ln: [true]
+use_gradient_checkpoint: [true]
 max_sample_tokens: [100]
 max_iters: [10000]
 warmup_iters: [1000]
