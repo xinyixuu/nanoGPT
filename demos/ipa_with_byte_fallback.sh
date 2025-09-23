@@ -43,7 +43,7 @@ else
 fi
 popd
 
-python3 optimization_and_search/run_experiments.py -c explorations/multokenization_diff.yaml -o for_test
+python3 optimization_and_search/run_experiments.py -c explorations/ipa_single.yaml -o out_ipa_with_byte_fallback
 
 # python3 train.py \
 #   --training_mode multidataset \
