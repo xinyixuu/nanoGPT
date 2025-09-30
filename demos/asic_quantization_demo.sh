@@ -17,6 +17,7 @@ popd
 python3 train.py \
     --out_dir asic_quant \
     --use_edgellm_asic \
+    --mlp_variant edgellm_asic_mlp \
     --max_iters 20000 \
     --full_quant_iteration 10000 \
     --dataset "$dataset" \

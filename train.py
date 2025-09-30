@@ -1725,7 +1725,7 @@ class Trainer:
                                 loss_fn=self.loss_fn,
                             )
 
-                        if hasattr(self.optimizer, "set_entropy"):
+                        if hasattr(self.optimizer, "set_entropy") and not isinstance(logits, (list, tuple)):
                             with torch.no_grad():
                                 probs = torch.softmax(logits, dim=-1)
                                 ent = -(probs * torch.log(probs + 1e-9)).sum(dim=-1).mean()
