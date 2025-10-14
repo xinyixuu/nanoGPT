@@ -24,6 +24,9 @@ class GPTConfig:
     n_qk_head_dim_layerlist: List[int] = field(default_factory=list)
     n_v_head_dim_layerlist: List[int] = field(default_factory=list)
     mlp_size_layerlist: List[int] = field(default_factory=list)
+    n_cproj_layerlist: List[int] = field(default_factory=list)
+    n_kv_group_layerlist: List[int] = field(default_factory=list)
+    attention_variant_layerlist: List[str] = field(default_factory=list)
 
     # For multicontext training
     multicontext: bool = False
@@ -182,6 +185,12 @@ class GPTConfig:
 
     # EdgeLLM ASIC block architecture
     use_edgellm_asic: bool = False
+    use_flash_norm: bool = False
+    use_gradual_activation: bool = False
+    activation_start: str = "gelu"
+    activation_end: str = "relu"
+    activation_transition_start_iter: int = 0
+    activation_transition_end_iter: int = None
 
     # MLP Options
     use_parallel_mlp: bool = False
@@ -366,6 +375,17 @@ class GPTConfig:
     # Layernorm Alternatives and Options
     norm_variant_attn: str = "rmsnorm"
     norm_variant_output: str = "rmsnorm"
+
+    norm_variant_wte: str | None = None
+    norm_wte_radius: float | None = None
+    norm_wte_scale: float | None = None
+    norm_wte_gain: bool | None = None
+
+    norm_variant_abs: str | None = None
+    norm_abs_radius: float | None = None
+    norm_abs_scale: float | None = None
+    norm_abs_gain: bool | None = None
+
     bias: bool = False # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     prmsnorm_pct: float = 0.0625
     krmsnorm_num: float = 10
@@ -373,8 +393,10 @@ class GPTConfig:
     krmsnorm_enable_gain: bool = True
     krmsnorm_selection_type: str = 'last'
     krmsnorm_recompute_percentage: float = 0.05
+
     hsnorm_gain: bool = False
-    hsnorm_radius: float = 1.0
+    hsnorm_radius: float | None = None
+    hsnorm_scale: float = 1.0
     hsnorm_radius_learning: bool = False
 
     dact_alpha_init: float = 1.0
@@ -383,6 +405,7 @@ class GPTConfig:
     dact_use_beta: bool = True
     dact_use_alpha: bool = True
     use_embedding_scale: bool = False
+    embedding_scale_init: float | None = None
 
     # Activation Alternatives
 
@@ -479,6 +502,10 @@ class GPTConfig:
     quantize_asic_prenorm: bool = False
     quantize_asic_offchip_residual: bool = False
     quantize_asic_bits: int = None
+    quantize_asic_attn_softmax_denom: bool = False
+    quantize_asic_attn_softmax_denom_bits: int = None
+    quantize_asic_attn_softmax_numerator: bool = False
+    quantize_asic_attn_softmax_numerator_bits: int = None
     store_activations: bool = False
 
     ## Linear Quantizations

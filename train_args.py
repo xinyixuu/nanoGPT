@@ -133,6 +133,18 @@ def parse_args():
         default=1.0,
         help='Scaling for flatness_boost loss when predictions are flat.',
     )
+    training_group.add_argument(
+        '--correct_top1_attenuation',
+        type=float,
+        default=1.0,
+        help='Constant multiplier for correctly predicted tokens in attenuated_correct_top1 loss.',
+    )
+    training_group.add_argument(
+        '--distance_top1_strength',
+        type=float,
+        default=0.0,
+        help='Strength of distance-based attenuation in distance_attenuated_top1 loss.',
+    )
 
     # Sample args
     training_group.add_argument('--max_sample_tokens', default=None, type=int, help="If set, maximum number of tokens to sample and print after each validation loss")
@@ -526,10 +538,9 @@ def parse_args():
             "kan",
             "swiglu",
             "dual_path",
+            "dual_path_swiglu",
             "identity",
             ]
-    
-    model_group.add_argument('--use_edgellm_asic', default=False, action=argparse.BooleanOptionalAction)
 
     model_group.add_argument('--use_parallel_mlp', default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument("--mlp_variant", type=str, default="mlp", choices=mlp_variants, help="MLP variation type")
@@ -636,6 +647,19 @@ def parse_args():
 
     model_group.add_argument("--norm_variant_attn", type=str, default="rmsnorm", choices=norm_variations)
     model_group.add_argument("--norm_variant_output", type=str, default="rmsnorm", choices=norm_variations)
+    model_group.add_argument("--use_flash_norm", type=bool, default=None, action=argparse.BooleanOptionalAction)
+
+    ### WTE and Abs Pos Embedding Post Norms (optional, and default None)
+    model_group.add_argument("--norm_variant_wte", type=str, default=None, choices=norm_variations)
+    model_group.add_argument("--norm_variant_abs", type=str, default=None, choices=norm_variations)
+
+    model_group.add_argument("--norm_wte_radius", type=float, default=None)
+    model_group.add_argument("--norm_wte_scale", type=float, default=None)
+    model_group.add_argument("--norm_wte_gain", type=bool, default=None, action=argparse.BooleanOptionalAction)
+
+    model_group.add_argument("--norm_abs_radius", type=float, default=None)
+    model_group.add_argument("--norm_abs_scale", type=float, default=None)
+    model_group.add_argument("--norm_abs_gain", type=bool, default=None, action=argparse.BooleanOptionalAction)
 
     ## Layernorm
     model_group.add_argument('--bias', default=False, action=argparse.BooleanOptionalAction, help="only used for layernorm variation option")
@@ -652,6 +676,7 @@ def parse_args():
 
     ## HyperSphereNorm
     model_group.add_argument("--hsnorm_gain", default=False, action=argparse.BooleanOptionalAction)
+    model_group.add_argument("--hsnorm_scale", type=float, default=1.0)
     model_group.add_argument("--hsnorm_radius", type=float, default=None)
     model_group.add_argument("--hsnorm_radius_learning", default=False, action=argparse.BooleanOptionalAction)
 
@@ -678,6 +703,7 @@ def parse_args():
             "softsign",
             "softshrink",
             "squared_relu",
+            "squared_gelu",
             "tanh",
             "identity",
         ]
@@ -691,6 +717,7 @@ def parse_args():
     model_group.add_argument("--dact_use_alpha",  type=bool, default=True, action=argparse.BooleanOptionalAction)
 
     model_group.add_argument("--use_embedding_scale", type=bool, default=False, action=argparse.BooleanOptionalAction)
+    model_group.add_argument("--embedding_scale_init", type=float, default=None)
 
     # ACTIVATION VARIATIONS
     model_group.add_argument( "--activation_variant", type=str, default="gelu", choices=activation_variations)
@@ -720,6 +747,7 @@ def parse_args():
     # Attention Variations
     attention_variants = [
                           "causal",
+                          "edgellm_asic_attn",
                           "linear",
                           "ssm",
                           "identity",
@@ -776,6 +804,9 @@ def parse_args():
     model_group.add_argument("--n_head_layerlist", nargs='+', action=LayerListAction, default=None, help="Override n_head per layer, cycling through the list.")
     model_group.add_argument("--mlp_size_layerlist", nargs='+', action=LayerListAction, default=None, help="Override mlp_size per layer, cycling through the list. " "Example: --mlp_size_layerlist 100 200 300")
     model_group.add_argument("--n_v_head_dim_layerlist", nargs='+', action=LayerListAction, default=None)
+    model_group.add_argument("--n_cproj_layerlist", nargs='+', action=LayerListAction, default=None)
+    model_group.add_argument("--n_kv_group_layerlist", nargs='+', action=LayerListAction, default=None)
+    model_group.add_argument("--attention_variant_layerlist", nargs='+', action=LayerListAction, default=None)
 
     ## Infinite Attention variation
     model_group.add_argument('--n_qk_head_dim', default=None, type=int)
@@ -833,6 +864,15 @@ def parse_args():
     model_group.add_argument( "--init_radius", type=float, default=1.0, help="radius for angle_hypersphere initialization")
     model_group.add_argument( "--gaussian_min_norm", type=float, default=0.0, help="minimum norm for gaussian_norm_range initialization")
     model_group.add_argument( "--gaussian_max_norm", type=float, default=float('inf'), help="maximum norm for gaussian_norm_range initialization")
+
+    # EdgeLLM ASIC Args
+    model_group.add_argument('--use_edgellm_asic', default=False, action=argparse.BooleanOptionalAction)
+    # Gradual activation transition
+    model_group.add_argument("--use_gradual_activation", type=bool, default=False, action=argparse.BooleanOptionalAction)
+    model_group.add_argument("--activation_start", type=str, default="gelu", choices=activation_variations)
+    model_group.add_argument("--activation_end", type=str, default="relu", choices=activation_variations)
+    model_group.add_argument("--activation_transition_start_iter", type=int, default=0)
+    model_group.add_argument("--activation_transition_end_iter", type=int, default=None, help="If None, defaults to max_iters from training config.")
 
     # Quantization
     model_group.add_argument("--full_quant_iteration", type=int, default=None,
@@ -903,6 +943,10 @@ def parse_args():
     ### ASIC Activations
     model_group.add_argument("--quantize_asic_prenorm", action=argparse.BooleanOptionalAction, default=False, help="quantize the ASIC input to norm")
     model_group.add_argument("--quantize_asic_offchip_residual", action=argparse.BooleanOptionalAction, default=False, help="quantize the ASIC off-chip residual")
+    model_group.add_argument("--quantize_asic_attn_softmax_denom", action=argparse.BooleanOptionalAction, default=False, help="quantize the ASIC attention softmax denominator")
+    model_group.add_argument("--quantize_asic_attn_softmax_denom_bits", type=int, default=16, help="number of bits for ASIC attention softmax denominator quantization")
+    model_group.add_argument("--quantize_asic_attn_softmax_numerator", action=argparse.BooleanOptionalAction, default=False, help="quantize the ASIC attention softmax numerator")
+    model_group.add_argument("--quantize_asic_attn_softmax_numerator_bits", type=int, default=8, help="number of bits for ASIC attention softmax numerator quantization")
 
     ### Default Precisions for ASIC Activations
     model_group.add_argument("--quantize_asic_bits", type=int, default=8, help="number of bits for asic quantization")
