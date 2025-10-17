@@ -1,7 +1,20 @@
-# explorations/multidataset.yaml
+# explorations/multokenization.yaml
 ---
 # Base hyperparameters
 named_static_groups:
+  - named_group: "1-10-10_20-1-1"
+    dataset_sampling_probs: 
+      - [1, 10, 10]
+    dataset_sampling_probs_final: 
+      - [20, 1, 1]
+
+  - named_group: "linear"
+    dataset_sampling_probs_transition_method: [linear]
+
+  - named_group: "tiktoken_cckj"
+    dataset: [snac_cvzh]
+    dataset_list: [snac_cvzh snac_cvko snac_cvja]
+
   - named_group: "one_hot"
     use_lsv: [true]
     lsv_variant: [one_hot]
@@ -49,18 +62,9 @@ named_static_groups:
     tensorboard_run_name: ["without_lsv"]
 
 training_mode: [multidataset]
-dataset: [byte_zh]
-dataset_list: [byte_zh byte_ko byte_ja]
-dataset_sampling_probs: 
-  - [1, 10, 10]
-dataset_sampling_probs_final: 
-  - [10, 1, 1]
-dataset_sampling_probs_transition_method: [cosine]
-dataset_interleaving: [true]
+dataset_interleaving: [false]
 batch_size: [8]
 learning_rate: [6e-4]
-decay_lr: [true]
-min_lr: [6e-5]
 n_layer: [12]
 n_head: [12]
 n_embd: [768]
@@ -77,3 +81,7 @@ warmup_iters: [1000]
 eval_interval: [1000]
 sample_each_eval: [true]
 compile: [true]
+
+parameter_groups:
+  - named_group_static: ["tiktoken_cckj", "1-10-10_20-1-1", "linear"]
+    named_group_alternates: ["one_hot", "one_hot_mlp", "ohmg", "ohmt", "ohmm", "ohma", "mol", "without_lsv"]
