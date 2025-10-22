@@ -593,11 +593,11 @@ def build_command(combo: dict) -> list[str]:
         if isinstance(v, bool):
             cmd.append(f"--{'' if v else 'no-'}{k}")
         elif isinstance(v, list):
-            for x in v:
-                cmd += [f"--{k}", str(x)]
-                # Use nargs='+' style: --arg val1 val2 val3
+            if v:
                 cmd.append(f"--{k}")
                 cmd.extend([str(x) for x in v])
+            else:
+                cmd.append(f"--{k}")
         else:
             cmd += [f"--{k}", str(v)]
     return cmd
