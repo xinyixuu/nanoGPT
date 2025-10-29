@@ -1,0 +1,76 @@
+# explorations/multokenization.yaml
+---
+# Base hyperparameters
+named_static_groups:
+  - named_group: "1-1-1_1-1-1"
+    dataset_sampling_probs: 
+      - [1, 1, 1]
+    dataset_sampling_probs_final: 
+      - [1, 1, 1]
+
+  - named_group: "linear"
+    dataset_sampling_probs_transition_method: [linear]
+
+  - named_group: "byte_cckj"
+    dataset: [byte_zh]
+    dataset_list: [byte_zh byte_ko byte_ja]
+
+  - named_group: "ipa_cckj"
+    dataset: [commonvoice_zh]
+    dataset_list: [commonvoice_zh commonvoice_ko commonvoice_ja]
+
+  - named_group: "tiktoken_cckj"
+    dataset: [snac_cvzh]
+    dataset_list: [snac_cvzh snac_cvko snac_cvja]
+
+  - named_group: "one_hot_layer0"
+    use_lsv: [true]
+    lsv_variant: [one_hot]
+    apply_lsv_at_layer_idx: [0]
+
+  - named_group: "one_hot_layer6"
+    use_lsv: [true]
+    lsv_variant: [one_hot]
+    apply_lsv_at_layer_idx: [6]
+
+  - named_group: "ohmg_layer0"
+    use_lsv: [true]
+    lsv_variant: [ohmg]
+    apply_lsv_at_layer_idx: [0]
+
+  - named_group: "ohmg_layer6"
+    use_lsv: [true]
+    lsv_variant: [ohmg]
+    apply_lsv_at_layer_idx: [6]
+
+  - named_group: "without_lsv"
+    use_lsv: [false]
+
+training_mode: [multidataset]
+dataset_interleaving: [false]
+learning_rate: [6e-4]
+n_layer: [12]
+n_head: [12]
+n_embd: [768]
+block_size: [1024]
+use_rotary_embeddings: [true]
+use_abs_pos_embeddings: [false]
+use_qk_norm: [true]
+use_qk_norm_scale: [true]
+use_peri_ln: [true]
+use_gradient_checkpoint: [true]
+max_sample_tokens: [100]
+max_iters: [3000]
+eval_interval: [1000]
+sample_each_eval: [true]
+compile: [true]
+
+parameter_groups:
+  - named_group_static: ["ipa_cckj", "1-1-1_1-1-1", "linear", "base_batch_iters"]
+    named_group_alternates: ["one_hot_layer0", "one_hot_layer6", "ohmg_layer0", "ohmg_layer6", "without_lsv"]
+    
+  - named_group_static: ["byte_cckj", "1-1-1_1-1-1", "linear", "base_batch_iters"]
+    named_group_alternates: ["one_hot_layer0", "one_hot_layer6", "ohmg_layer0", "ohmg_layer6", "without_lsv"]
+
+  - named_group_static: ["tiktoken_cckj", "1-1-1_1-1-1", "linear", "base_batch_iters"]
+    named_group_alternates: ["one_hot_layer0", "one_hot_layer6", "ohmg_layer0", "ohmg_layer6", "without_lsv"]
