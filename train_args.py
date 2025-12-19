@@ -40,6 +40,26 @@ def parse_args():
                              help="Dimension for L2-normalizing MLP up projections: 'embed' or 'hidden'")
     model_group.add_argument('--l2_norm_mlp_down_dim', type=str, default='hidden', choices=['embed', 'hidden'],
                              help="Dimension for L2-normalizing MLP down projections: 'embed' or 'hidden'")
+    model_group.add_argument('--l2_norm_print_dims', default=False, action=argparse.BooleanOptionalAction,
+                             help='Print the dimension size used for L2 normalization when enabled')
+
+    # Attention L2 Normalization options (Infinite attention)
+    model_group.add_argument('--l2_norm_attn_q', default=False, action=argparse.BooleanOptionalAction,
+                             help='L2 normalize attention query projection weights')
+    model_group.add_argument('--l2_norm_attn_k', default=False, action=argparse.BooleanOptionalAction,
+                             help='L2 normalize attention key projection weights')
+    model_group.add_argument('--l2_norm_attn_v', default=False, action=argparse.BooleanOptionalAction,
+                             help='L2 normalize attention value projection weights')
+    model_group.add_argument('--l2_norm_attn_cproj', default=False, action=argparse.BooleanOptionalAction,
+                             help='L2 normalize attention output projection weights')
+    model_group.add_argument('--l2_norm_attn_q_dim', type=str, default='embed', choices=['embed', 'hidden'],
+                             help="Dimension for L2-normalizing attention query projections: 'embed' or 'hidden'")
+    model_group.add_argument('--l2_norm_attn_k_dim', type=str, default='embed', choices=['embed', 'hidden'],
+                             help="Dimension for L2-normalizing attention key projections: 'embed' or 'hidden'")
+    model_group.add_argument('--l2_norm_attn_v_dim', type=str, default='embed', choices=['embed', 'hidden'],
+                             help="Dimension for L2-normalizing attention value projections: 'embed' or 'hidden'")
+    model_group.add_argument('--l2_norm_attn_cproj_dim', type=str, default='embed', choices=['embed', 'hidden'],
+                             help="Dimension for L2-normalizing attention output projections: 'embed' or 'hidden'")
 
     # Export Args
     ## Factored WTE
@@ -284,7 +304,6 @@ def parse_args():
             "adams",
             "ademamix",
             "adan",
-            "apollo_adamw",
             "qhadam",
             "yogi",
             "adamp",
@@ -409,13 +428,6 @@ def parse_args():
     # Adan ---------------------------------------------------------------
     training_group.add_argument("--adan_wd", type=float, default=0.0, help="Adan weight decay.")
     training_group.add_argument("--adan_eps", type=float, default=1e-8, help="Adan epsilon.")
-    # Apollo-Adamw low-rank specific knobs
-    training_group.add_argument("--apollo_rank", type=int, default=2, help="Low-rank adaptor rank (k).")
-    training_group.add_argument("--apollo_proj", type=str, default="random", choices=["random", "hadamard", "learned"], help="Type of projection matrix used by Apollo.")
-    training_group.add_argument("--apollo_scale", type=int, default=128, help="Scale constant applied to projection (see paper).")
-    training_group.add_argument("--apollo_update_proj_gap", type=int, default=200, help="# of optimisation steps between projector refresh.")
-    training_group.add_argument("--apollo_proj_type", type=str, default="std", choices=["std", "gaussian", "rademacher"], help="Distribution for generating the projection matrix.")
-    training_group.add_argument("--apollo_apply_to_all", action=argparse.BooleanOptionalAction, default=False, help="If set, apply low-rank Apollo updates to *all* " "parameters instead of only tensors tagged with " "`.lowrank = True`.")
     training_group.add_argument("--lookahead_inner_opt",
                                 type=str,
                                 default="adamw",
@@ -862,6 +874,10 @@ def parse_args():
     model_group.add_argument('--n_qk_head_dim', default=None, type=int)
     model_group.add_argument('--n_v_head_dim', default=None, type=int)
     model_group.add_argument('--n_cproj', default=None, type=int)
+    model_group.add_argument('--attn_cproj_scale', default=1.0, type=float,
+                             help="Scale attention outputs before c_proj (Infinite Attention)")
+    model_group.add_argument('--attn_post_act_l2_norm', default=False, action=argparse.BooleanOptionalAction,
+                             help="L2 normalize attention outputs before c_proj (Infinite Attention)")
     model_group.add_argument("--use_concat_heads",   type=bool, default=False, action=argparse.BooleanOptionalAction, help="concat heads instead of adding in infinite attention")
 
     ## qk_norm variations
