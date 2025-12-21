@@ -128,8 +128,7 @@ common_group:
   eval_interval: [1000]
   sample_each_eval: [true]
   compile: [true]
-  seed: 
-    - [1, 2, 3, 4, 5]
+  seed: [1, 2, 3, 4, 5]
 
 parameter_groups:
   - named_group_static: ["commonvoice_ko"]
