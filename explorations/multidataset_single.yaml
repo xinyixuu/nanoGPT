@@ -67,6 +67,18 @@ named_static_groups:
 
   - named_group: "byte_ja"
     dataset: [byte_ja]
+    batch_size: [16]
+    max_iters: [20600]
+
+  - named_group: "byte_ko"
+    dataset: [byte_ko]
+    batch_size: [16]
+    max_iters: [11500]
+
+  - named_group: "byte_zh"
+    dataset: [byte_zh]
+    batch_size: [16]
+    max_iters: [14100]
 
   - named_group: "commonvoice_ja"
     dataset: [commonvoice_ja]

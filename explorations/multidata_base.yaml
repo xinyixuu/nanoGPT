@@ -14,6 +14,20 @@ named_static_groups:
   - named_group: "byte_jckj"
     dataset: [byte_ja]
     dataset_list: [byte_ja byte_ko byte_zh]
+    batch_size: [16]
+    max_iters: [61800]
+
+  - named_group: "byte_kckj"
+    dataset: [byte_ko]
+    dataset_list: [byte_ja byte_ko byte_zh]
+    batch_size: [16]
+    max_iters: [34500]
+
+  - named_group: "byte_cckj"
+    dataset: [byte_zh]
+    dataset_list: [byte_ja byte_ko byte_zh]
+    batch_size: [16]
+    max_iters: [42300]
 
   - named_group: "ipa_jckj"
     dataset: [commonvoice_ja]
