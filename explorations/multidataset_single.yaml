@@ -104,6 +104,51 @@ named_static_groups:
   - named_group: "snac_cvzh"
     dataset: [snac_cvzh]
 
+  - named_group: "byte_flores_ja"
+    dataset: [byte_flores_ja]
+    batch_size: [16]
+    max_iters: [2080]
+
+  - named_group: "byte_flores_ko"
+    dataset: [byte_flores_ko]
+    batch_size: [16]
+    max_iters: [1160]
+
+  - named_group: "byte_flores_zh"
+    dataset: [byte_flores_zh]
+    batch_size: [16]
+    max_iters: [1420]
+
+  - named_group: "ipa_flores_ja"
+    dataset: [ipa_flores_ja]
+    batch_size: [16]
+    max_iters: [2640]
+
+  - named_group: "ipa_flores_ko"
+    dataset: [ipa_flores_ko]
+    batch_size: [16]
+    max_iters: [1330]
+
+  - named_group: "ipa_flores_zh"
+    dataset: [ipa_flores_zh]
+    batch_size: [16]
+    max_iters: [2610]
+
+  - named_group: "tiktoken_flores_ja"
+    dataset: [tik_flores_ja]
+    batch_size: [16]
+    max_iters: [1000]
+
+  - named_group: "tiktoken_flores_ko"
+    dataset: [tik_flores_ko]
+    batch_size: [16]
+    max_iters: [1000]
+
+  - named_group: "tiktoken_flores_zh"
+    dataset: [tik_flores_zh]
+    batch_size: [16]
+    max_iters: [1000]
+
 named_variation_groups:
   - named_group: "batch_sweep"
     parameter_groups:
@@ -140,26 +185,53 @@ common_group:
   eval_interval: [1000]
   sample_each_eval: [true]
   compile: [true]
-  seed: [1, 2, 3, 4, 5]
+seed: [1, 2, 3, 4, 5]
 
 parameter_groups:
-  - named_group_static: ["commonvoice_ko"]
-    tensorboard_run_name: "ipa_single_run_ko"
-
-  - named_group_static: ["snac_cvko", "base_batch_iters"]
-    tensorboard_run_name: "tiktoken_single_run_ko"
-
-  - named_group_static: ["commonvoice_zh"]
-    tensorboard_run_name: "ipa_single_run_zh"
-
-  - named_group_static: ["snac_cvzh", "base_batch_iters"]
-    tensorboard_run_name: "tiktoken_single_run_zh"
-
-  - named_group_static: ["commonvoice_ja"]
+  - named_group_static: ["ipa_flores_ja"]
     tensorboard_run_name: "ipa_single_run_ja"
 
-  - named_group_static: ["snac_cvja", "base_batch_iters"]
+  - named_group_static: ["ipa_flores_ko"]
+    tensorboard_run_name: "ipa_single_run_ko"
+
+  - named_group_static: ["ipa_flores_zh"]
+    tensorboard_run_name: "ipa_single_run_zh"
+
+  - named_group_static: ["byte_flores_ja"]
+    tensorboard_run_name: "byte_single_run_ja"
+
+  - named_group_static: ["byte_flores_ko"]
+    tensorboard_run_name: "byte_single_run_ko"
+    
+  - named_group_static: ["byte_flores_zh"]
+    tensorboard_run_name: "byte_single_run_zh"
+
+  - named_group_static: ["tiktoken_flores_ja"]
     tensorboard_run_name: "tiktoken_single_run_ja"
+
+  - named_group_static: ["tiktoken_flores_ko"]
+    tensorboard_run_name: "tiktoken_single_run_ko"
+
+  - named_group_static: ["tiktoken_flores_zh"]
+    tensorboard_run_name: "tiktoken_single_run_zh"
+
+  # - named_group_static: ["commonvoice_ko"]
+  #   tensorboard_run_name: "ipa_single_run_ko"
+
+  # - named_group_static: ["snac_cvko", "base_batch_iters"]
+  #   tensorboard_run_name: "tiktoken_single_run_ko"
+
+  # - named_group_static: ["commonvoice_zh"]
+  #   tensorboard_run_name: "ipa_single_run_zh"
+
+  # - named_group_static: ["snac_cvzh", "base_batch_iters"]
+  #   tensorboard_run_name: "tiktoken_single_run_zh"
+
+  # - named_group_static: ["commonvoice_ja"]
+  #   tensorboard_run_name: "ipa_single_run_ja"
+
+  # - named_group_static: ["snac_cvja", "base_batch_iters"]
+  #   tensorboard_run_name: "tiktoken_single_run_ja"
 
   
   # - named_group_static: ["ipa_jckj", "1-10-10_200-1-1", "linear", "base_batch_iters"]

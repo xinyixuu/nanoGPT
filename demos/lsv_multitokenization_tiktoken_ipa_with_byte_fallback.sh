@@ -8,58 +8,42 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 pushd "$script_dir/../" > /dev/null
 
 # obtain and tokenize commonvoice_en
-pushd data/commonvoice_ja
+pushd data/tik_flores_ja
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
-  bash get_ipa.sh
+  bash get_tik.sh
 else
-  echo "train.bin val.bin and meta.pkl already found for commonvoice_ja"
+  echo "train.bin val.bin and meta.pkl already found for tik_flores_ja"
 fi
 popd
 
-pushd data/commonvoice_ko
+pushd data/tik_flores_ko
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
-  bash get_ipa.sh
+  bash get_tik.sh
 else
-  echo "train.bin val.bin and meta.pkl already found for commonvoice_ko"
+  echo "train.bin val.bin and meta.pkl already found for tik_flores_ko"
 fi
 popd
 
-pushd data/commonvoice_zh
+pushd data/ipa_flores_ja
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
   bash get_ipa.sh
 else
-  echo "train.bin val.bin and meta.pkl already found for commonvoice_zh"
+  echo "train.bin val.bin and meta.pkl already found for ipa_flores_ja"
 fi
 popd
 
 # obtain and tokenize snac_cvko
-pushd data/snac_cvja
+pushd data/ipa_flores_ko
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
-  bash get_text.sh
+  bash get_ipa.sh
 else
-  echo "train.bin val.bin and meta.pkl already found for snac_cvja"
+  echo "train.bin val.bin and meta.pkl already found for ipa_flores_ko"
 fi
 popd
 
-pushd data/snac_cvko
-if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
-  bash get_text.sh
-else
-  echo "train.bin val.bin and meta.pkl already found for snac_cvko"
-fi
-popd
+python3 optimization_and_search/run_experiments.py -c explorations/multidata_base.yaml -o out_multidata_base_flores
 
-pushd data/snac_cvzh
-if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
-  bash get_text.sh
-else
-  echo "train.bin val.bin and meta.pkl already found for snac_cvzh"
-fi
-popd
-
-python3 optimization_and_search/run_experiments.py -c explorations/multidata_base.yaml -o out_multidata_base_one_hot
-
-python3 optimization_and_search/run_experiments.py -c explorations/multidataset_single.yaml -o out_multidata_single
+python3 optimization_and_search/run_experiments.py -c explorations/multidataset_single.yaml -o out_multidata_single_flores
 
 # python3 train.py \
 #   --training_mode multidataset \
