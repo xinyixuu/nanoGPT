@@ -267,6 +267,18 @@ def parse_args():
                                     help="Interpret multicontext inputs as numerical values and use regression heads")
     model_group.add_argument('--numerical_mlp_hidden_dim', default=64, type=int,
                                     help="Hidden dimension for numerical multi-context embedding/output MLPs")
+    model_group.add_argument('--numerical_mlp_hidden_dims', default=None, nargs='+', type=int,
+                                    help="List of hidden dimensions for numerical MLP mappings (overrides --numerical_mlp_num_layers)")
+    model_group.add_argument('--numerical_mlp_num_layers', default=2, type=int,
+                                    help="Number of hidden layers for numerical MLP mappings when hidden dims not provided")
+    model_group.add_argument('--numerical_mlp_activation_variant', default="relu", type=str,
+                                    help="Activation variant for numerical MLP mappings")
+    model_group.add_argument('--numerical_embedding_variant', default="mlp", type=str,
+                                    help="Variant for numerical multicontext input mapping (e.g., mlp, linear)")
+    model_group.add_argument('--numerical_output_variant', default="mlp", type=str,
+                                    help="Variant for numerical multicontext output mapping (e.g., mlp, linear)")
+    model_group.add_argument('--numerical_mapping_weight_tying', default=True, action=argparse.BooleanOptionalAction,
+                                    help="Tie numerical embedding/output mapping weights when supported")
     model_group.add_argument('--multicontext', default=False, action=argparse.BooleanOptionalAction,
                                     help="Enable multi-context training on multiple simultaneous datasets")
     model_group.add_argument('--multidataset_wte', default=False, action=argparse.BooleanOptionalAction,
@@ -664,14 +676,14 @@ def parse_args():
         '--attn_residual_combination',
         type=str,
         default='add',
-        choices=['add', 'lerp', 'slerp'],
+        choices=['add', 'rezero', 'lerp', 'slerp'],
         help='Residual combination method for attention block'
     )
     model_group.add_argument(
         '--mlp_residual_combination',
         type=str,
         default='add',
-        choices=['add', 'lerp', 'slerp'],
+        choices=['add', 'rezero', 'lerp', 'slerp'],
         help='Residual combination method for MLP block'
     )
     model_group.add_argument(
@@ -696,14 +708,14 @@ def parse_args():
         '--attn_residual_alpha_type',
         type=str,
         default='fixed',
-        choices=['fixed', 'learned', 'dot'],
+        choices=['fixed', 'learned', 'rezero', 'dot'],
         help='Alpha mode for attention residual combination'
     )
     model_group.add_argument(
         '--mlp_residual_alpha_type',
         type=str,
         default='fixed',
-        choices=['fixed', 'learned', 'dot'],
+        choices=['fixed', 'learned', 'rezero', 'dot'],
         help='Alpha mode for MLP residual combination'
     )
 
@@ -883,6 +895,8 @@ def parse_args():
     model_group.add_argument("--n_cproj_layerlist", nargs='+', action=LayerListAction, default=None)
     model_group.add_argument("--n_kv_group_layerlist", nargs='+', action=LayerListAction, default=None)
     model_group.add_argument("--attention_variant_layerlist", nargs='+', action=LayerListAction, default=None)
+    model_group.add_argument("--use_rotary_embeddings_layerlist", nargs='+', action=LayerListAction, default=None, help="Override use_rotary_embeddings per layer, cycling through the list.")
+    model_group.add_argument("--window_size_layerlist", nargs='+', action=LayerListAction, default=None, help="Override window_size per layer, cycling through the list.")
 
     ## Infinite Attention variation
     model_group.add_argument('--n_qk_head_dim', default=None, type=int)
