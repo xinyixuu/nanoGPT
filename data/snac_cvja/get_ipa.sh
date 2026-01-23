@@ -1,6 +1,5 @@
 # !/bin/bash
 
-# Set strict error handling
 set -xe
 
 # Install python dependencies for Hugging face
@@ -26,35 +25,31 @@ hf auth login --token "${HF_TOKEN}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
 url="https://huggingface.co/datasets/xinyixuu/ja_snac"
-out_dir="json_outs"
+out_dir="out_ipa"
 
 if [[ ! -d "${out_dir}" ]]; then
   mkdir -p "${out_dir}"
 fi
 
-# Download transcription files under "transcription" directory.
-pushd "$script_dir/${out_dir}"
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "dev.json" "${url}/resolve/main/json_outs_ja/dev.json?download=true" || true
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "validated_part_1.json" "${url}/resolve/main/json_outs_ja/validated_part_1.json?download=true" || true
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "test.json" "${url}/resolve/main/json_outs_ja/test.json?download=true" || true
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "invalidated.json" "${url}/resolve/main/json_outs_ja/invalidated.json?download=true" || true
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "train.json" "${url}/resolve/main/json_outs_ja/train.json?download=true" || true
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "validated2_part1.json" "${url}/resolve/main/json_outs_ja/validated2_part1.json?download=true" || true
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "tiny.json" "${url}/resolve/main/json_outs_ja/tiny.json?download=true" || true
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "final.json" "${url}/resolve/main/json_outs_ja/final.json?download=true" || true
+pushd "${out_dir}"
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ja_anime_ipa.json" "${url}/resolve/main/ja_anime_ipa.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ja_anime_ipa_sfw.json" "${url}/resolve/main/ja_anime_ipa_sfw.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ja_ipa.json" "${url}/resolve/main/ja_ipa.json?download=true" || true
 
-echo "snac conversion files downloaded and saved to ${out_dir}."
+echo "json files downloaded and saved to out_ipa."
 popd
 
 output_ipa_txt="ja_ipa.txt"
 for jsonfile in "$out_dir"/*.json; do
-    # Check if the .tsv file exists (handles the case where no .tsv files are present)
+    # Check if the .json file exists (handles the case where no .json files are present)
     if [ -f "$jsonfile" ]; then
         echo "Processing $jsonfile..."
         # Get the filename without the extension for output filename
-        python3 "$script_dir"/utils/extract_json_values.py "$jsonfile" "ipa" "$output_ipa_txt"
+        filename=$(basename "${jsonfile%.json}")
+        python3 "$script_dir"/utils/extract_json_values.py "$jsonfile" "spaced_ipa" "$output_ipa_txt"
     fi
 done
+echo "IPA extraction finished."
 
 #TODO(gkielian): see if we can fix the parsing of rows instead of deleting
 # Remove lines which were not correclty processed (and start with numberic hash)
@@ -64,4 +59,4 @@ wc -l "$output_ipa_txt"
 
 # Tokenization step to create train.bin and val.bin files.
 #python3 "$script_dir"/prepare.py -t "$output_ipa_txt" --method char
-python3 "$script_dir"/prepare.py -t "$output_ipa_txt" --method custom_char_byte_fallback --custom_chars_file ../template/phoneme_list.txt
+python3 "$script_dir"/prepare.py -t "$output_ipa_txt" --method tiktoken

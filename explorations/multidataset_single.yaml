@@ -87,6 +87,8 @@ named_static_groups:
 
   - named_group: "snac_cvja"
     dataset: [snac_cvja]
+    batch_size: [16]
+    max_iters: [41800]
 
   - named_group: "commonvoice_ko"
     dataset: [commonvoice_ko]
@@ -95,6 +97,8 @@ named_static_groups:
 
   - named_group: "snac_cvko"
     dataset: [snac_cvko]
+    batch_size: [16]
+    max_iters: [12900]
 
   - named_group: "commonvoice_zh"
     dataset: [commonvoice_zh]
@@ -103,6 +107,8 @@ named_static_groups:
 
   - named_group: "snac_cvzh"
     dataset: [snac_cvzh]
+    batch_size: [16]
+    max_iters: [56200]
 
 named_variation_groups:
   - named_group: "batch_sweep"
@@ -137,28 +143,28 @@ common_group:
   use_peri_ln: [true]
   use_gradient_checkpoint: [true]
   max_sample_tokens: [100]
-  eval_interval: [1000]
+  eval_interval: [100]
   sample_each_eval: [true]
   compile: [true]
-  seed: [1, 2, 3, 4, 5]
+seed: [1, 2, 3, 4, 5]
 
 parameter_groups:
-  - named_group_static: ["commonvoice_ko"]
-    tensorboard_run_name: "ipa_single_run_ko"
+  # - named_group_static: ["commonvoice_ko"]
+  #   tensorboard_run_name: "ipa_single_run_ko"
 
-  - named_group_static: ["snac_cvko", "base_batch_iters"]
+  - named_group_static: ["snac_cvko"]
     tensorboard_run_name: "tiktoken_single_run_ko"
 
-  - named_group_static: ["commonvoice_zh"]
-    tensorboard_run_name: "ipa_single_run_zh"
+  # - named_group_static: ["commonvoice_zh"]
+  #   tensorboard_run_name: "ipa_single_run_zh"
 
-  - named_group_static: ["snac_cvzh", "base_batch_iters"]
+  - named_group_static: ["snac_cvzh"]
     tensorboard_run_name: "tiktoken_single_run_zh"
 
-  - named_group_static: ["commonvoice_ja"]
-    tensorboard_run_name: "ipa_single_run_ja"
+  # - named_group_static: ["commonvoice_ja"]
+  #   tensorboard_run_name: "ipa_single_run_ja"
 
-  - named_group_static: ["snac_cvja", "base_batch_iters"]
+  - named_group_static: ["snac_cvja"]
     tensorboard_run_name: "tiktoken_single_run_ja"
 
   

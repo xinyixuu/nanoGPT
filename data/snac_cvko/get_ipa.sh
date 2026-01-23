@@ -1,6 +1,5 @@
 # !/bin/bash
 
-# Set strict error handling
 set -xe
 
 # Install python dependencies for Hugging face
@@ -26,25 +25,22 @@ hf auth login --token "${HF_TOKEN}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
 url="https://huggingface.co/datasets/xinyixuu/ko_snac"
-out_dir="json_outs"
+out_dir="out_ipa"
 
 if [[ ! -d "${out_dir}" ]]; then
   mkdir -p "${out_dir}"
 fi
 
-# Download transcription files under "transcription" directory.
-pushd "$script_dir/${out_dir}"
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "dev.json" "${url}/resolve/main/json_dir/dev.json?download=true" || true
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "other.json" "${url}/resolve/main/json_dir/other.json?download=true" || true
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "test.json" "${url}/resolve/main/json_dir/test.json?download=true" || true
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "invalidated.json" "${url}/resolve/main/json_dir/invalidated.json?download=true" || true
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "train.json" "${url}/resolve/main/json_dir/train.json?download=true" || true
-wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "validated.json" "${url}/resolve/main/json_dir/validated.json?download=true" || true
+pushd "${out_dir}"
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_transcription.json" "${url}/resolve/main/ko_transcription.json?download=true" || true
 wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac.json" "${url}/resolve/main/json_dir/ko_snac.json?download=true" || true
 wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac_1.json" "${url}/resolve/main/json_dir/ko_snac_1.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac_2.json" "${url}/resolve/main/json_dir/ko_snac_2.json?download=true" || true
 wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac_3.json" "${url}/resolve/main/json_dir/ko_snac_3.json?download=true" || true
-
-echo "snac conversion files downloaded and saved to ${out_dir}."
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac_4_t.json" "${url}/resolve/main/json_dir/ko_snac_4_t.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac_5.json" "${url}/resolve/main/json_dir/ko_snac_5.json?download=true" || true
+wget --header="Authorization: Bearer ${HF_TOKEN}" -nc -O "ko_snac_6.json" "${url}/resolve/main/json_dir/ko_snac_6.json?download=true" || true
+echo "json files downloaded and saved to out_ipa."
 popd
 
 output_ipa_txt="ko_ipa.txt"
@@ -65,4 +61,4 @@ wc -l "$output_ipa_txt"
 
 # Tokenization step to create train.bin and val.bin files.
 #python3 "$script_dir"/prepare.py -t "$output_ipa_txt" --method char
-python3 "$script_dir"/prepare.py -t "$output_ipa_txt" --method custom_char_byte_fallback --custom_chars_file ../template/phoneme_list.txt
+python3 "$script_dir"/prepare.py -t "$output_ipa_txt" --method tiktoken
