@@ -18,6 +18,12 @@ class GPTConfig:
     # numerical multicontext
     numerical_multicontext: bool = False
     numerical_mlp_hidden_dim: int = 64
+    numerical_mlp_hidden_dims: List[int] = field(default_factory=list)
+    numerical_mlp_num_layers: int = 2
+    numerical_mlp_activation_variant: str = "relu"
+    numerical_embedding_variant: str = "mlp"
+    numerical_output_variant: str = "mlp"
+    numerical_mapping_weight_tying: bool = True
 
     # Layerlists
     n_head_layerlist: List[int] = field(default_factory=list)
@@ -27,6 +33,8 @@ class GPTConfig:
     n_cproj_layerlist: List[int] = field(default_factory=list)
     n_kv_group_layerlist: List[int] = field(default_factory=list)
     attention_variant_layerlist: List[str] = field(default_factory=list)
+    use_rotary_embeddings_layerlist: List[bool] = field(default_factory=list)
+    window_size_layerlist: List[int] = field(default_factory=list)
 
     # For multicontext training
     multicontext: bool = False
@@ -180,6 +188,7 @@ class GPTConfig:
     activation_end: str = "relu"
     activation_transition_start_iter: int = 0
     activation_transition_end_iter: int = None
+    relu_power: float = 2.0
 
     # MLP Options
     use_parallel_mlp: bool = False
