@@ -8,58 +8,83 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 pushd "$script_dir/../" > /dev/null
 
 # obtain and tokenize commonvoice_en
-pushd data/commonvoice_ja
+pushd data/ipa_ted_ja
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
-  bash get_ipa.sh
+  bash get_dataset.sh
 else
-  echo "train.bin val.bin and meta.pkl already found for commonvoice_ja"
+  echo "train.bin val.bin and meta.pkl already found for ipa_ted_ja"
 fi
 popd
 
-pushd data/commonvoice_ko
+pushd data/ipa_ted_ko
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
-  bash get_ipa.sh
+  bash get_dataset.sh
 else
-  echo "train.bin val.bin and meta.pkl already found for commonvoice_ko"
+  echo "train.bin val.bin and meta.pkl already found for ipa_ted_ko"
 fi
 popd
 
-pushd data/commonvoice_zh
+pushd data/ipa_ted_zh
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
-  bash get_ipa.sh
+  bash get_dataset.sh
 else
-  echo "train.bin val.bin and meta.pkl already found for commonvoice_zh"
+  echo "train.bin val.bin and meta.pkl already found for ipa_ted_zh"
 fi
 popd
 
 # obtain and tokenize snac_cvko
-pushd data/snac_cvja
+pushd data/tik_ted_ja
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
-  bash get_text.sh
+  bash get_dataset.sh
 else
-  echo "train.bin val.bin and meta.pkl already found for snac_cvja"
+  echo "train.bin val.bin and meta.pkl already found for tik_ted_ja"
 fi
 popd
 
-pushd data/snac_cvko
+pushd data/tik_ted_ko
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
-  bash get_text.sh
+  bash get_dataset.sh
 else
-  echo "train.bin val.bin and meta.pkl already found for snac_cvko"
+  echo "train.bin val.bin and meta.pkl already found for tik_ted_ko"
 fi
 popd
 
-pushd data/snac_cvzh
+pushd data/tik_ted_zh
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
-  bash get_text.sh
+  bash get_dataset.sh
 else
-  echo "train.bin val.bin and meta.pkl already found for snac_cvzh"
+  echo "train.bin val.bin and meta.pkl already found for tik_ted_zh"
 fi
 popd
 
-python3 optimization_and_search/run_experiments.py -c explorations/multidata_base.yaml -o out_multidata_base_one_hot
+# obtain and tokenize snac_cvko
+pushd data/byte_ted_ja
+if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
+  bash get_dataset.sh
+else
+  echo "train.bin val.bin and meta.pkl already found for byte_ted_ja"
+fi
+popd
 
-python3 optimization_and_search/run_experiments.py -c explorations/multidataset_single.yaml -o out_multidata_single
+pushd data/byte_ted_ko
+if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
+  bash get_dataset.sh
+else
+  echo "train.bin val.bin and meta.pkl already found for byte_ted_ko"
+fi
+popd
+
+pushd data/byte_ted_zh
+if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
+  bash get_dataset.sh
+else
+  echo "train.bin val.bin and meta.pkl already found for byte_ted_zh"
+fi
+popd
+
+# python3 optimization_and_search/run_experiments.py -c explorations/multidata_base.yaml -o out_multidata_base_one_hot
+
+# python3 optimization_and_search/run_experiments.py -c explorations/multidataset_single.yaml -o out_multidata_single
 
 # python3 train.py \
 #   --training_mode multidataset \
