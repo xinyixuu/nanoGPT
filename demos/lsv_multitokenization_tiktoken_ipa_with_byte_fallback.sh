@@ -82,7 +82,7 @@ else
 fi
 popd
 
-# python3 optimization_and_search/run_experiments.py -c explorations/multidata_base.yaml -o out_multidata_base_one_hot
+python3 optimization_and_search/run_experiments.py -c explorations/multidata_base_byte.yaml -o out_multidata_base_byte
 
 # python3 optimization_and_search/run_experiments.py -c explorations/multidataset_single.yaml -o out_multidata_single
 

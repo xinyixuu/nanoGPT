@@ -87,6 +87,8 @@ named_static_groups:
     use_lsv: [false]
 
 training_mode: [multidataset]
+init_from: [resume]
+init_from_ckpt: [ckpt.pt]
 dataset_interleaving: [true]
 learning_rate: [6e-4]
 n_layer: [12]

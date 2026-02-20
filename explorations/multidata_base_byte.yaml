@@ -106,22 +106,31 @@ compile: [true]
 seed: [1, 2, 3, 4, 5]
 
 parameter_groups:
-  - named_group_static: ["tiktoken_cckj", "1-1-1_1-1-1", "linear", "base_batch_iters"]
+  # - named_group_static: ["tiktoken_cckj", "1-1-1_1-1-1", "linear", "base_batch_iters"]
+  #   named_group_alternates: ["one_hot_layer0", "ohmg_layer0", "without_lsv"]
+
+  # - named_group_static: ["tiktoken_kckj", "1-1-1_1-1-1", "linear", "base_batch_iters"]
+  #   named_group_alternates: ["one_hot_layer0", "ohmg_layer0", "without_lsv"]
+
+  # - named_group_static: ["tiktoken_jckj", "1-1-1_1-1-1", "linear", "base_batch_iters"]
+  #   named_group_alternates: ["one_hot_layer0", "ohmg_layer0", "without_lsv"]
+
+  # - named_group_static: ["ipa_cckj", "1-1-1_1-1-1", "linear"]
+  #   named_group_alternates: ["one_hot_layer0", "ohmg_layer0", "without_lsv"]
+
+  # - named_group_static: ["ipa_kckj", "1-1-1_1-1-1", "linear"]
+  #   named_group_alternates: ["one_hot_layer0", "ohmg_layer0", "without_lsv"]
+
+  # - named_group_static: ["ipa_jckj", "1-1-1_1-1-1", "linear"]
+  #   named_group_alternates: ["one_hot_layer0", "ohmg_layer0", "without_lsv"]
+
+  - named_group_static: ["byte_cckj", "1-1-1_1-1-1", "linear"]
     named_group_alternates: ["one_hot_layer0", "ohmg_layer0", "without_lsv"]
 
-  - named_group_static: ["tiktoken_kckj", "1-1-1_1-1-1", "linear", "base_batch_iters"]
+  - named_group_static: ["byte_kckj", "1-1-1_1-1-1", "linear"]
     named_group_alternates: ["one_hot_layer0", "ohmg_layer0", "without_lsv"]
 
-  - named_group_static: ["tiktoken_jckj", "1-1-1_1-1-1", "linear", "base_batch_iters"]
-    named_group_alternates: ["one_hot_layer0", "ohmg_layer0", "without_lsv"]
-
-  - named_group_static: ["ipa_cckj", "1-1-1_1-1-1", "linear"]
-    named_group_alternates: ["one_hot_layer0", "ohmg_layer0", "without_lsv"]
-
-  - named_group_static: ["ipa_kckj", "1-1-1_1-1-1", "linear"]
-    named_group_alternates: ["one_hot_layer0", "ohmg_layer0", "without_lsv"]
-
-  - named_group_static: ["ipa_jckj", "1-1-1_1-1-1", "linear"]
+  - named_group_static: ["byte_jckj", "1-1-1_1-1-1", "linear"]
     named_group_alternates: ["one_hot_layer0", "ohmg_layer0", "without_lsv"]
   
   # - named_group_static: ["ipa_jckj", "1-1-1_1-1-1", "linear", "base_batch_iters"]

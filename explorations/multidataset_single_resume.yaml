@@ -63,7 +63,7 @@ named_static_groups:
 
   - named_group: "base_batch_iters"
     batch_size: [16]
-    max_iters: [10000]
+    max_iters: [26000] # Start from here
 
   - named_group: "byte_ja"
     dataset: [byte_ted_ja]
@@ -124,6 +124,8 @@ named_variation_groups:
 
 common_group:
   # training_mode: [multidataset]
+  init_from: [resume]
+  init_from_ckpt: [ckpt.pt]
   dataset_interleaving: [false]
   learning_rate: [6e-4]
   n_layer: [12]
