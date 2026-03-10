@@ -24,6 +24,14 @@ class GPTConfig:
     numerical_embedding_variant: str = "mlp"
     numerical_output_variant: str = "mlp"
     numerical_mapping_weight_tying: bool = True
+    numerical_multicontext_input_format: str = "scalar"
+
+    # Optional post-mapping channel normalization for numerical embeddings
+    norm_channel_variant: str | None = None
+    norm_channel_radius: float | None = None
+    norm_channel_scale: float | None = None
+    norm_channel_gain: bool | None = None
+    norm_channel_radius_learning: bool | None = None
 
     # Layerlists
     n_head_layerlist: List[int] = field(default_factory=list)
@@ -331,6 +339,7 @@ class GPTConfig:
     ## Embedding Intialization Options
     embedding_mean_init: float= 0.0
     embedding_std_init: float= 0.02
+    embedding_gaussian_noise_std: float = 0.0
 
     ## FIRE Options (Functional Interpolation for Relative Positional Encoding)
     fire_log_bias: float = 1.0

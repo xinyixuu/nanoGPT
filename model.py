@@ -352,6 +352,15 @@ class GPT(nn.Module):
         np.savez(file_path, scale_up=scale_up_matrix, scale_down=scale_down_matrix)
         print(f"Scale matrices saved to {file_path}")
 
+    def add_embedding_gaussian_noise(self, embeddings):
+        if self.config.embedding_gaussian_noise_std and self.config.embedding_gaussian_noise_std > 0:
+            noise = torch.randn_like(embeddings)
+            noise = noise / (noise.norm(dim=-1, keepdim=True) + 1e-6)
+            noise = noise * self.config.embedding_gaussian_noise_std
+            embeddings = embeddings / (embeddings.norm(dim=-1, keepdim=True) + 1e-6)
+            return embeddings + noise
+        return embeddings
+
     def forward(self, idx, targets=None, iter_num=None, token_dict=None, target_dict=None, dataset_idx=None, loss_fn=None):
         if token_dict is not None:
             token_list = list(token_dict.values())
@@ -370,11 +379,15 @@ class GPT(nn.Module):
                 if self.uses_numerical_multicontext:
                     module = self.numerical_embeddings[str(i)]
                     param = next(module.parameters())
-                    numeric_tokens = tokens.to(param.dtype).unsqueeze(-1)
-                    token_repr = module(numeric_tokens)
+                    if self.config.numerical_multicontext_input_format == "fp16_bits":
+                        numeric_tokens = self._fp16bits_to_fp32(tokens).to(param.dtype)
+                    else:
+                        numeric_tokens = tokens.to(param.dtype)
+                    token_repr = module(numeric_tokens.unsqueeze(-1))
                 else:
                     token_repr = self.transformer[f'wte_{i}'](tokens)
 
+                token_repr = self.add_embedding_gaussian_noise(token_repr)
                 x = token_repr if x is None else x + token_repr
 
             if self.config.norm_variant_wte is not None:
@@ -435,7 +448,11 @@ class GPT(nn.Module):
                 if target_list is not None:
                     losses = []
                     for i, preds in enumerate(logits):
-                        targets = target_list[i].to(preds.dtype)
+                        if self.config.numerical_multicontext_input_format == "fp16_bits":
+                            decoded_targets = self._fp16bits_to_fp32(target_list[i])
+                            targets = decoded_targets.to(preds.dtype)
+                        else:
+                            targets = target_list[i].to(preds.dtype)
                         mask = target_list[i] != -1
                         if mask.any():
                             loss_i = F.huber_loss(
@@ -496,6 +513,7 @@ class GPT(nn.Module):
                 tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
             x = None
 
+            tok_emb = self.add_embedding_gaussian_noise(tok_emb)
             if self.n_embd_wte:
                 tok_emb = self.transformer.scale_up(tok_emb)
 
@@ -601,6 +619,8 @@ class GPT(nn.Module):
             tok_emb = self.transformer[f'wte_{dataset_idx}'](idx)
         else:
             tok_emb = self.transformer.wte(idx)
+
+        tok_emb = self.add_embedding_gaussian_noise(tok_emb)
 
         if self.n_embd_wte:
             tok_emb = self.transformer.scale_up(tok_emb)
@@ -743,29 +763,28 @@ class GPT(nn.Module):
         mantissa = b & 0x3FF
 
         sign_f = torch.where(sign == 0, 1.0, -1.0).to(torch.float32)
+        exponent_i = exponent.to(torch.int32)
+        mantissa_f = mantissa.to(torch.float32)
 
-        subnormal = (exponent == 0) & (mantissa != 0)
-        normal = (exponent > 0) & (exponent < 0x1F)
-        special = exponent == 0x1F
+        # Subnormal: sign * 2^-14 * (mantissa / 2^10)
+        subnormal_mag = torch.ldexp(mantissa_f / 1024.0, torch.full_like(exponent_i, -14))
+
+        # Normal: sign * 2^(exp-15) * (1 + mantissa / 2^10)
+        normal_mag = torch.ldexp(1.0 + (mantissa_f / 1024.0), exponent_i - 15)
+
+        is_zero = (exponent_i == 0) & (mantissa == 0)
+        is_subnormal = (exponent_i == 0) & (mantissa != 0)
+        is_normal = (exponent_i > 0) & (exponent_i < 0x1F)
+        is_special = exponent_i == 0x1F
+        is_inf = is_special & (mantissa == 0)
+        is_nan = is_special & (mantissa != 0)
 
         out = torch.zeros_like(sign_f, dtype=torch.float32)
-
-        if subnormal.any():
-            man = mantissa[subnormal].to(torch.float32)
-            out[subnormal] = sign_f[subnormal] * torch.pow(2.0, -14) * (man / 1024.0)
-
-        if normal.any():
-            man = mantissa[normal].to(torch.float32)
-            exp = exponent[normal].to(torch.float32)
-            out[normal] = sign_f[normal] * torch.pow(2.0, exp - 15.0) * (1.0 + man / 1024.0)
-
-        if special.any():
-            man = mantissa[special]
-            out[special] = torch.where(
-                man == 0,
-                sign_f[special] * torch.tensor(float("inf"), device=bits.device),
-                torch.tensor(float("nan"), device=bits.device),
-            )
+        out = torch.where(is_subnormal, sign_f * subnormal_mag, out)
+        out = torch.where(is_normal, sign_f * normal_mag, out)
+        out = torch.where(is_inf, sign_f * float("inf"), out)
+        out = torch.where(is_nan, float("nan"), out)
+        out = torch.where(is_zero, torch.zeros_like(out), out)
 
         return out
 
