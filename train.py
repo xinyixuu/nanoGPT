@@ -26,8 +26,8 @@ from train_variations.eta_variants import build_eta_estimator, ETAUpdate
 from train_variations.loss_variants import build_loss_function
 from train_variations.distillation_loss_variants import build_distillation_loss
 
-from utils.gpu_monitoring import get_gpu_memory_info
-from torch.cuda import reset_peak_memory_stats, max_memory_allocated
+from utils.gpu_monitoring import get_gpu_memory_info, get_process_gpu_memory_bytes
+from torch.cuda import reset_peak_memory_stats, max_memory_allocated, max_memory_reserved
 
 from utils.model_info import (
     print_summary,
@@ -100,6 +100,9 @@ class Trainer:
         self.tokens_trained = 0
         self.best_tokens = 0
         self.peak_gpu_usage = 0.0
+        self.peak_torch_allocated = 0.0
+        self.peak_torch_reserved = 0.0
+        self.peak_process_gpu_usage = 0.0
         self.total_training_time_ms: float = 0.0   # total run-time from start of training
         self.time_remaining_ms: float= 0.0
         self.total_time_est_ms: float= 0.0
@@ -985,6 +988,7 @@ class Trainer:
     @torch.no_grad()
     def estimate_loss(self):
         out = {'datasets':{}}
+        compute_rankme = self.args.log_rankme or self.args.log_areq
 
         self.model.eval()
         # If multi-dataset sampling is enabled, we calculate loss per dataset
@@ -994,7 +998,7 @@ class Trainer:
                 dataset_losses = {'train': torch.zeros(self.args.eval_iters), 'val': torch.zeros(self.args.eval_iters)}
                 top1_probs, top1_corrects, target_ranks, target_probs, target_left_probs, left_inclusive_probs = [], [], [], [], [], []
                 ln_f_cosines = []
-                rankme_vectors = []
+                rankme_vectors = [] if compute_rankme else None
                 for split in ['train', 'val']:
                     for k in range(self.args.eval_iters):
                         X, Y, test_dataset = self.get_batch(split, target_dataset=dataset)
@@ -1036,13 +1040,13 @@ class Trainer:
                                 ln_f_out[0].float(), target_vecs.float(), dim=-1
                             )
                             ln_f_cosines.append(cos)
-                            if self.args.log_rankme or self.args.log_areq:
+                            if compute_rankme:
                                 rankme_vectors.append(
                                     ln_f_out[0][:, -1, :].float().detach().cpu()
                                 )
                 rankme = torch.tensor(float('nan'))
                 areq = torch.tensor(float('nan'))
-                if rankme_vectors:
+                if compute_rankme and rankme_vectors:
                     features = torch.cat(rankme_vectors, dim=0)
                     rankme, areq = self._compute_rankme_areq(features)
                 out['datasets'][dataset] = {
@@ -1059,9 +1063,10 @@ class Trainer:
                         'left_prob_95': torch.quantile(torch.cat(left_inclusive_probs).float(), 0.95) if left_inclusive_probs else torch.tensor(float('nan')),
                         'ln_f_cosine': torch.cat(ln_f_cosines).mean() if ln_f_cosines else torch.tensor(float('nan')),
                         'ln_f_cosine_95': torch.quantile(torch.cat(ln_f_cosines), 0.05) if ln_f_cosines else torch.tensor(float('nan')),
-                        'rankme': rankme,
-                        'areq': areq,
                         }
+                if compute_rankme:
+                    out['datasets'][dataset]['rankme'] = rankme
+                    out['datasets'][dataset]['areq'] = areq
             out['val'] = out['datasets'][self.args.dataset]['val']
             out['val_std'] = out['datasets'][self.args.dataset]['val_std']
             out['train'] = out['datasets'][self.args.dataset]['train']
@@ -1075,8 +1080,9 @@ class Trainer:
             out['left_prob_95'] = out['datasets'][self.args.dataset]['left_prob_95']
             out['ln_f_cosine'] = out['datasets'][self.args.dataset]['ln_f_cosine']
             out['ln_f_cosine_95'] = out['datasets'][self.args.dataset]['ln_f_cosine_95']
-            out['rankme'] = out['datasets'][self.args.dataset]['rankme']
-            out['areq'] = out['datasets'][self.args.dataset]['areq']
+            if compute_rankme:
+                out['rankme'] = out['datasets'][self.args.dataset]['rankme']
+                out['areq'] = out['datasets'][self.args.dataset]['areq']
         elif self.args.training_mode == "multicontext":
             for i, dataset in enumerate(self.args.multicontext_datasets):
                 out['datasets'][dataset] = {}
@@ -1120,15 +1126,16 @@ class Trainer:
                 # general train and val losses, as well as std dev
                 out[split] = mean_avg / len(self.args.multicontext_datasets)
                 out[split + "_std"] = loss_std / len(self.args.multicontext_datasets)
-            out['rankme'] = torch.tensor(float('nan'))
-            out['areq'] = torch.tensor(float('nan'))
+            if compute_rankme:
+                out['rankme'] = torch.tensor(float('nan'))
+                out['areq'] = torch.tensor(float('nan'))
         else:
             # Default behavior for a single dataset
             for split in ['train', 'val']:
                 losses = torch.zeros(self.args.eval_iters)
                 top1_probs, top1_corrects, target_ranks, target_probs, target_left_probs, left_inclusive_probs = [], [], [], [], [], []
                 ln_f_cosines = []
-                rankme_vectors = []
+                rankme_vectors = [] if compute_rankme else None
                 for k in range(self.args.eval_iters):
                     X, Y, _ = self.get_batch(split)
                     ln_f_out: list[torch.Tensor] = []
@@ -1168,7 +1175,7 @@ class Trainer:
                             ln_f_out[0].float(), target_vecs.float(), dim=-1
                         )
                         ln_f_cosines.append(cos)
-                        if self.args.log_rankme or self.args.log_areq:
+                        if compute_rankme:
                             rankme_vectors.append(
                                 ln_f_out[0][:, -1, :].float().detach().cpu()
                             )
@@ -1184,13 +1191,14 @@ class Trainer:
                     out['left_prob_95'] = torch.quantile(torch.cat(left_inclusive_probs).float(), 0.95) if left_inclusive_probs else torch.tensor(float('nan'))
                     out['ln_f_cosine'] = torch.cat(ln_f_cosines).mean() if ln_f_cosines else torch.tensor(float('nan'))
                     out['ln_f_cosine_95'] = torch.quantile(torch.cat(ln_f_cosines), 0.05) if ln_f_cosines else torch.tensor(float('nan'))
-                    rankme = torch.tensor(float('nan'))
-                    areq = torch.tensor(float('nan'))
-                    if rankme_vectors:
-                        features = torch.cat(rankme_vectors, dim=0)
-                        rankme, areq = self._compute_rankme_areq(features)
-                    out['rankme'] = rankme
-                    out['areq'] = areq
+                    if compute_rankme:
+                        rankme = torch.tensor(float('nan'))
+                        areq = torch.tensor(float('nan'))
+                        if rankme_vectors:
+                            features = torch.cat(rankme_vectors, dim=0)
+                            rankme, areq = self._compute_rankme_areq(features)
+                        out['rankme'] = rankme
+                        out['areq'] = areq
 
         # compute statistics from a single validation batch
         if self.compute_model_stats:
@@ -1358,7 +1366,17 @@ class Trainer:
                 f"{target_dataset}/bit_loss_penalty_tokens", penalty_term, tokens_trained
             )
 
+    def _safe_better_than_chance(self, vocab_size: float, loss_value: float) -> float:
+        """Return vocab_size / exp(loss) without raising overflow for huge losses."""
+        if not math.isfinite(loss_value):
+            return 0.0
+        # math.exp overflows around 709 on float64; beyond that the ratio is effectively 0.
+        if loss_value >= 709.0:
+            return 0.0
+        return vocab_size / math.exp(loss_value)
+
     def log_metrics(self, losses, running_mfu, epoch, tokens_trained, target_dataset, val_better_than_chance):
+        compute_rankme = self.args.log_rankme or self.args.log_areq
 
         if self.iter_num == 0 and self.args.tensorboard_log and self.args.export_model_graph == True  and self.args.compile == False:
             self.export_model_graph()
@@ -1439,7 +1457,7 @@ class Trainer:
             if 'ln_f_cosine' in losses:
                 self.writer.add_scalar(f"{target_dataset}/avg_ln_f_cosine", losses['ln_f_cosine'], self.iter_num)
                 self.writer.add_scalar(f"{target_dataset}/ln_f_cosine_95", losses['ln_f_cosine_95'], self.iter_num)
-            if 'rankme' in losses:
+            if compute_rankme and 'rankme' in losses:
                 self.writer.add_scalar(
                     f"{target_dataset}/rankme",
                     self._to_scalar(losses['rankme']),
@@ -1460,8 +1478,12 @@ class Trainer:
 
         if self.args.csv_log:
             # concise training metrics
-            rankme_value = self._to_scalar(losses.get('rankme', float('nan')))
-            areq_value = self._to_scalar(losses.get('areq', float('nan')))
+            if compute_rankme:
+                rankme_value = self._to_scalar(losses.get('rankme', float('nan')))
+                areq_value = self._to_scalar(losses.get('areq', float('nan')))
+            else:
+                rankme_value = float('nan')
+                areq_value = float('nan')
             self.write_to_csv(
                 target_dataset,
                 losses['train'].item(),
@@ -1579,7 +1601,11 @@ class Trainer:
             args.append(self.lr)
             args.append(self.args.batch_size)
             args.append(self.tokens_trained)
-            if hasattr(self, "peak_gpu_usage"):
+            if hasattr(self, "peak_torch_allocated"):
+                args.append(self.peak_torch_allocated / (1024 ** 2))
+                args.append(self.peak_torch_reserved / (1024 ** 2))
+                args.append(self.peak_process_gpu_usage / (1024 ** 2))
+            elif hasattr(self, "peak_gpu_usage"):
                 args.append(self.peak_gpu_usage / (1024 ** 2))
             if self.args.gns_type is not None:
                 args.append(self.gns)
@@ -1697,15 +1723,26 @@ class Trainer:
             self.gns = self.gns_ema.get_gns()
 
         if self.device_type == 'cuda':
-            self.peak_gpu_usage = max(
-                    self.peak_gpu_usage,
-                    max_memory_allocated(self.device)
-                    )
+            current_device_idx = torch.cuda.current_device()
+            self.peak_torch_allocated = max(
+                self.peak_torch_allocated,
+                max_memory_allocated(self.device),
+            )
+            self.peak_torch_reserved = max(
+                self.peak_torch_reserved,
+                max_memory_reserved(self.device),
+            )
+            self.peak_process_gpu_usage = max(
+                self.peak_process_gpu_usage,
+                get_process_gpu_memory_bytes(current_device_idx),
+            )
+            # Backward-compatible field used by older tools.
+            self.peak_gpu_usage = self.peak_torch_allocated
 
         self.vram_allocated = get_gpu_memory_info(info_type='used') if self.args.device != "cpu" else 0
         if self.args.dataset_list is not None:
             for dataset, dataset_losses in losses['datasets'].items():
-                better_than_chance = self.model_args['vocab_size'] / math.exp(dataset_losses['val'].item())
+                better_than_chance = self._safe_better_than_chance(self.model_args['vocab_size'], dataset_losses['val'].item())
                 log_message=f"step {self.iter_num}: "
                 log_message+=f"{dataset:<20s}"
                 log_message+=f", {self.model.num_param}"
@@ -1734,10 +1771,10 @@ class Trainer:
                 log_message+=f", lr {self.lr:.4f}"
                 log_message+=f", tokens_trained {self.tokens_trained:.2e}"
                 self.console.print(log_message)
-                better_than_chance = self.vocab_sizes[dataset] / math.exp(dataset_losses['val'].item())
+                better_than_chance = self._safe_better_than_chance(self.vocab_sizes[dataset], dataset_losses['val'].item())
                 self.log_metrics(dataset_losses, running_mfu, current_epoch, self.tokens_trained, dataset, better_than_chance)
         else:
-            better_than_chance = self.model_args['vocab_size'] / math.exp(losses['val'].item())
+            better_than_chance = self._safe_better_than_chance(self.model_args['vocab_size'], losses['val'].item())
             log_message=f"step {self.iter_num}:"
             log_message+=f", {self.model.num_param}"
             log_message+=f", train loss {losses['train']:.4f}"
@@ -1770,9 +1807,11 @@ class Trainer:
                 self.best_val_loss = losses['val']
                 self.best_iter = self.iter_num
                 self.best_tokens = self.tokens_trained
-                peak_mb = self.peak_gpu_usage / (1024 ** 2)
+                peak_torch_allocated_mb = self.peak_torch_allocated / (1024 ** 2)
+                peak_torch_reserved_mb = self.peak_torch_reserved / (1024 ** 2)
+                peak_process_gpu_mb = self.peak_process_gpu_usage / (1024 ** 2)
                 with open(os.path.join(self.args.out_dir, 'best_val_loss_and_iter.txt'), "w") as best_loss_file:
-                    chance_ratio = self.model_args['vocab_size']/math.exp(self.best_val_loss.item())
+                    chance_ratio = self._safe_better_than_chance(self.model_args['vocab_size'], self.best_val_loss.item())
                     metrics = [
                             f"{self.best_val_loss.item()}",
                             f"{self.iter_num}",
@@ -1780,7 +1819,9 @@ class Trainer:
                             f"{self.model.num_param}",
                             f"{chance_ratio:.3e}",
                             f"{chance_ratio/self.model.num_param:.3e}",
-                            f"{peak_mb:.1f}",
+                            f"{peak_torch_allocated_mb:.1f}",
+                            f"{peak_torch_reserved_mb:.1f}",
+                            f"{peak_process_gpu_mb:.1f}",
                             f"{self.iter_latency_avg:.1f}",
                             f"{self.latest_top1_prob:.6f}",
                             f"{self.latest_top1_correct:.6f}",
@@ -1840,7 +1881,7 @@ class Trainer:
         log_message+= f", {self.model.num_param}"
         if self.args.multicontext_datasets:
             for i, mc_dataset in enumerate(self.args.multicontext_datasets):
-                self.mc_btc_train[mc_dataset] = self.vocab_sizes[mc_dataset] / math.exp(training_losses[i].item())
+                self.mc_btc_train[mc_dataset] = self._safe_better_than_chance(self.vocab_sizes[mc_dataset], training_losses[i].item())
                 log_message+= f", {self.underscore_abbr(mc_dataset)}"
                 if self.args.log_btc_train:
                     log_message+= f" btc {self.mc_btc_train[mc_dataset]:.4f}"
@@ -1848,7 +1889,7 @@ class Trainer:
                 log_message+= f" loss {training_losses[i].item():.4f}"
             better_than_chance = None
         else:
-            better_than_chance = self.model_args['vocab_size'] / math.exp(lossf)
+            better_than_chance = self._safe_better_than_chance(self.model_args['vocab_size'], lossf)
             log_message+= f", loss {lossf:.4f}"
             if self.args.log_btc_train:
                 log_message+=f", btc_train {better_than_chance:.2e}"
@@ -1952,7 +1993,7 @@ class Trainer:
                     best_iter=f"{self.best_iter}",
                     best_tokens=f"{self.best_tokens}",
                     iter_latency=f"{self.iter_latency_avg:.1f}",
-                    peak_gpu_mb=f"{self.peak_gpu_usage / (1024 ** 2):.1f}",
+                    peak_gpu_mb=f"{self.peak_torch_allocated / (1024 ** 2):.1f}",
                     t1p=f"{self.latest_top1_prob:.6f}",
                     t1c=f"{self.latest_top1_correct:.6f}",
                     tr=f"{self.latest_target_rank:.2f}",
@@ -2156,7 +2197,7 @@ class Trainer:
                         best_iter=f"{self.best_iter}",
                         best_tokens=f"{self.best_tokens}",
                         iter_latency=f"{self.iter_latency_avg:.1f}",
-                        peak_gpu_mb=f"{self.peak_gpu_usage / (1024 ** 2):.1f}",
+                        peak_gpu_mb=f"{self.peak_torch_allocated / (1024 ** 2):.1f}",
                         t1p=f"{self.latest_top1_prob:.6f}",
                         t1c=f"{self.latest_top1_correct:.6f}",
                         tr=f"{self.latest_target_rank:.2f}",
