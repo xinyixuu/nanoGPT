@@ -182,7 +182,7 @@ common_group:
   use_peri_ln: [true]
   use_gradient_checkpoint: [true]
   max_sample_tokens: [100]
-  eval_interval: [1000]
+  eval_interval: [100]
   sample_each_eval: [true]
   compile: [true]
 seed: [1, 2, 3, 4, 5]
@@ -197,14 +197,14 @@ parameter_groups:
   - named_group_static: ["ipa_flores_zh"]
     tensorboard_run_name: "ipa_single_run_zh"
 
-  - named_group_static: ["byte_flores_ja"]
-    tensorboard_run_name: "byte_single_run_ja"
+  # - named_group_static: ["byte_flores_ja"]
+  #   tensorboard_run_name: "byte_single_run_ja"
 
-  - named_group_static: ["byte_flores_ko"]
-    tensorboard_run_name: "byte_single_run_ko"
+  # - named_group_static: ["byte_flores_ko"]
+  #   tensorboard_run_name: "byte_single_run_ko"
     
-  - named_group_static: ["byte_flores_zh"]
-    tensorboard_run_name: "byte_single_run_zh"
+  # - named_group_static: ["byte_flores_zh"]
+  #   tensorboard_run_name: "byte_single_run_zh"
 
   - named_group_static: ["tiktoken_flores_ja"]
     tensorboard_run_name: "tiktoken_single_run_ja"

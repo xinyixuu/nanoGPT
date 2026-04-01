@@ -24,6 +24,14 @@ else
 fi
 popd
 
+pushd data/tik_flores_zh
+if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
+  bash get_tik.sh
+else
+  echo "train.bin val.bin and meta.pkl already found for tik_flores_zh"
+fi
+popd
+
 pushd data/ipa_flores_ja
 if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
   bash get_ipa.sh
@@ -41,9 +49,41 @@ else
 fi
 popd
 
-python3 optimization_and_search/run_experiments.py -c explorations/multidata_base.yaml -o out_multidata_base_flores
+pushd data/ipa_flores_zh
+if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
+  bash get_ipa.sh
+else
+  echo "train.bin val.bin and meta.pkl already found for ipa_flores_zh"
+fi
+popd
 
-python3 optimization_and_search/run_experiments.py -c explorations/multidataset_single.yaml -o out_multidata_single_flores
+pushd data/byte_flores_ja
+if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
+  bash get_byte.sh
+else
+  echo "train.bin val.bin and meta.pkl already found for byte_flores_ja"
+fi
+popd
+
+pushd data/byte_flores_ko
+if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
+  bash get_byte.sh
+else
+  echo "train.bin val.bin and meta.pkl already found for byte_flores_ko"
+fi
+popd
+
+pushd data/byte_flores_zh
+if [ ! -f "train.bin" ] || [ ! -f "val.bin" ] || [ ! -f "meta.pkl" ]; then
+  bash get_byte.sh
+else
+  echo "train.bin val.bin and meta.pkl already found for byte_flores_zh"
+fi
+popd
+
+# python3 optimization_and_search/run_experiments.py -c explorations/multidata_base_byte.yaml -o out_multidata_base_byte
+
+python3 optimization_and_search/run_experiments.py -c explorations/multidataset_single_byte.yaml -o out_multidata_energy
 
 # python3 train.py \
 #   --training_mode multidataset \
