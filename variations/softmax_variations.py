@@ -577,6 +577,27 @@ class ReLU2Max(nn.Module):
         return result
 
 
+class Softplus2Max(nn.Module):
+    """ Softmax variant based on arxiv 1805.10829 with added handles for base """
+    def __init__(self, config, dim=-1):
+        super().__init__()
+        self.dim = dim
+        self.softplus = nn.Softplus()
+        self.softplus_divisor = config.softplus_divisor
+        self.div_by_seq_len = config.div_by_seq_len
+
+    def forward(self, x):
+
+        result = self.softplus(x) ** 2/ self.softplus_divisor
+
+        # divide by sequence length
+        if self.div_by_seq_len:
+            seq_len = x.shape[self.dim]
+            result = result / seq_len
+
+        return result
+
+
 class Gelumax(nn.Module):
     def __init__(self, config, dim=-1):
         super().__init__()
@@ -799,6 +820,42 @@ class PFLASoftmax(nn.Module):
 
 
 
+# STE Softmax-Argmax: argmax (one-hot) in forward, softmax gradients in backward
+class STEArgmaxSoftmax_func(torch.autograd.Function):
+    """Straight-Through Estimator: argmax in forward, softmax in backward."""
+    @staticmethod
+    def forward(ctx, x, dim):
+        softmax_out = torch.softmax(x, dim=dim)
+        ctx.save_for_backward(softmax_out)
+        ctx.dim = dim
+        # One-hot argmax
+        idx = x.argmax(dim=dim, keepdim=True)
+        one_hot = torch.zeros_like(x).scatter_(dim, idx, 1.0)
+        return one_hot
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        softmax_out, = ctx.saved_tensors
+        # Softmax Jacobian: diag(s) - s s^T applied to grad_output
+        grad_input = softmax_out * (grad_output - (grad_output * softmax_out).sum(dim=ctx.dim, keepdim=True))
+        return grad_input, None
+
+class STEArgmaxSoftmax(nn.Module):
+    """STE softmax variant: uses argmax (one-hot) in forward pass,
+    softmax gradients in backward pass."""
+    def __init__(self, config, dim=-1):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        if self.training:
+            return STEArgmaxSoftmax_func.apply(x, self.dim)
+        else:
+            # At inference, use argmax directly
+            idx = x.argmax(dim=self.dim, keepdim=True)
+            return torch.zeros_like(x).scatter_(self.dim, idx, 1.0)
+
+
 # Note: we use the built in library for regular softmax
 softmax_dictionary = {
     "consmax": ConSmax,
@@ -817,6 +874,8 @@ softmax_dictionary = {
     "softshrink": Softshrink,
     "gelumax": Gelumax,
     "softplus": Softplus,
+    "softplus2max": Softplus2Max,
     "squareplus": Squareplus,
     "pfla_softmax": PFLASoftmax,
+    "ste_argmax_softmax": STEArgmaxSoftmax,
 }
