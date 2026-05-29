@@ -1,0 +1,18 @@
+[
+  {
+    "max_iters": ["30000"],
+    "dataset": ["cosmopedia_100k"],
+    "attention_variant": ["infinite"],
+    "compile" : [true],
+    "device": ["cuda"],
+    "n_layer": ["5"],
+    "n_embd": ["128","256"],
+    "n_head": ["6","8","10"],
+    "n_qk_head_dim":["32","64","128"],
+    "n_v_head_dim":["32","64","128"],
+    "mlp_res": [false],
+    "mlp_expansion_factor": ["3", "4", "6"],
+    "dropout" : [0.0],
+    "tensorboard_run_name": ["no_do_search"]
+  }
+]

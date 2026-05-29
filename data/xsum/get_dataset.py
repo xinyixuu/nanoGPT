@@ -31,7 +31,7 @@ def save_dataset_to_text(dataset, filename):
             file.write(f"text: {text}\nsummary: {summary}\n\n")
 
 # Create a combined dataset for xsum
-save_dataset_to_text(combined_dataset, "xsum-combined.txt")
+save_dataset_to_text(combined_dataset, "input.txt")
 
 print("Dataset conversion to text completed.")
 

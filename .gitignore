@@ -2,6 +2,7 @@
 __pycache__/
 logs/
 csv_logs/
+exploration_logs/
 
 # file extensions
 *.pkl
@@ -15,5 +16,25 @@ csv_logs/
 # checkpoint directories
 out*/
 .aider*
+
+# experiment directories
+experiments/
+nsga_exps/
+
+# nsga search directories
+optimization_and_search/host_configs/
+optimization_and_search/nsga_search/ckpts/
+optimization_and_search/nsga_search/train/
+optimization_and_search/nsga_search/logs/
+optimization_and_search/nsga_search/plots/
+optimization_and_search/nsga_search/htmls/
+optimization_and_search/nsga_search/visualization/
+optimization_and_search/nsga_search/tests/
+optimization_and_search/nsga_search/utils/
+optimization_and_search/nsga_search/ref_models
+optimization_and_search/nsga_search/*.bash
+optimization_and_search/nsga_search/hw_eval/runs
+optimization_and_search/nsga_search/search_space_def/
+optimization_and_search/nsga_search/plots_paper/
 
 venv/*

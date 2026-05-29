@@ -40,6 +40,7 @@ Hardware Related
   * [Start Exploration](#start-exploration)
   * [Inspect and Monitor Best Val Losses](#inspect-and-monitor-best-val-losses)
   * [Start Tensorboard Logging](#start-tensorboard-logging)
+  * [Model Stats Table](#model-stats-table)
   * [Troubleshooting](#troubleshooting)
   * [Creating New Features and Exploration Scripts](#creating-new-features-and-exploration-scripts)
 * [Contributing](#contributing)
@@ -87,7 +88,7 @@ If unsure, visit the pytorch page and subtitute the appropriate line for the `to
 This downloads and parses a literature dataset into `train.bin` and `val.bin` files.
 
 ```bash
-python3 data/shakespeare_char/prepare.py
+bash data/shakespeare_char/get_dataset.sh
 ```
 ### Train Model From Scratch
 
@@ -104,6 +105,27 @@ at each new saved checkpoint.
 ```bash
 python3 train.py --max_sample_tokens 100 --compile
 ```
+
+### Train Model with MeZO (Forward-Only Updates)
+
+This repo also includes a zeroth-order optimizer script, `train_mezo.py`, that
+uses forward passes only to estimate gradients. It supports the standard single
+dataset training mode and can start from scratch or an existing checkpoint.
+
+Train from scratch:
+
+```bash
+python3 train_mezo.py --dataset shakespeare_char --max_iters 2000 --batch_size 64 --block_size 256
+```
+
+Resume from an existing checkpoint:
+
+```bash
+python3 train_mezo.py --init_from resume --out_dir out
+```
+
+You can adjust the perturbation scale with `--mezo_epsilon` and optionally fix
+the perturbation seed per step with `--mezo_seed`.
 
 ### Perform Inference From Custom Model
 
@@ -149,7 +171,7 @@ checkpoints created from training using `validation loss` as a figure of merit.
 To run the experiment create or modify an existing json file in the `explorations` folder:
 
 ```bash
-python3 run_experiments.py -c explorations/config.json
+python3 optimization_and_search/run_experiments.py -c explorations/config.json
 ```
 
 This will create logs in the following directories:
@@ -174,16 +196,16 @@ parent directory.
 
 Example usage:
 ```bash
-python3 inspect_ckpts.py --directory ./out --sort loss
+python3 checkpoint_analysis/inspect_ckpts.py --directory ./out --sort loss
 ```
 
-![image](./images/inspect_ckpts.png)
+![image](./documentation/images/inspect_ckpts.png)
 
 This can be wrapped with color via the watch command for a realtime dashboard.
 
 For example to look at all checkpoint files in the out directory:
 ```bash
-watch --color 'python3 inspect_ckpts.py --directory ./out --sort loss'
+watch --color 'python3 checkpoint_analysis/inspect_ckpts.py --directory ./out --sort loss'
 ```
 
 As with remainder of the repo, this script is provided as a base to open up for
@@ -194,18 +216,58 @@ additional community contributions.
 If using tensorboard for logging, we have provided a convenience script:
 
 ```bash
-bash start_tensorboard.sh
+source ./logging/start_tensorboard.sh
 ```
+
+### View CSV Logs (Tensorboard-style)
+
+To plot the bulk CSV logs in a live-updating, tensorboard-like view (train/val on
+the same chart with filenames as labels), run:
+
+```bash
+python3 logging/view_csv_logs.py --csv-dir csv_logs --pattern "**/bulk_*.csv"
+```
+
+By default the viewer renders an ASCII chart in the terminal, refreshes every 5
+seconds, and can be switched to a tokens X-axis with `--x-axis tokens`. Use
+`--layout horizontal` to place the legend beside the graph, or set the chart
+height with `--height`. Use `--max-x` to control the X-axis scale (default 3000
+iters/tokens). For a matplotlib window, add `--mode matplotlib`.
 
 You can view live validation loss updates on url: [http://localhost:6006](http://localhost:6006)
 
-Note: Only one tensorboard process can grab port 6006 at time, try closing other
-processes (e.g. other tensorboards) using this port, or choose an alternative
-port if new tensorboard isn't showing.
+Note: Only one tensorboard process can grab port 6006 at time, if you want to
+run a second tensorboard, use the script and specify a different port e.g. 6007:
+
+```bash
+source ./logging/start_tensorboard.sh 6007
+```
+
+## Model Stats Table
+
+The training script can output a per‑tensor statistics table to a CSV file with
+``--print_model_stats_table``. A helper script then visualizes the table or
+compares two runs with colour‑coded deltas.
+
+```bash
+python3 train.py --print_model_stats_table run1_stats.csv
+python3 train.py --optimizer adamw --print_model_stats_table run2_stats.csv
+python3 view_model_stats.py run1_stats.csv run2_stats.csv
+```
+
+See [documentation/Model_Stats_Table.md](documentation/Model_Stats_Table.md)
+for more details.
 
 ## TODO Section:
 
 TODO: Add links and descriptions to other Readme's and Demos.
+
+## Normalization Options
+
+The training CLI now supports `--use_peri_ln` for experimenting with
+*Peri-LN*, a normalization strategy that applies layer normalization
+around each sublayer (before and after). This can be combined with the
+existing `--use_post_ln` flag for Post-LN training.
 
 ## Contributing
 
@@ -214,9 +276,21 @@ This repo is under active development and accepting PR's, please see the
 See the [Contributing_Features.md](Contributing_Features.md) for details on how
 to add new features and explorations.
 
-## Acknowledgements
+## Citation
 
-- Original nanoGPT Repo
-- NanoGPT Discord Channel [![](https://dcbadge.vercel.app/api/server/3zy8kqD9Cp?compact=true&style=flat)](https://discord.gg/3zy8kqD9Cp)
-- [Zero To Hero series](https://karpathy.ai/zero-to-hero.html)
-- [GPT video](https://www.youtube.com/watch?v=kCc8FmEb1nY)
+This work extends Andrej Karpathy's foundational
+[nanoGPT](https://github.com/karpathy/nanoGPT), for which prior citation format can be found [here](
+https://github.com/karpathy/nanoGPT/issues/471).
+
+We ask that citations cite both projects.
+
+To cite **ReaLLM-Forge**, please use this BibTeX entry:
+
+```bibtex
+@software{ReaLLM-Forge,
+  author = {{ReaLLMASIC} and {Contributors}},
+  title = {{ReaLLM-Forge: A Framework for Hardware-Aware LLM Exploration}},
+  url = {https://github.com/ReaLLMASIC/ReaLLM-Forge},
+  year = {2025},
+}
+```

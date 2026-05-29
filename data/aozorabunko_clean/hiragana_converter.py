@@ -4,8 +4,8 @@ from tqdm import tqdm
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Convert sentences in a file to hiragana.")
-    parser.add_argument("input_file", help="Path to the input file")
-    parser.add_argument("output_file", help="Path to the output file")
+    parser.add_argument("--input_file", default="input_kanji.txt", help="Path to the input file")
+    parser.add_argument("--output_file", default="input.txt", help="Path to the output file")
     return parser.parse_args()
 
 def main():

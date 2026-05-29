@@ -1,0 +1,59 @@
+# mlp_bias_comparison.yaml
+---
+# parameter_groups: define sets of overrides to apply on top of base params
+parameter_groups:
+  # Standard MLP - baseline sizes
+  - mlp_variant: ["mlp"]
+    mlp_size: [1536]
+    mlp_up_bias: [true]
+    mlp_down_bias: [true]
+    activation_variant: ["pfla"]
+    learn_mlp_x_offset: [true]
+    learn_mlp_y_offset: [true]
+
+
+  # Swiglu - ~2/3 of MLP size for same param count
+  - mlp_variant: ["swiglu"]
+    mlp_size: [1024]
+    mlp_up_bias: [true]
+    mlp_down_bias: [false]
+    activation_variant: ["pfla"]
+    learn_mlp_x_offset: [true]
+    learn_mlp_y_offset: [true]
+
+  # DualPath - ~2/3 of MLP size for same param count
+  - mlp_variant: ["dual_path"]
+    mlp_size: [1024]
+    mlp_up_bias: [true]
+    mlp_down_bias: [true]
+    activation_variant: ["pfla"]
+    learn_mlp_x_offset: [true]
+    learn_mlp_y_offset: [true]
+
+# pfla
+pfla_num_points: 20
+pfla_left_bound: -5.0
+pfla_right_bound: 5.0
+
+# Position embeddings
+use_rotary_embeddings: [true]
+use_abs_pos_embeddings: [false]
+
+# base hyperparameters (defaults)
+block_size: [512]
+n_layer: [12]
+n_head: [12]
+n_embd: [768]
+bias: [false]
+
+# training configuration
+dataset: "minipile"
+max_iters: 10000
+lr_decay_iters: 10000
+warmup_iters: 1000
+decay_lr: [true]
+eval_interval: 10000
+eta_variant: ["iteration"]
+
+# compilation
+compile: [true]

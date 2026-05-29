@@ -1,0 +1,43 @@
+# static
+dataset: "minipile"
+
+# Position Embeddings
+use_rotary_embeddings: True
+use_abs_pos_embeddings: False
+
+# Context Length
+block_size: 1024
+
+# Flashlobo
+use_flash_lobo: true
+use_flash_lobo_per_head: true
+flash_lobo_log_const: 1.0
+
+# qk norm
+use_qk_norm: true
+use_qk_norm_scale: true
+
+# Inf Attn Settings
+use_concat_heads: True
+attention_variant: "infinite"
+
+# MLP Settings
+mlp_up_bias: true
+mlp_down_bias: true
+
+# Training Settings
+eta_variant: "eval_cycle"
+max_iters: 1000
+eval_interval: 1000
+compile: True
+batch_size: 32
+
+# changeable things
+n_layer: 2
+n_embd: 32
+
+# Layerlists
+n_head_layerlist: [1, 1]
+mlp_size_layerlist: [32, 32]
+n_qk_head_dim_layerlist: [32, 32]
+n_v_head_dim_layerlist: [32, 32]

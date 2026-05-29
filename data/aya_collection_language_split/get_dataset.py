@@ -46,10 +46,10 @@ def emit_json_contents(json_path, output_text_file):
 
     with open(output_text_file, "a") as f:
         for item in data:
-            content_line = f"{item['inputs']}"
+            content_line = f"\n#U:\n{item['inputs']}"
             f.write(content_line.strip())
             f.write("\n")  # Separator between items
-            content_line = f"{item['targets']}"
+            content_line = f"\n#B:\n{item['targets']}"
             f.write(content_line.strip())
             f.write("\n\n")  # Separator between items
 

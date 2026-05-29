@@ -1,7 +1,9 @@
+# norm_variations.py
 import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from variations.activation_variations import activation_dictionary
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -16,6 +18,38 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
+
+class DynamicActivation(nn.Module):
+    """ Dynamic Activation Variations, including that of DyT
+    from: https://arxiv.org/abs/2503.10622
+    https://github.com/jiachenzhu/DyT
+    """
+    def __init__(self, config):
+        super().__init__()
+        ndim = config.n_embd
+
+        if config.dact_use_alpha:
+            self.alpha = nn.Parameter(torch.ones(1) * config.dact_alpha_init)
+        else:
+            self.alpha = 1.0
+
+        if config.dact_use_beta:
+            self.beta = nn.Parameter(torch.zeros(ndim))
+        else:
+            self.beta = 0.0
+
+        if config.dact_use_gamma:
+            self.gamma = nn.Parameter(torch.ones(ndim))
+        else:
+            self.gamma = 1.0
+
+
+        self.activation = activation_dictionary[config.dact_activation](config)
+
+    def forward(self, x):
+        return self.gamma * self.activation(self.alpha * x) + self.beta
+
+
 class RMSNorm(nn.Module):
     """RMS Normalization"""
 
@@ -27,6 +61,43 @@ class RMSNorm(nn.Module):
     def forward(self, x):
         rms = x.norm(2, dim=-1, keepdim=True) / math.sqrt(x.size(-1))
         return x / rms * self.gain
+
+class HyperSphereNorm(nn.Module):
+    """Normalization to the surface of Hypersphere"""
+
+    def __init__(self, config):
+        super().__init__()
+
+
+        ndim = config.n_embd
+        if config.hsnorm_gain:
+            self.gain = nn.Parameter(torch.ones(ndim))
+        else:
+            self.gain = 1.0
+
+        # Determine radius initialization value
+        radius_init = None
+        if config.hsnorm_radius is not None:
+            radius_init = config.hsnorm_radius
+        else:
+            radius_init = math.sqrt(ndim)
+
+        # constant for loss scaling (default set to 1.0)
+        self.const_radius_factor = config.hsnorm_scale
+
+        # Set as constant or learned param
+        self.hsnorm_radius_learning = config.hsnorm_radius_learning
+        if config.hsnorm_radius_learning:
+            # div by const_radius_factor (no effect if is 1.0)
+            radius_init = radius_init / self.const_radius_factor
+            self.radius_init_factor = nn.Parameter(torch.tensor([radius_init]))
+        else:
+            self.radius_init_factor = radius_init
+
+    def forward(self, x):
+        radius = self.const_radius_factor * self.radius_init_factor
+        hypersphere_norm = x.norm(2, dim=-1, keepdim=True)
+        return  x / hypersphere_norm * radius * self.gain
 
 class pRMSNorm(nn.Module):
     """Partial RMS Normalization"""
@@ -131,9 +202,21 @@ class kRMSNorm(nn.Module):
 
         return x
 
+class IdentityNorm(nn.Module):
+    def __init__(self, config=None):  # Accept config for API consistency
+        super().__init__()
+        self.identity = nn.Identity()
+
+    def forward(self, x):
+        return self.identity(x)
+
+
 norm_dictionary = {
     "layernorm": LayerNorm,
     "rmsnorm": RMSNorm,
     "prmsnorm": pRMSNorm,
     "krmsnorm": kRMSNorm,
+    "hyperspherenorm": HyperSphereNorm,
+    "dact": DynamicActivation,
+    "identity": IdentityNorm,
 }

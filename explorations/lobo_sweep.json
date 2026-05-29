@@ -1,0 +1,16 @@
+[
+  {
+    "max_iters": ["10000"],
+    "device": ["cuda"],
+    "dtype": ["bfloat16"],
+    "dataset": ["cosmopedia_100k"],
+    "compile": [true],
+    "softmax_variant_attn": ["strongermax"],
+    "tensorboard_run_name": ["obo_variations_learned"],
+    "strongermax_obo": ["0.0", "0.1", "1.0"],
+    "strongermax_use_learned_obo": [true],
+    "strongermax_use_learned_obo_per_head": [false],
+    "dropout": ["0.0","0.1"]
+  }
+]
+

@@ -1,7 +1,9 @@
+# variations/linear_variations.py
 import torch
 import torch.nn as nn
 import math
 import torch.nn.functional as F
+from typing import Optional
 from .activation_variations import *
 from functools import lru_cache
 from quantization.quantize import _fake_quantize, quantize_dictionary, dequantize
@@ -22,6 +24,10 @@ class QuantizedLinear(nn.Linear):
 
         self.weight_bits = bits
         self.quant_method = method
+        self.start_quant_level = config.start_quant_level
+        self.quant_scheduler = config.quant_scheduler
+        self.full_quant_iteration = config.full_quant_iteration
+        self.eval_interval = config.eval_interval
 
         if self.weight_bits < 1:
             raise ValueError(f"weight_bits={self.weight_bits} must be higher than 0 ")
@@ -47,7 +53,7 @@ class QuantizedLinear(nn.Linear):
         assert self.training, "Should be called only during training"
 
         # Applies the fake quantization to the weights
-        self._fake_quantized_weight = _fake_quantize(self.weight, self.weight_bits, self.quant_method)
+        self._fake_quantized_weight = _fake_quantize(self.weight, self.training, self.quant_scheduler, self.start_quant_level, self.full_quant_iteration, self.eval_interval, self._step.item(), self.weight_bits, self.quant_method)
         # Uses the quantized weights to compute the output using F.linear
         out = F.linear(input, self._fake_quantized_weight, self.bias)
 
@@ -93,6 +99,107 @@ class QuantizedLinear(nn.Linear):
             # Uses quantized weights and bias to compute the output
             out = self.inference_quantized_forward(input)
         return out
+
+
+class AdaptiveBitLinear(nn.Linear):
+    """Linear layer with learnable bit-width using STE fake quantization."""
+
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        config=None,
+        method=None,
+        bits=None,
+        bias=True,
+        min_bits: Optional[float] = None,
+        max_bits: Optional[float] = None,
+        activation_bits: Optional[float] = None,
+        quantize_input: Optional[bool] = None,
+    ):
+        super().__init__(in_features, out_features, bias)
+
+        default_min_bits = 1.0
+        default_max_bits = 8.0
+        default_activation_bits = 8.0
+        default_quantize_input = True
+
+        if config is not None:
+            default_min_bits = getattr(config, "adaptive_linear_min_bits", default_min_bits)
+            default_max_bits = getattr(config, "adaptive_linear_max_bits", default_max_bits)
+            default_activation_bits = getattr(
+                config, "adaptive_linear_activation_bits", default_activation_bits
+            )
+            default_quantize_input = getattr(
+                config, "adaptive_linear_quantize_input", default_quantize_input
+            )
+            if bits is None:
+                bits = getattr(config, "adaptive_linear_init_bits", None)
+
+        self.min_bits = float(default_min_bits if min_bits is None else min_bits)
+        self.max_bits = float(default_max_bits if max_bits is None else max_bits)
+        self.quantize_input = default_quantize_input if quantize_input is None else quantize_input
+        self.activation_bits = float(
+            default_activation_bits if activation_bits is None else activation_bits
+        )
+
+        init_bits = float(bits if bits is not None else self.max_bits)
+        init_bits = max(self.min_bits, min(init_bits, self.max_bits))
+        self.bit_param = nn.Parameter(torch.tensor(init_bits, dtype=torch.float32))
+
+        self.quant_method = method
+        self.register_buffer("_last_bitwidth", torch.tensor(init_bits, dtype=torch.float32))
+
+    @staticmethod
+    def _ste_round(value: torch.Tensor) -> torch.Tensor:
+        return value + (torch.round(value) - value).detach()
+
+    def current_bitwidth(self) -> torch.Tensor:
+        clipped = torch.clamp(self.bit_param, self.min_bits, self.max_bits)
+        bitwidth = self._ste_round(clipped)
+        self._last_bitwidth = bitwidth.detach()
+        return bitwidth
+
+    def _fake_quantize_tensor(self, tensor: torch.Tensor, bits: torch.Tensor) -> torch.Tensor:
+        orig_dtype = tensor.dtype
+        tensor_fp32 = tensor.to(torch.float32)
+        bits_fp32 = bits.to(tensor_fp32.dtype)
+
+        levels = torch.pow(torch.tensor(2.0, device=tensor_fp32.device), bits_fp32 - 1.0)
+        qmax = torch.clamp(levels - 1.0, min=1.0)
+        qmin = -levels
+
+        max_val = tensor_fp32.abs().max()
+        scale = max_val / qmax
+        scale = torch.where(scale == 0, torch.ones_like(scale), scale)
+
+        quantized = torch.clamp(torch.round(tensor_fp32 / scale), qmin, qmax) * scale
+        return (tensor_fp32 + (quantized - tensor_fp32).detach()).to(orig_dtype)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        bitwidth = self.current_bitwidth()
+        weight = self._fake_quantize_tensor(self.weight, bitwidth)
+
+        if self.quantize_input:
+            input_bits = torch.tensor(self.activation_bits, device=input.device, dtype=bitwidth.dtype)
+            input = self._fake_quantize_tensor(input, input_bits)
+
+        return F.linear(input, weight, self.bias)
+
+    def bit_usage(self) -> torch.Tensor:
+        bits = self.current_bitwidth()
+        total = bits * self.weight.numel()
+        if self.bias is not None:
+            total = total + bits * self.bias.numel()
+        return total
+
+    def extra_repr(self) -> str:
+        return (
+            f"in_features={self.in_features}, out_features={self.out_features}, "
+            f"min_bits={self.min_bits}, max_bits={self.max_bits}, "
+            f"quantize_input={self.quantize_input}, activation_bits={self.activation_bits}"
+        )
+
 
 class BitLinear1p58(nn.Linear):
     """ BitLinear from Era of 1.58 LLMs Paper
@@ -330,7 +437,7 @@ class KAL_Net(nn.Module):
         # polynomial_order: Order up to which Legendre polynomials are calculated
         self.polynomial_order = config.kan_poly_order
         # base_activation: Activation function used after each layer's computation
-        self.base_activation = activation_dictionary[config.kan_base_activation]
+        self.base_activation = activation_dictionary[config.kan_base_activation](config)
 
         # ParameterList for the base weights of each layer
         self.base_weights = nn.ParameterList()
@@ -393,12 +500,61 @@ class KAL_Net(nn.Module):
             x = self.base_activation(layer_norm(combined_output))
 
         return x
+    
+def wrap_with_flashnorm(linear_cls, config):
+    """
+    Wraps any linear class with FlashNorm-style deferred RMS normalization.
+    Only applies if config.use_flash_norm is True.
+
+    Based on "FlashNorm: fast normalization for LLMs"
+    Source: https://arxiv.org/pdf/2407.09577
+    Key insight: RMSNorm(x) @ W = (x @ W) / RMS(x) when bias=0
+    """
+    if not getattr(config, "use_flash_norm", False):
+        return linear_cls
+    
+    class FlashNormWrapper(nn.Module):
+        def __init__(self, in_features, out_features, config=None, method=None, bits=None, bias=True, **kwargs):
+            super().__init__()
+            self.in_features = in_features
+            self.out_features = out_features
+            
+            # RMSNorm gain parameter
+            self.gain = nn.Parameter(torch.ones(in_features))
+            
+            # Instantiate the base linear (QuantizedLinear, BitLinear, etc.)
+            self.linear = linear_cls(in_features, out_features, config=config, method=method, bits=bits, bias=bias, **kwargs)
+            
+            # Fuse gain into weights
+            self._fuse_gain_into_weights()
+        
+        def _fuse_gain_into_weights(self):
+            """Merge gain into weight matrix: W* = W @ diag(gain)"""
+            if hasattr(self.linear, 'weight') and self.linear.weight is not None:
+                with torch.no_grad():
+                    # Broadcast multiply: each output row scaled by corresponding gain
+                    self.linear.weight.data = self.linear.weight.data * self.gain.unsqueeze(0)
+        
+        def forward(self, x):
+            rms = x.norm(2, dim=-1, keepdim=True) / math.sqrt(x.size(-1))
+            
+            # Forward through base linear (gain already fused into weights)
+            out = self.linear(x)
+            
+            # Deferred normalization (happens after matmul)
+            out = out / rms
+            
+            return out
+    
+    FlashNormWrapper.__name__ = f"FlashNorm_{linear_cls.__name__}"
+    return FlashNormWrapper
 
 linear_dictionary = {
     "linear": WrappedLinear,
     "bitlinear": BitLinear,
     "bitlinear_optimized": BitLinearOptimized,
     "bitlinear_1p58": BitLinear1p58,
+    "adaptive_bit_linear": AdaptiveBitLinear,
     "kan": KAL_Net,
-    "quantized_linear": QuantizedLinear
+    "quantized_linear": QuantizedLinear,
 }

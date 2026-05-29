@@ -1,0 +1,22 @@
+---
+max_iters: [250]
+n_layer: [2]
+n_head: [2]
+n_embd: [30]
+block_size: [25]
+device: ["cpu"]
+
+softmax_variant_attn: ["softmax", "strongermax"]
+strongermax_use_learned_obo_per_head: [true]
+dataset: ["shakespeare_char"]
+
+# Only if softmax_variant_attn == "strongermax" do we sweep these
+strongermax_obo:
+  conditions:
+    - ["softmax_variant_attn", "strongermax"]
+  options: ["2.0", "1.0", "0.5"]
+
+# Unconditional flag
+compile: [true]
+tensorboard_run_name: ["conditional_demo"]
+

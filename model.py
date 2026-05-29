@@ -1,3 +1,4 @@
+# model.py
 """
 Full definition of a GPT Language Model, all of it in this single file.
 References:
@@ -10,8 +11,8 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 import sys
-import re
 from rich import print
+import copy
 
 import numpy as np
 
@@ -26,513 +27,26 @@ from gpt_conf import GPTConfig
 import torch.utils.checkpoint as checkpoint
 
 # Variations
+from variations.attention_variations import attention_dictionary
+from variations.mlp_variations import get_mlp_instance
+from variations.moe_variations import MoELayer
 from variations.lsv_variations import lsv_dictionary
 from variations.softmax_variations import softmax_dictionary
 from variations.norm_variations import norm_dictionary
 from variations.position_encoding_variations import QuantizedEmbedding, RotaryEmbedding, SymmetricalOverlapAngularPositions, FIRE
+from variations.absolute_position_variations import absolute_position_embedding_dict
 from variations.activation_variations import activation_dictionary
 from variations.linear_variations import linear_dictionary
 from variations.router_variations import router_dictionary
+from variations.output_vector_variants import output_vector_variant_dict
+from variations.numerical_mapping_variations import get_numerical_embedding, get_numerical_output
 from quantization.quantize import quantize_dictionary, dequantize, fake_quantize_act
+from quantization.quant_utils import set_variant, create_activation_buffers
 
-def create_shared_param_group(layer_type, config):
+from initializations.initialization_variations import init_dictionary
 
-    # explore MoE layers being reflected symmetrically
-
-    shared_size = None
-    shared_sym = None # if true, output array is symmetrical
-    layer_block = None
-    shared_group = []
-
-    if layer_type == "mlp":
-        shared_size = config.shared_mlp_size
-        shared_sym = config.shared_mlp_sym
-    elif layer_type == "attn":
-        shared_size = config.shared_attn_size
-        shared_sym = config.shared_attn_sym
-    else:
-        sys.exit(f"{layer_type} not supported, exiting")
-
-    # if attn layer check if using shared fire embeddings
-    fire_pos_enc = None
-    if layer_type == "attn" and config.shared_fire_embeddings:
-        fire_pos_enc = FIRE(config, num_heads=config.n_head)
-
-    for i in range (config.n_layer):
-
-        # Create new layer block every "shared_size"
-        if i % shared_size == 0:
-            if layer_type == "mlp":
-                if config.use_moe and i % config.moe_layer_freq == 0:
-                    # this iter is an moe layer iter
-                    layer_block = MoELayer(config)
-                else:
-                    layer_block = MLP(config)
-            elif layer_type == "attn":
-                layer_block = CausalSelfAttention(config, fire_pos_enc=fire_pos_enc)
-            else:
-                sys.exit(f"{layer_type} not supported, exiting")
-
-        # Add layer block
-        shared_group.append(layer_block)
-
-        # If symmetrical and halfway, then mirror extend and exit
-        if shared_sym:
-            # Even
-            if config.n_layer % 2 == 0:
-                if i == (config.n_layer // 2 - 1):
-                    # Append going backwards
-                    for j in range(i+1):
-                        shared_group.append(shared_group[i - j])
-                    return shared_group
-            # Odd
-            else:
-                if i == (config.n_layer // 2):
-                    # Append going backwards
-                    for j in range(i):
-                        shared_group.append(shared_group[i - j])
-                    return shared_group
-    return shared_group
-
-def set_variant(variant, default_variant):
-    # If variant is false or None, then set to provided default value
-    if not variant:
-        return default_variant
-    return variant
-
-def create_activation_buffers(obj, arg):
-    arg_str = arg.split("quantize_")[1]
-    obj.register_buffer(arg_str, None)
-    obj.register_buffer(f"{arg_str}_scale", None)
-    obj.register_buffer(f"{arg_str}_zero_point", None)
-
-class CausalSelfAttention(nn.Module):
-    def __init__(self, config, fire_pos_enc=None):
-        super().__init__()
-        if (config.n_kv_group == None):
-            config.n_kv_group = config.n_head
-        else:
-            assert config.n_embd % config.n_kv_group == 0
-
-        self.quantization_attn_dict = {}
-        self.quantization_attn_dict["activations_quant_method"] = config.activations_quant_method
-        for arg, val in vars(config).items():
-            # Set each attention Activation precision and method
-            if arg.startswith("quantize_") and "attn_act" in arg and arg.endswith("_bits"):
-                self.quantization_attn_dict[arg] = set_variant(val, config.quantize_attn_act_bits)
-            elif arg.startswith("quantize_") and "attn_act" in arg:
-                self.quantization_attn_dict[arg] = set_variant(val, config.quantize_attn_act)
-                if config.store_activations and arg != "quantize_attn_act" and self.quantization_attn_dict[arg]:
-                    create_activation_buffers(self, arg)
-            # Set each attention Linear precision and method
-            elif arg.startswith("quantize_") and "linear_attn" in arg and arg.endswith("_bits"):
-                self.quantization_attn_dict[arg] = set_variant(val, config.quantize_linear_bits)
-            elif arg.startswith("quantize_") and "linear_attn" in arg and arg.endswith("_method"):
-                self.quantization_attn_dict[arg] = set_variant(val, config.quantize_linear_method)
-
-        self.linear_variant_q = linear_dictionary[set_variant(config.linear_variant_q, config.linear_variant_attn)]
-        self.linear_variant_k = linear_dictionary[set_variant(config.linear_variant_k, config.linear_variant_attn)]
-        self.linear_variant_v = linear_dictionary[set_variant(config.linear_variant_v, config.linear_variant_attn)]
-        self.linear_variant_attn_proj = linear_dictionary[set_variant(config.linear_variant_attn_proj, config.linear_variant_attn)]
-
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn_q = self.linear_variant_q(config.n_embd, config.n_embd, config, self.quantization_attn_dict["quantize_linear_attn_q_method"], self.quantization_attn_dict["quantize_linear_attn_q_bits"], bias=config.bias)
-
-        self.n_head = config.n_head
-        if config.n_kv_group == None:
-            self.n_kv_group = config.n_head
-        else:
-            assert config.n_head % config.n_kv_group == 0
-            self.n_kv_group = config.n_kv_group
-
-        self.kv_dim = (config.n_embd // config.n_head) * self.n_kv_group
-        self.c_attn_k = self.linear_variant_k(config.n_embd, self.kv_dim, config, self.quantization_attn_dict["quantize_linear_attn_k_method"], self.quantization_attn_dict["quantize_linear_attn_k_bits"], bias=config.bias)
-        self.c_attn_v = self.linear_variant_v(config.n_embd, self.kv_dim, config, self.quantization_attn_dict["quantize_linear_attn_v_method"], self.quantization_attn_dict["quantize_linear_attn_v_bits"], bias=config.bias)
-        self.c_proj = self.linear_variant_attn_proj(config.n_embd, config.n_embd, config, self.quantization_attn_dict["quantize_linear_attn_proj_method"], self.quantization_attn_dict["quantize_linear_attn_proj_bits"], bias=config.bias)
-
-        # Regularization
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
-        self.dropout = config.dropout
-
-        # Embedding
-        self.n_embd = config.n_embd
-        self.dropout = config.dropout
-        self.n_embd = config.n_embd
-        self.gate = config.gate
-        self.use_fire_embeddings = None
-        self.disable_flash_attention = config.disable_flash_attention
-        if config.use_fire_embeddings:
-            self.use_fire_embeddings = config.use_fire_embeddings
-            if fire_pos_enc is not None:
-                self.fire_pos_enc = fire_pos_enc
-                print("shared fire")
-            else:
-                self.fire_pos_enc = FIRE(config, num_heads=config.n_head)
-                print("indiv fire")
-
-        # Rotary Positional Embeddings
-        self.rotary_emb_q = None
-        self.rotary_emb_k = None
-        if config.use_rotary_embeddings:
-            # Note: size is the size of the head dimension
-            if config.rope_variant == "soap":
-                self.sym_rot_num_angles = config.sym_rot_num_angles
-                self.rotary_emb_q = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
-                self.rotary_emb_k = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
-            elif config.rope_variant == "rope":
-                self.rotary_emb_q = RotaryEmbedding(config, size=config.n_embd // self.n_head)
-                self.rotary_emb_k = RotaryEmbedding(config, size=config.n_embd // self.n_head)
-
-        # Sliding window size
-        self.window_size = config.window_size
-        print(f"sliding window size: {self.window_size}")
-
-        # Gating
-        self.gate = config.gate
-
-        # Fire Embeddings
-        self.use_fire_embeddings = None
-        if config.use_fire_embeddings:
-            self.use_fire_embeddings = config.use_fire_embeddings
-            if fire_pos_enc is not None:
-                self.fire_pos_enc = fire_pos_enc
-                print("shared fire")
-            else:
-                self.fire_pos_enc = FIRE(config, num_heads=config.n_head)
-                print("indiv fire")
-
-        # Rotary Positional Embeddings
-        self.rotary_emb_q = None
-        self.rotary_emb_k = None
-        if config.use_rotary_embeddings:
-            # Note: size is the size of the head dimension
-            if config.rope_variant == "soap":
-                self.sym_rot_num_angles = config.sym_rot_num_angles
-                self.rotary_emb_q = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
-                self.rotary_emb_k = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
-            elif config.rope_variant == "rope":
-                self.rotary_emb_q = RotaryEmbedding(config, size=config.n_embd // self.n_head)
-                self.rotary_emb_k = RotaryEmbedding(config, size=config.n_embd // self.n_head)
-
-        # Softmax Variant Selection
-        self.softmax_variant_attn = config.softmax_variant_attn
-        if self.softmax_variant_attn == "softmax":
-            # Enable flash attention, which is compatible with 'softmax'
-            self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-            print("setting flash attn")
-        else:
-            # Remove flash attention (only compatible with 'softmax')
-            print("flash attention removed due to softmax alternative")
-            self.flash = False
-            # Set softmax_layer_attn to custom softmax alternative
-            self.softmax_layer_attn = softmax_dictionary[config.softmax_variant_attn](config)
-
-        if self.window_size is not None:
-            # TODO: look into supporting sliding window attn for flash attn
-            self.flash = False
-            print("flash attention removed due to windowed attention")
-
-        if self.n_kv_group != self.n_head:
-            self.flash = False
-            print("flash attention removed due to GQA")
-
-        if self.use_fire_embeddings:
-            self.flash = False
-            print("flash attention removed due to FIRE")
-
-        # Can't use flash attention if we want to manually quantize most input/output activations in attn
-        for key, val in self.quantization_attn_dict.items():
-            if key.startswith("quantize_") and val == True:
-                self.flash = False
-                print("flash attention removed due to Quantization")
-                break
-
-        if self.disable_flash_attention:
-            self.flash = False
-
-        if not self.flash:
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        .view(1, 1, config.block_size, config.block_size))
-
-
-    def forward(self, x):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
-
-        if self.quantization_attn_dict["quantize_attn_act_input"]:
-            num_bits = self.quantization_attn_dict["quantize_attn_act_input_bits"]
-            quant_method = self.quantization_attn_dict["activations_quant_method"]
-            x = fake_quantize_act(self, "attn_act_input", x, num_bits, quant_method)
-
-        q = self.c_attn_q(x)
-        k = self.c_attn_k(x)
-        v = self.c_attn_v(x)
-
-        if self.window_size is not None:
-            window_mask = torch.ones((1, 1, T, T), device=x.device)
-            window_mask = torch.triu(window_mask, diagonal=-self.window_size)
-            window_mask = self.bias[:,:,:T,:T] * window_mask
-
-        if self.gate:
-            if self.n_kv_group == self.n_head:
-                Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                gate_ = torch.sigmoid(Gating(x))
-                q = q * gate_
-                k = k * gate_
-                v = v * gate_
-            else:
-                # TODO: Test more methods to merge Attention Gates with GQA
-                # TODO: Evaluate each method's ability to even out parameter sizes
-                Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
-                gate_qx = Gating_q(x)
-                gate_q = torch.sigmoid(gate_qx)
-                gate_kv = torch.sigmoid(Gating_kv(gate_qx))
-                q = q * gate_q
-                k = k * gate_kv
-                v = v * gate_kv
-
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, n_h, T, hs)
-        k = k.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
-        v = v.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
-
-        # rotate q and k before evaluating with the heads
-        if (self.rotary_emb_q is not None) and (self.rotary_emb_k is not None):
-            q = self.rotary_emb_q(q)
-            k = self.rotary_emb_k(k)
-
-        y = None
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
-        else:
-            if self.quantization_attn_dict["quantize_attn_act_qk_mult_q_input"]:
-                num_bits = self.quantization_attn_dict["quantize_attn_act_qk_mult_q_input_bits"]
-                quant_method = self.quantization_attn_dict["activations_quant_method"]
-                q = fake_quantize_act(self, "attn_act_qk_mult_q_input", q, num_bits, quant_method)
-            if self.quantization_attn_dict["quantize_attn_act_qk_mult_k_input"]:
-                num_bits = self.quantization_attn_dict["quantize_attn_act_qk_mult_k_input_bits"]
-                quant_method = self.quantization_attn_dict["activations_quant_method"]
-                k = fake_quantize_act(self, "attn_act_qk_mult_k_input", k, num_bits, quant_method)
-
-            att = None
-            # manual implementation of attention
-            if self.n_head != self.n_kv_group:
-                k_repeated = k.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
-                att = (q @ k_repeated.transpose(-2, -1)) / math.sqrt(k.size(-1))
-            else:
-                att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-
-            # apply masks
-            if self.window_size is not None:
-                # add mask for sliding window attention
-                att = att.masked_fill(window_mask == 0, float('-inf'))
-            else:
-                # regular lower triangle attention
-                att = att.masked_fill(self.bias[:,:,:T,:T].to(x.device) == 0, float('-inf'))
-
-            # fire position embeddings
-            if self.use_fire_embeddings is not None:
-                # add learned fire bias
-                att = att + self.fire_pos_enc(x)
-
-            if self.quantization_attn_dict["quantize_attn_act_softmax_input"]:
-                num_bits = self.quantization_attn_dict["quantize_attn_act_softmax_input_bits"]
-                quant_method = self.quantization_attn_dict["activations_quant_method"]
-                att = fake_quantize_act(self, "attn_act_softmax_input", att, num_bits, quant_method, causal_mask=True)
-
-            # softmax variation
-            if self.softmax_variant_attn != 'softmax':
-                att = self.softmax_layer_attn(att)
-            else:
-                att = F.softmax(att, dim=-1)
-
-            att = self.attn_dropout(att)
-
-            if self.quantization_attn_dict["quantize_attn_act_pv_mult_p_input"]:
-                num_bits = self.quantization_attn_dict["quantize_attn_act_pv_mult_p_input_bits"]
-                quant_method = self.quantization_attn_dict["activations_quant_method"]
-                att = fake_quantize_act(self, "attn_act_pv_mult_p_input", att, num_bits, quant_method)
-            if self.quantization_attn_dict["quantize_attn_act_pv_mult_v_input"]:
-                num_bits = self.quantization_attn_dict["quantize_attn_act_pv_mult_v_input_bits"]
-                quant_method = self.quantization_attn_dict["activations_quant_method"]
-                v = fake_quantize_act(self, "attn_act_pv_mult_v_input", v, num_bits, quant_method)
-
-            if self.n_head != self.n_kv_group:
-                v_repeated = v.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
-                y = att @ v_repeated # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-            else:
-                y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-
-        if self.quantization_attn_dict["quantize_attn_act_pv_mult_output"]:
-            num_bits = self.quantization_attn_dict["quantize_attn_act_pv_mult_output_bits"]
-            quant_method = self.quantization_attn_dict["activations_quant_method"]
-            y = fake_quantize_act(self, "attn_act_pv_mult_output", y, num_bits, quant_method)
-
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
-
-        # output projection
-        y = self.resid_dropout(self.c_proj(y))
-
-        if self.quantization_attn_dict["quantize_attn_act_output"]:
-            num_bits = self.quantization_attn_dict["quantize_attn_act_output_bits"]
-            quant_method = self.quantization_attn_dict["activations_quant_method"]
-            y = fake_quantize_act(self, "attn_act_output", y, num_bits, quant_method)
-
-        return y
-
-
-class MLP(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-
-        # Select "mlp variant"
-        self.mlp_variant = config.mlp_variant
-
-        # If "MLP Variant" is KAN, then we skip MLP specific items
-        if self.mlp_variant == "kan":
-            self.kan = linear_dictionary["kan"](config.n_embd, config.n_embd, config=config)
-        else:
-            # Select activation variant
-            self.activation_variant = activation_dictionary[config.activation_variant]
-
-            # Sets the class of linear for MLP
-            self.linear_variant_mlp_up = linear_dictionary[set_variant(config.linear_variant_mlp_up, config.linear_variant_mlp)]
-            self.linear_variant_mlp_down = linear_dictionary[set_variant(config.linear_variant_mlp_down, config.linear_variant_mlp)]
-
-            self.quantization_mlp_dict = {}
-            self.quantization_mlp_dict["activations_quant_method"] = config.activations_quant_method
-
-            # Set quantization parameters for MLP
-            for arg, val in vars(config).items():
-                # Set MLP Activation precision and quantization method
-                if arg.startswith("quantize_") and "mlp_act" in arg and arg.endswith("_bits"):
-                    self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_mlp_act_bits)
-                elif arg.startswith("quantize_") and "mlp_act" in arg:
-                    self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_mlp_act)
-                    if config.store_activations and arg != "quantize_mlp_act" and self.quantization_mlp_dict[arg]:
-                        create_activation_buffers(self, arg)
-                # Set MLP Linear Weight precision and quantization method
-                elif arg.startswith("quantize_") and "linear_mlp" in arg and arg.endswith("_bits"):
-                    self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_linear_bits)
-                elif arg.startswith("quantize_") and "linear_mlp" in arg and arg.endswith("_method"):
-                    self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_linear_method)
-
-            # Instantiate Linear Layers
-            if self.mlp_variant == "mlp":
-                self.c_fc = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"], bias=config.bias)
-                self.c_proj = self.linear_variant_mlp_down(config.mlp_expansion_factor * config.n_embd, config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_down_method"], self.quantization_mlp_dict["quantize_linear_mlp_down_bits"], bias=config.bias)
-            elif self.mlp_variant == "swiglu":
-                self.c_fc_in1 = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
-                self.c_fc_in2 = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
-                self.c_fc_out = self.linear_variant_mlp_down(config.mlp_expansion_factor * config.n_embd, config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_down_method"], self.quantization_mlp_dict["quantize_linear_mlp_down_bits"])
-
-        self.dropout = nn.Dropout(config.dropout)
-
-    def forward(self, x):
-        if self.quantization_mlp_dict["quantize_mlp_act_input"]:
-            num_bits = self.quantization_mlp_dict["quantize_mlp_act_input_bits"]
-            quant_method = self.quantization_mlp_dict["activations_quant_method"]
-            x = fake_quantize_act(self, "mlp_act_input", x, num_bits, quant_method)
-
-        if self.mlp_variant == "kan":
-            x = self.kan(x)
-
-        elif self.mlp_variant == "mlp":
-            x = self.c_fc(x)
-
-            if self.quantization_mlp_dict["quantize_mlp_act_activation_input"]:
-                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"]
-                quant_method = self.quantization_mlp_dict["activations_quant_method"]
-                x = fake_quantize_act(self, "mlp_act_activation_input", x, num_bits, quant_method)
-
-            x = self.activation_variant(x)
-
-            if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
-                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
-                quant_method = self.quantization_mlp_dict["activations_quant_method"]
-                x = fake_quantize_act(self, "mlp_act_activation_output", x, num_bits, quant_method)
-
-            x = self.c_proj(x)
-
-        elif self.mlp_variant == "swiglu":
-            x_in1 = self.c_fc_in1(x)
-
-            if self.quantization_mlp_dict["quantize_mlp_act_activation_input"]:
-                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"]
-                quant_method = self.quantization_mlp_dict["activations_quant_method"]
-                x_in1 = fake_quantize_act(self, "mlp_act_activation_input", x_in1, num_bits, quant_method)
-
-            x_in1 = self.activation_variant(x_in1)
-
-            if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
-                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
-                quant_method = self.quantization_mlp_dict["activations_quant_method"]
-                x_in1 = fake_quantize_act(self, "mlp_act_activation_output", x_in1, num_bits, quant_method)
-
-            x_in2 = self.c_fc_in2(x)
-            x_out = x_in1 * x_in2
-            x = self.c_fc_out(x_out)
-
-        x = self.dropout(x)
-
-        if self.quantization_mlp_dict["quantize_mlp_act_output"]:
-            num_bits = self.quantization_mlp_dict["quantize_mlp_act_output_bits"]
-            quant_method = self.quantization_mlp_dict["activations_quant_method"]
-            x = fake_quantize_act(self, "mlp_act_output", x, num_bits, quant_method)
-        return x
-
-class Block(nn.Module):
-    def __init__(self, config, mlp=None, attn=None):
-        super().__init__()
-
-        # Initialize and set attn normalization (e.g. rmsnorm)
-        norm_variant_attn = norm_dictionary[config.norm_variant_attn]
-        self.ln_1 = norm_variant_attn(config)
-        if not config.use_parallel_mlp:
-            self.ln_2 = norm_variant_attn(config)
-
-        self.use_post_ln = config.use_post_ln
-        self.use_parallel_mlp = config.use_parallel_mlp
-        self.use_gradient_checkpointing = config.use_gradient_checkpointing
-
-        # Allow for sharing attn between blocks
-        if attn is None:
-            self.attn = CausalSelfAttention(config)
-        else:
-            self.attn = attn
-
-        # Allow for sharing mlp between blocks
-        if mlp is None:
-            self.mlp = MLP(config)
-        else:
-            self.mlp = mlp
-
-    def forward(self, x):
-        def custom_forward(*inputs):
-            x = inputs[0]
-            if self.use_post_ln:
-                if self.use_parallel_mlp:
-                    x = self.ln_1(x + self.attn(x) + self.mlp(x))
-                else:
-                    x = self.ln_1(x + self.attn(x))
-                    x = self.ln_2(x + self.mlp(x))
-            else:
-                if self.use_parallel_mlp:
-                    ln_1 = self.ln_1(x)
-                    x = x + self.attn(ln_1) + self.mlp(ln_1)
-                else:
-                    x = x + self.attn(self.ln_1(x))
-                    x = x + self.mlp(self.ln_2(x))
-            return x
-
-        if self.use_gradient_checkpointing and x.requires_grad:
-            return checkpoint.checkpoint(custom_forward, x, use_reentrant=False)
-        else:
-            return custom_forward(x)
+from shared_param_utils import SharedParamGroupCreator
+from variations.block_variations import Block
 
 class GPT(nn.Module):
 
@@ -543,14 +57,50 @@ class GPT(nn.Module):
 
         self.config = config
 
-        # Shared Parameters MLP
-        shared_mlp_array = create_shared_param_group("mlp", config)
-        # Shared Parameters Attention
-        shared_attn_array = create_shared_param_group("attn", config)
+        self.uses_numerical_multicontext = bool(config.numerical_multicontext)
+        if self.uses_numerical_multicontext:
+            if not config.multicontext:
+                raise ValueError("numerical_multicontext requires multicontext mode")
+            if config.n_embd_wte:
+                raise ValueError("numerical_multicontext does not support factored embeddings")
+            if not config.vocab_sizes:
+                raise ValueError("numerical_multicontext requires vocab_sizes to be provided")
+
+            self.numerical_embeddings = nn.ModuleDict()
+            self.numerical_output_mlps = nn.ModuleDict()
+            for idx in range(len(config.vocab_sizes)):
+                key = str(idx)
+                embedding_module = get_numerical_embedding(config)
+                self.numerical_embeddings[key] = embedding_module
+                self.numerical_output_mlps[key] = get_numerical_output(config, embedding_module=embedding_module)
+
+        # Final-logit softcapping
+        self.final_logit_softcapping = config.final_logit_softcapping
+
+        # Optionally mix outputs of all blocks before final layer norm
+        self.use_ln_f_input_mixer = config.use_ln_f_input_mixer
+        if self.use_ln_f_input_mixer:
+            variant_cls = output_vector_variant_dict[config.ln_f_input_mixer_variant]
+            self.ln_f_mixer = variant_cls(config)
+
+        # Use the new SharedParamGroupCreator for MLP and Attn layers
+        spg_creator = SharedParamGroupCreator(config)
+        shared_mlp_array = spg_creator.create_shared_param_group("mlp")
+        shared_attn_array = spg_creator.create_shared_param_group("attn")
+
+        # General weight tying
+        self.wte_weight_tying = config.wte_weight_tying
 
         # Factorization Parameters
         self.n_embd_wte = config.n_embd_wte
         self.n_embd_wte_scale_tying = config.n_embd_wte_scale_tying
+
+        # Embedding scale
+        if config.use_embedding_scale:
+            if config.embedding_scale_init is not None:
+                self.embedding_scale = nn.Parameter(torch.tensor([config.embedding_scale_init]))
+            else:
+                self.embedding_scale = nn.Parameter(torch.sqrt(torch.tensor([config.n_embd])))
 
         # Learned Steering Vectors
         self.use_lsv = config.use_lsv
@@ -563,6 +113,7 @@ class GPT(nn.Module):
             self.lsv_variant = config.lsv_variant
             self.lsv_matrix = lsv_dictionary[self.lsv_variant](config)
 
+        self.transformer = nn.ModuleDict(dict())
         # Configure wte, with optional quantization and factoring
         if config.quantize_wte:
             if config.n_embd_wte:
@@ -571,27 +122,37 @@ class GPT(nn.Module):
             else:
                 # no factorization
                 word_embd = QuantizedEmbedding(config.vocab_size, config.n_embd, config.quantize_wte_method, config.quantize_wte_bits)
+            self.transformer['wte'] = word_embd
         else:
             if config.n_embd_wte:
                 # If factorization is set
                 word_embd = nn.Embedding(config.vocab_size, config.n_embd_wte)
+                self.transformer['wte'] = word_embd
             else:
-                # no factorization
-                word_embd = nn.Embedding(config.vocab_size, config.n_embd)
+                #TODO: currently multicontext is in own category, add support later for WTE factorization
+                if (config.multicontext or config.multidataset_wte) and not self.uses_numerical_multicontext:
+                    for i, vocab_size in enumerate(self.config.vocab_sizes):
+                        embedding_layer = nn.Embedding(vocab_size, config.n_embd)
+                        self.transformer[f'wte_{i}'] = embedding_layer
+                        self.transformer[f'lm_head_{i}'] = nn.Linear(config.n_embd, vocab_size, bias=False)
+                else:
+                    # no factorization
+                    word_embd = nn.Embedding(config.vocab_size, config.n_embd)
+                    self.transformer['wte'] = word_embd
 
-        self.transformer = nn.ModuleDict(dict(
-            wte = word_embd,
-            drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config, mlp=shared_mlp_array[i], attn=shared_attn_array[i]) for i in range(config.n_layer)]),
-            ln_f = norm_dictionary[config.norm_variant_output](config),
-        ))
+
+        self.transformer['drop'] = nn.Dropout(config.dropout)
+        self.transformer['h'] = nn.ModuleList([Block(config, mlp=shared_mlp_array[i], attn=shared_attn_array[i]) for i in range(config.n_layer)])
+        self.transformer['ln_f'] = norm_dictionary[config.norm_variant_output](config)
+
+        # Optional post-embedding normalizations
+        if self.config.norm_variant_wte is not None:
+            self.transformer['post_embedding_norm'] = self.build_norm_from_variant(config, "norm_variant_wte", "norm_wte")
+        if self.config.norm_variant_abs is not None:
+            self.transformer['post_abs_norm'] = self.build_norm_from_variant(config, "norm_variant_abs", "norm_abs")
 
         if self.config.use_abs_pos_embeddings:
-            if config.quantize_wpe:
-                pos_embd = QuantizedEmbedding(config.block_size, config.n_embd, config.quantize_wpe_method, config.quantize_wpe_bits)
-            else:
-                pos_embd = nn.Embedding(config.block_size, config.n_embd)
-            self.transformer['wpe'] = pos_embd
+            self.transformer['wpe'] = absolute_position_embedding_dict[config.absolute_pos_embedding_variant](config)
 
         # Select softmax variant for output layer
         self.softmax_variant_output = config.softmax_variant_output
@@ -601,12 +162,12 @@ class GPT(nn.Module):
         if config.n_embd_wte:
             self.lm_head = nn.Linear(config.n_embd_wte, config.vocab_size, bias=False)
         else:
-            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+            #TODO: currently multicontext is in own category, add support later for WTE factorization
+            if (config.multicontext or config.multidataset_wte) and not self.uses_numerical_multicontext:
+                for i, vocab_size in enumerate(self.config.vocab_sizes):
+                    self.transformer[f'lm_head_{i}'].weight = self.transformer[f'wte_{i}'].weight
+            else:
+                self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # Initialize and possibly import scale_up and scale_down matrices, if factorization is set
         if self.n_embd_wte:
@@ -624,6 +185,17 @@ class GPT(nn.Module):
 
         # init all weights
         self.apply(self._init_weights)
+
+        # with weight tying when using torch.compile() some warnings get generated:
+        # "UserWarning: functional_call was passed multiple values for tied weights.
+        # This behavior is deprecated and will be an error in future versions"
+        # not 100% sure what this is, so far seems to be harmless. TODO investigate
+        if self.wte_weight_tying:
+            if (config.multicontext or config.multidataset_wte) and not self.uses_numerical_multicontext:
+                for i, vocab_size in enumerate(self.config.vocab_sizes):
+                    self.transformer[f'lm_head_{i}'].weight = self.transformer[f'wte_{i}'].weight
+            else:
+                self.lm_head.weight = self.transformer.wte.weight # https://paperswithcode.com/method/weight-tying
 
         # import wte
         if self.config.import_wte_npy:
@@ -651,7 +223,7 @@ class GPT(nn.Module):
         """
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding and self.config.use_abs_pos_embeddings:
-            n_params -= self.transformer.wpe.weight.numel()
+            n_params -= sum(p.numel() for p in self.transformer.wpe.parameters())
         return n_params
 
     def update_block_size(self, new_block_size):
@@ -659,22 +231,57 @@ class GPT(nn.Module):
         if new_block_size > self.config.block_size:
             self.config.block_size = new_block_size
             if self.config.use_abs_pos_embeddings:
-                if self.config.quantize_wpe:
-                    pos_embd = QuantizedEmbedding(new_block_size, self.config.n_embd, self.config.quantize_wpe_method, self.config.quantize_wpe_bits)
-                else:
-                    pos_embd = nn.Embedding(new_block_size, self.config.n_embd)
-                self.transformer.wpe = pos_embd
+                self.transformer.wpe.update_block_size(new_block_size)
             for block in self.transformer.h:
                 if hasattr(block.attn, 'bias'):
                     block.attn.bias = torch.tril(torch.ones(new_block_size, new_block_size)).view(1, 1, new_block_size, new_block_size)
 
+    def build_norm_from_variant(self, config, variant_key: str, prefix: str):
+        """Helper to deep-copy config and override hsnorm parameters if present."""
+        norm_config = copy.deepcopy(config)
+        for attr in ("radius", "scale", "gain", "radius_learning"):
+            src = f"{prefix}_{attr}"
+            if getattr(norm_config, src, None) is not None:
+                setattr(norm_config, f"hsnorm_{attr}", getattr(norm_config, src))
+        return norm_dictionary[getattr(config, variant_key)](norm_config)
+
     def _init_weights(self, module):
+        """
+        Custom weight initialization logic for GPT model.
+        """
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=self.config.linear_mean_init, std=self.config.linear_std_init)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=self.config.embedding_mean_init, std=self.config.embedding_std_init)
+            if self.config.init_variant == "gaussian":
+                torch.nn.init.normal_(
+                    module.weight,
+                    mean=self.config.embedding_mean_init,
+                    std=self.config.embedding_std_init
+                )
+            elif 'wpe' in self.transformer.keys() and module is self.transformer['wpe']:
+                torch.nn.init.normal_(
+                    module.weight,
+                    mean=self.config.embedding_mean_init,
+                    std=self.config.embedding_std_init
+                )
+            else:
+                init_fn = init_dictionary[self.config.init_variant]
+                print(self.config.init_variant)
+
+                # Generate custom init matrix
+                weight_data = init_fn(self.config)
+
+                # Copy into the module's weight
+                with torch.no_grad():
+                    if weight_data.shape != module.weight.shape:
+                        raise ValueError(
+                            f"Init shape {weight_data.shape} does not match embedding shape {module.weight.shape} "
+                            f"for init_variant='{self.config.init_variant}'"
+                        )
+                    module.weight.copy_(weight_data)
+
 
     def update_num_angles(self, num_angles):
         """Update the number of angles for rotary embeddings in all attention layers."""
@@ -738,66 +345,376 @@ class GPT(nn.Module):
         np.savez(file_path, scale_up=scale_up_matrix, scale_down=scale_down_matrix)
         print(f"Scale matrices saved to {file_path}")
 
-    def forward(self, idx, targets=None):
-        device = idx.device
-        b, t = idx.size()
-        # assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+    def get_embedding_gaussian_noise_std(self, iter_num=None):
+        if not self.config.embedding_gaussian_noise_in_eval and not self.training:
+            return 0.0
 
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        x = None
+        base_std = float(self.config.embedding_gaussian_noise_std or 0.0)
+        start_std = self.config.embedding_gaussian_noise_start_std
+        end_std = self.config.embedding_gaussian_noise_end_std
+        start_std = base_std if start_std is None else float(start_std)
+        end_std = base_std if end_std is None else float(end_std)
+
+        end_iter = self.config.embedding_gaussian_noise_end_iter
+        if end_iter is None or iter_num is None:
+            return max(0.0, end_std)
+
+        start_iter = int(self.config.embedding_gaussian_noise_start_iter or 0)
+        end_iter = int(end_iter)
+        if end_iter <= start_iter:
+            return max(0.0, end_std)
+
+        progress = (float(iter_num) - start_iter) / float(end_iter - start_iter)
+        progress = min(max(progress, 0.0), 1.0)
+        current_std = start_std + progress * (end_std - start_std)
+        return max(0.0, current_std)
+
+    def add_embedding_gaussian_noise(self, embeddings, iter_num=None):
+        noise_std = self.get_embedding_gaussian_noise_std(iter_num=iter_num)
+        if noise_std > 0:
+            noise = torch.randn_like(embeddings)
+            noise = noise / (noise.norm(dim=-1, keepdim=True) + 1e-6)
+            noise = noise * noise_std
+            embeddings = embeddings / (embeddings.norm(dim=-1, keepdim=True) + 1e-6)
+            return embeddings + noise
+        return embeddings
+
+    def forward(self, idx, targets=None, iter_num=None, token_dict=None, target_dict=None, dataset_idx=None, loss_fn=None):
+        if token_dict is not None:
+            token_list = list(token_dict.values())
+            # If target_dict is None (typical for inference), set target_list = None
+            if target_dict is not None:
+                target_list = list(target_dict.values())
+            else:
+                target_list = None
+            device = token_list[0].device
+            b, t = token_list[0].size()
+
+            x = None
+
+            # Add all of the input tokens
+            for i, tokens in enumerate(token_list):
+                if self.uses_numerical_multicontext:
+                    module = self.numerical_embeddings[str(i)]
+                    param = next(module.parameters())
+                    if self.config.numerical_multicontext_input_format == "fp16_bits":
+                        numeric_tokens = self._fp16bits_to_fp32(tokens).to(param.dtype)
+                    else:
+                        numeric_tokens = tokens.to(param.dtype)
+                    token_repr = module(numeric_tokens.unsqueeze(-1))
+                else:
+                    token_repr = self.transformer[f'wte_{i}'](tokens)
+
+                token_repr = self.add_embedding_gaussian_noise(token_repr, iter_num=iter_num)
+                x = token_repr if x is None else x + token_repr
+
+            if self.config.norm_variant_wte is not None:
+                x = self.transformer.post_embedding_norm(x)
+
+            if self.config.use_embedding_scale:
+                x = x * self.embedding_scale
+
+            if self.config.use_abs_pos_embeddings:
+                pos_emb = self.transformer.wpe(t, device=device, training=self.training)  # (t, n_embd)
+                x = self.transformer.drop(x + pos_emb)
+            else:
+                x = self.transformer.drop(x)
+
+            x.requires_grad_(True)
+
+            # 2. Possibly apply LSV on input
+            if self.use_lsv and self.config.apply_lsv_at_layer_idx == 0:
+                x = self.lsv_matrix(x)
+
+            if self.use_ln_f_input_mixer:
+                layer_outputs = [x]
+
+            layer_idx = 1
+            for block in self.transformer.h:
+                x = block(x, iter_num)
+
+                # Steering logic
+                if self.use_lsv and layer_idx == self.config.apply_lsv_at_layer_idx:
+                    x = self.lsv_matrix(x)
+                if (self.config.apply_vector_at_layer_idx is not None
+                        and layer_idx == self.config.apply_vector_at_layer_idx):
+                    x = self.apply_vector_to_layer_output(x)
+                if (self.config.obtain_vector_at_layer_idx is not None
+                        and layer_idx == self.config.obtain_vector_at_layer_idx):
+                    x = self.obtain_vector_from_layer_output(x)
+
+                if self.use_ln_f_input_mixer:
+                    layer_outputs.append(x)
+
+                layer_idx += 1
+
+            if self.use_ln_f_input_mixer:
+                x = self.ln_f_mixer(layer_outputs)
+
+            # 3. Final layer norm
+            x = self.transformer.ln_f(x)
+
+            # 4. Optionally scale down
+            if self.n_embd_wte:
+                x = F.linear(x, self.transformer.scale_down.weight.t())
+
+            # 5. Compute separate logits
+            if self.uses_numerical_multicontext:
+                logits = [self.numerical_output_mlps[str(i)](x) for i in range(len(token_list))]
+
+                if target_list is not None:
+                    losses = []
+                    for i, preds in enumerate(logits):
+                        if self.config.numerical_multicontext_input_format == "fp16_bits":
+                            decoded_targets = self._fp16bits_to_fp32(target_list[i])
+                            targets = decoded_targets.to(preds.dtype)
+                        else:
+                            targets = target_list[i].to(preds.dtype)
+                        mask = target_list[i] != -1
+
+                        if mask.any():
+                            pred_sel = preds[mask]
+                            target_sel = targets.unsqueeze(-1)[mask]
+
+                            huber = F.huber_loss(
+                                pred_sel,
+                                target_sel,
+                                delta=self.config.numerical_loss_huber_delta,
+                                reduction="mean",
+                            )
+
+                            if self.config.numerical_loss_use_cosine:
+                                cos = 1.0 - F.cosine_similarity(
+                                    pred_sel,
+                                    target_sel,
+                                    dim=-1,
+                                    eps=1e-8,
+                                ).mean()
+                                loss_i = huber + (self.config.numerical_loss_cosine_coeff * cos)
+                            else:
+                                loss_i = huber
+                        else:
+                            loss_i = torch.zeros((), device=preds.device, dtype=preds.dtype)
+                        losses.append(loss_i)
+                else:
+                    logits = [pred[:, [-1], :] for pred in logits]
+                    losses = None
+            else:
+                logits = [self.transformer[f'lm_head_{i}'](x) for i in range(len(token_list))]
+
+                # Soft‑cap **each** logits tensor (training & inference)
+                if self.config.final_logit_softcapping is not None:
+                    logits = [
+                        torch.tanh(logit_var / self.config.final_logit_softcapping) *
+                        self.config.final_logit_softcapping
+                        for logit_var in logits
+                    ]
+
+                # 6. Compute losses if targets are provided
+                # If we only want the last token, adapt the slices as you prefer
+                if target_list is not None:
+                    # If we do want to compute losses for each context
+                    losses = []
+                    for i in range(len(token_list)):
+                        if loss_fn is None:
+                            loss_i = F.cross_entropy(
+                                logits[i].view(-1, logits[i].size(-1)),
+                                target_list[i].view(-1),
+                                ignore_index=-1
+                            )
+                        else:
+                            loss_i = loss_fn(logits[i], target_list[i], iter_num=iter_num)
+                        losses.append(loss_i)
+
+                else:
+                    # only forward lm head on very last position in inference mode
+                    logits = [logit[:, [-1], :] for logit in logits]
+                    losses = None
+
+            return logits, losses
+
+        else:
+            device = idx.device
+            b, t = idx.size()
+            # assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
+            # forward the GPT model itself
+            if self.config.multidataset_wte and dataset_idx is not None:
+                tok_emb = self.transformer[f'wte_{dataset_idx}'](idx)
+            else:
+                tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+            x = None
+
+            tok_emb = self.add_embedding_gaussian_noise(tok_emb, iter_num=iter_num)
+            if self.n_embd_wte:
+                tok_emb = self.transformer.scale_up(tok_emb)
+
+            if self.config.use_embedding_scale:
+                tok_emb = tok_emb * self.embedding_scale
+
+            if self.config.norm_variant_wte is not None:
+                tok_emb = self.transformer.post_embedding_norm(tok_emb)
+
+            if self.config.use_abs_pos_embeddings:
+                pos_emb = self.transformer.wpe(t, device=device, training=self.training) # position embeddings of shape (t, n_embd)
+                x = tok_emb + pos_emb
+                if self.config.norm_variant_abs is not None:
+                    x = self.transformer.post_abs_norm(x)
+                x = self.transformer.drop(x)
+            else:
+                x = self.transformer.drop(tok_emb)
+
+            x.requires_grad_(True)  # Ensure requires_grad is True
+
+            if self.use_lsv and self.config.apply_lsv_at_layer_idx == 0:
+                x = self.lsv_matrix(x)
+
+            if self.use_ln_f_input_mixer:
+                layer_outputs = [x]
+
+            layer_idx = 1
+            for block in self.transformer.h:
+                # Propagate tokens through layers
+                x = block(x, iter_num)
+
+                # Intercept for Learned Steering Vectors
+                if self.use_lsv and layer_idx == self.config.apply_lsv_at_layer_idx:
+                    x = self.lsv_matrix(x)
+                    # x = self.apply_learned_vector_to_layer_output(x)
+
+                # Intercept for Steering Vectors
+                if self.config.apply_vector_at_layer_idx is not None and layer_idx == self.config.apply_vector_at_layer_idx:
+                    x = self.apply_vector_to_layer_output(x)
+                if self.config.obtain_vector_at_layer_idx is not None and layer_idx == self.config.obtain_vector_at_layer_idx:
+                    print(layer_idx, self.config.obtain_vector_at_layer_idx)
+                    x = self.obtain_vector_from_layer_output(x)
+
+                if self.use_ln_f_input_mixer:
+                    layer_outputs.append(x)
+
+                layer_idx +=1
+
+            if self.use_ln_f_input_mixer:
+                x = self.ln_f_mixer(layer_outputs)
+
+            x = self.transformer.ln_f(x)
+
+            if self.n_embd_wte:
+                x = F.linear(x, self.transformer.scale_down.weight.t())
+
+
+            if targets is not None:
+                # if we are given some desired targets also calculate the loss
+                if self.config.multidataset_wte and dataset_idx is not None:
+                    logits = self.transformer[f'lm_head_{dataset_idx}'](x)
+                else:
+                    logits = self.lm_head(x)
+
+                if self.config.final_logit_softcapping is not None:
+                    logits = logits / self.config.final_logit_softcapping
+                    logits = torch.tanh(logits)
+                    logits = logits * self.config.final_logit_softcapping
+
+                if loss_fn is None:
+                    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+                else:
+                    loss = loss_fn(logits, targets, iter_num=iter_num)
+            else:
+                # inference-time mini-optimization: only forward the lm_head on the very last position
+                if self.config.multidataset_wte and dataset_idx is not None:
+                    logits = self.transformer[f'lm_head_{dataset_idx}'](x[:, [-1], :])
+                else:
+                    logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+
+                if self.config.final_logit_softcapping is not None:
+                    logits = logits / self.config.final_logit_softcapping
+                    logits = torch.tanh(logits)
+                    logits = logits * self.config.final_logit_softcapping
+
+                loss = None
+
+            return logits, loss
+    # ------------------------------------------------------------------
+    #  LATENT-CHAINING
+    # ------------------------------------------------------------------
+    @torch.no_grad()
+    def embed_tokens(self, idx, dataset_idx=None):
+        """
+        Return the (B,T,E) tensor right *after* token embeddings,
+        factor-scale-up, positional embedding and dropout.  Exactly the
+        same tensor that flows into the first transformer Block inside
+        `forward()`.  Used by train_recurrent.py for the FIRST step.
+        """
+        device = idx.device
+        if self.config.multidataset_wte and dataset_idx is not None:
+            tok_emb = self.transformer[f'wte_{dataset_idx}'](idx)
+        else:
+            tok_emb = self.transformer.wte(idx)
+
+        tok_emb = self.add_embedding_gaussian_noise(tok_emb, iter_num=None)
 
         if self.n_embd_wte:
             tok_emb = self.transformer.scale_up(tok_emb)
+
+        if self.config.use_embedding_scale:
+            tok_emb = tok_emb * self.embedding_scale
+
+        if self.config.norm_variant_wte is not None:
+            tok_emb = self.transformer.post_embedding_norm(tok_emb)
+
         if self.config.use_abs_pos_embeddings:
-            pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
-            pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-            x = self.transformer.drop(tok_emb + pos_emb)
-        else:
-            x = self.transformer.drop(tok_emb)
+            t = idx.size(1)
+            tok_emb = tok_emb + self.transformer.wpe(t, device=device, training=self.training)
+            if self.config.norm_variant_abs is not None:
+                tok_emb = self.transformer.post_abs_norm(tok_emb)
 
-        x.requires_grad_(True)  # Ensure requires_grad is True
 
+        return self.transformer.drop(tok_emb)
+
+    def forward_embedded(self, x_emb, iter_num=None, return_hidden=False, dataset_idx=None):
+        """
+        Complete forward pass **starting from an already-embedded tensor**
+        `x_emb` of shape (B,T,E).  Returns (`logits`, `loss`) identical to
+        `forward`, and – if `return_hidden` – also the final hidden state
+        right before `lm_head`.  No gradients are blocked; loss still
+        back-propagates into `x_emb`.
+        """
+        # ---- copy–paste from the “else:” branch of forward() ---------
+        b, t, _ = x_emb.size()
+        x = x_emb
+
+        # (steering vectors, etc.)
         if self.use_lsv and self.config.apply_lsv_at_layer_idx == 0:
             x = self.lsv_matrix(x)
 
-        layer = 1
+        if self.use_ln_f_input_mixer:
+            layer_outputs = [x]
+
+        layer_idx = 1
         for block in self.transformer.h:
-            # Propagate tokens through layers
-            if self.config.use_gradient_checkpointing:
-                x = checkpoint.checkpoint(block, x, use_reentrant=self.config.recompute_backward_pass)
-            else:
-                x = block(x)
-
-            # Intercept for Learned Steering Vectors
-            if self.use_lsv and layer == self.config.apply_lsv_at_layer_idx:
+            x = block(x, iter_num)
+            if self.use_lsv and layer_idx == self.config.apply_lsv_at_layer_idx:
                 x = self.lsv_matrix(x)
-                # x = self.apply_learned_vector_to_layer_output(x)
+            if self.use_ln_f_input_mixer:
+                layer_outputs.append(x)
+            layer_idx += 1
 
-            # Intercept for Steering Vectors
-            if self.config.apply_vector_at_layer_idx is not None and layer == self.config.apply_vector_at_layer_idx:
-                x = self.apply_vector_to_layer_output(x)
-            if self.config.obtain_vector_at_layer_idx is not None and layer == self.config.obtain_vector_at_layer_idx:
-                print(layer, self.config.obtain_vector_at_layer_idx)
-                x = self.obtain_vector_from_layer_output(x)
-
-            layer +=1
+        if self.use_ln_f_input_mixer:
+            x = self.ln_f_mixer(layer_outputs)
 
         x = self.transformer.ln_f(x)
-
         if self.n_embd_wte:
             x = F.linear(x, self.transformer.scale_down.weight.t())
 
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        if self.config.multidataset_wte and dataset_idx is not None:
+            logits = self.transformer[f'lm_head_{dataset_idx}'](x)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
-            loss = None
+            logits = self.lm_head(x)
+        if self.final_logit_softcapping is not None:
+            logits = torch.tanh(logits / self.final_logit_softcapping) \
+                     * self.final_logit_softcapping
 
-        return logits, loss
+        return (logits, x) if return_hidden else (logits, None)
 
     def set_lsv_scaling_factor(self, factor):
         self.lsv_matrix.update_lsv_scaling_factor(factor)
@@ -865,6 +782,42 @@ class GPT(nn.Module):
         np.save(self.config.obtain_vector_file, result_vector)
         print(f"Updated avg vector saved to {self.config.obtain_vector_file}")
 
+    @staticmethod
+    def _fp16bits_to_fp32(bits: torch.Tensor) -> torch.Tensor:
+        """Convert IEEE-754 half-precision bit patterns to float32 tensors."""
+
+        b = bits.to(torch.int32)
+
+        sign = (b >> 15) & 0x1
+        exponent = (b >> 10) & 0x1F
+        mantissa = b & 0x3FF
+
+        sign_f = torch.where(sign == 0, 1.0, -1.0).to(torch.float32)
+        exponent_i = exponent.to(torch.int32)
+        mantissa_f = mantissa.to(torch.float32)
+
+        # Subnormal: sign * 2^-14 * (mantissa / 2^10)
+        subnormal_mag = torch.ldexp(mantissa_f / 1024.0, torch.full_like(exponent_i, -14))
+
+        # Normal: sign * 2^(exp-15) * (1 + mantissa / 2^10)
+        normal_mag = torch.ldexp(1.0 + (mantissa_f / 1024.0), exponent_i - 15)
+
+        is_zero = (exponent_i == 0) & (mantissa == 0)
+        is_subnormal = (exponent_i == 0) & (mantissa != 0)
+        is_normal = (exponent_i > 0) & (exponent_i < 0x1F)
+        is_special = exponent_i == 0x1F
+        is_inf = is_special & (mantissa == 0)
+        is_nan = is_special & (mantissa != 0)
+
+        out = torch.zeros_like(sign_f, dtype=torch.float32)
+        out = torch.where(is_subnormal, sign_f * subnormal_mag, out)
+        out = torch.where(is_normal, sign_f * normal_mag, out)
+        out = torch.where(is_inf, sign_f * float("inf"), out)
+        out = torch.where(is_nan, float("nan"), out)
+        out = torch.where(is_zero, torch.zeros_like(out), out)
+
+        return out
+
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
         # e.g. we may load the GPT2 pretrained model checkpoint (block size 1024)
@@ -872,7 +825,7 @@ class GPT(nn.Module):
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
         if self.config.use_abs_pos_embeddings:
-            self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
+            self.transformer.wpe.crop_block_size(block_size)
         for block in self.transformer.h:
             if hasattr(block.attn, 'bias'):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
@@ -886,8 +839,6 @@ class GPT(nn.Module):
 
         # create a from-scratch initialized minGPT model
         model = GPT(config)
-        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
-
         sd = model.state_dict()
         sd_keys = sd.keys()
         sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
@@ -901,42 +852,56 @@ class GPT(nn.Module):
         sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
         sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
         transposed = ['attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
-        # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
-        # this means that we have to transpose these weights when we import them
-        # NOTE: the assert below will fail because we split out the c_attn linears!
+
         # assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
         for key in sd_keys_hf:
+            # START FIX: Rename keys to match nanoGPT's convention
+            my_key = key
+            if 'ln_1' in my_key:
+                my_key = my_key.replace('ln_1', 'ln1')
+            if 'ln_2' in my_key:
+                my_key = my_key.replace('ln_2', 'ln2')
+            # END FIX
+
             if any(key.endswith(w) for w in transposed):
                 # special treatment for the Conv1D weights we need to transpose
-                assert sd_hf[key].shape[::-1] == sd[key].shape
+                assert sd_hf[key].shape[::-1] == sd[my_key].shape
                 with torch.no_grad():
-                    sd[key].copy_(sd_hf[key].t())
+                    sd[my_key].copy_(sd_hf[key].t())
             elif key.endswith('attn.c_attn.weight') or key.endswith('attn.c_attn.bias'):
                 # split into c_attn_q/k/v
-                q, k, v  = sd_hf[key].t().split(config.n_embd, dim=0)
-                q_key_str = key.replace("c_attn", "c_attn_q")
-                k_key_str = key.replace("c_attn", "c_attn_k")
-                v_key_str = key.replace("c_attn", "c_attn_v")
-                sd[q_key_str] = q
-                sd[k_key_str] = k
-                sd[v_key_str] = v
+                q, k, v  = sd_hf[key].split(config.n_embd, dim=-1) # Note: HF stores as (3 * n_embd, n_embd) for weights
+
+                # Adjust for bias shape if it exists
+                if key.endswith('.bias'):
+                    q_key_str = my_key.replace("c_attn", "c_attn_q")
+                    k_key_str = my_key.replace("c_attn", "c_attn_k")
+                    v_key_str = my_key.replace("c_attn", "c_attn_v")
+                    sd[q_key_str].copy_(q)
+                    sd[k_key_str].copy_(k)
+                    sd[v_key_str].copy_(v)
+                else: # it's a weight
+                    q, k, v = q.t(), k.t(), v.t() # Transpose weights
+                    q_key_str = my_key.replace("c_attn", "c_attn_q")
+                    k_key_str = my_key.replace("c_attn", "c_attn_k")
+                    v_key_str = my_key.replace("c_attn", "c_attn_v")
+                    sd[q_key_str].copy_(q)
+                    sd[k_key_str].copy_(k)
+                    sd[v_key_str].copy_(v)
             else:
                 # vanilla copy over the other parameters
-                print(key)
                 if config.n_embd_wte:
-                    if key == "transformer.wte.weight":
+                    if "wte" in key or "lm_head" in key:
                         continue
-                    if key == "lm_head.weight":
-                        continue
-
                 if not config.use_abs_pos_embeddings:
-                    if key == "transformer.wpe.weight":
+                    if "wpe" in key:
                         continue
 
-                assert sd_hf[key].shape == sd[key].shape
-                with torch.no_grad():
-                    print(key)
-                    sd[key].copy_(sd_hf[key])
+                # Ensure the key exists in your model before trying to copy
+                if my_key in sd:
+                    assert sd_hf[key].shape == sd[my_key].shape, f"Shape mismatch for key {my_key}: HF is {sd_hf[key].shape}, yours is {sd[my_key].shape}"
+                    with torch.no_grad():
+                        sd[my_key].copy_(sd_hf[key])
 
         return model
 
@@ -1014,10 +979,13 @@ class GPT(nn.Module):
         return idx
 
     @torch.no_grad()
-    def generate_with_stop(self, idx, max_new_tokens, stop_string, decode, temperature=1.0, top_k=None):
+    def generate_with_stop(self, idx, max_new_tokens, stop_strings, decode, temperature=1.0, top_k=None):
         """
-        Generate tokens and stop on fixed string match, return the state for further input.
+        Generate tokens and stop on any fixed string match from a list of stop strings.
         """
+        if isinstance(stop_strings, str):
+            stop_strings = [stop_strings]  # make it a list if a single string
+
         generated_text = ""
         buffer = ""
         for _ in range(max_new_tokens):
@@ -1035,58 +1003,9 @@ class GPT(nn.Module):
             generated_text += next_token_text
             buffer += next_token_text
 
-            # Check if the buffer ends with the stop_string
-            if buffer.endswith(stop_string):
-                break
+            # Check if buffer ends with any stop string
+            for stop_string in stop_strings:
+                if buffer.endswith(stop_string):
+                    return idx, generated_text
 
         return idx, generated_text
-
-
-class MoELayer(nn.Module):
-    """ Mixture of Experts layer to replace FFN (or every other FFN) """
-
-    def __init__(self, config):
-        super().__init__()
-        self.top_k = config.moe_top_k
-        # TODO: implement expert capacity throttling
-        # self.expert_capacity = config.expert_capacity
-        self.num_experts = config.n_experts
-        self.router = router_dictionary[config.moe_router_scheme](config)
-        self.experts = nn.ModuleList([MLP(config) for _ in range(config.n_experts)])
-
-    def forward(self, x):
-        # Assuming x has shape [batch_size, seq_len, n_embd]
-        batch_size, seq_len, _ = x.shape
-        gating_output, indices = self.router(x)
-        # print(f"gating_output.shape: {gating_output.shape}")
-        # print(f"indices 1 count: {indices}")
-        final_output = torch.zeros_like(x)
-
-        # Flatten the batch and sequence dimensions to treat each token independently
-        flat_x = x.view(-1, x.size(-1))
-        # print(f"x.shape() = {x.shape}")
-        # print(f"flat_x = {flat_x.shape}")
-        flat_gating_output = gating_output.view(-1, gating_output.size(-1))
-        # print(f"flat_gating_output.shape = {flat_gating_output.shape}")
-
-        # Process each expert in parallel
-        for i, expert in enumerate(self.experts):
-            # Create a mask for the inputs where the current expert is in top-k
-            expert_mask = (indices == i).any(dim=-1)
-            flat_mask = expert_mask.view(-1)
-            # print(f"expert_mask shape = {expert_mask.shape}")
-            # print(f"flat_mask shape = {flat_mask.shape}")
-
-            if flat_mask.any():
-                expert_input = flat_x[flat_mask]
-                expert_output = expert(expert_input)
-
-                # Extract and apply gating scores
-                gating_scores = flat_gating_output[flat_mask, i].unsqueeze(1)
-                weighted_output = expert_output * gating_scores
-
-                # Update final output additively by indexing and adding
-                final_output[expert_mask] += weighted_output.squeeze(1)
-        # print(f"final_output.shape = {final_output.shape}\n")
-        return final_output
-

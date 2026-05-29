@@ -1,0 +1,44 @@
+# mlp_variation_comparison.yaml
+---
+# parameter_groups: define sets of overrides to apply on top of base params
+parameter_groups:
+  # Standard MLP - baseline sizes
+  - mlp_variant: ["mlp"]
+    mlp_size: [768, 1024, 1536]
+
+  # Swiglu - ~2/3 of MLP sizes for same param count
+  - mlp_variant: ["swiglu"]
+    mlp_size: [512, 683, 1024]
+
+  # DualPath - ~2/3 of MLP sizes for same param count
+  - mlp_variant: ["dual_path"]
+    mlp_size: [512, 683, 1024]
+    learn_dual_path_x_offset: [true]
+    learn_dual_path_y_offset: [true]
+    dual_path_x_offset: [0.1]
+    dual_path_y_offset: [0.0]
+
+# activation type
+activation_variant: ["relu"]
+
+# compilation
+compile: [true]
+
+# Position embeddings
+use_rotary_embeddings: [true]
+use_abs_pos_embeddings: [false]
+
+# training configuration
+max_iters: [10000]
+lr_decay_iters: [10000]
+eval_interval: [10000]
+eta_variant: ["iteration"]
+warmup_iters: [1000]
+decay_lr: [true]
+
+# dataset configuration
+dataset: ["minipile"]
+
+
+# dtype
+dtype: ["float16", "bfloat16"]

@@ -1,495 +1,322 @@
+# prepare.py
+import json
 import os
 import argparse
 import numpy as np
+from nanogpt_tokenizers import (
+    SentencePieceTokenizer,
+    TiktokenTokenizer,
+    HuggingFaceTokenizer,
+    CustomTokenizer,
+    ByteTokenizer,
+    CharTokenizer,
+    CharBPETokenizerWithByteFallback,
+    CustomCharTokenizerWithByteFallback,
+    JsonByteTokenizerWithByteFallback,
+    PythonProgrammingTokenizer,
+    SineWaveTokenizer,
+    WhisperMelCsvTokenizer,
+)
+from tqdm import tqdm
 import pickle
-import sentencepiece as spm
-import tempfile
-import tiktoken
-import sys
-import argparse
-import numpy as np
-import pickle
-import sys
 
-def get_key_from_meta(keyname):
-    # Data loader
-    meta_path = 'meta.pkl'
-    if os.path.exists(meta_path):
-        with open(meta_path, 'rb') as f:
-            meta = pickle.load(f)
-            if keyname in meta:
-                return meta[keyname]
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Tokenize text data using different methods.")
 
-def tokenize_numeric_range(data, min_token, max_token):
-    """Tokenize data assuming one number per line within the specified range."""
-    tokens = []
-    encountered_tokens = set()
-    for line in data.strip().split('\n'):
-        try:
-            num = int(line)
-            if min_token <= num <= max_token:
-                tokens.append(num)
-                encountered_tokens.add(num)
-            else:
-                print(f"Warning: Number {num} is outside the specified range and will be skipped.")
-        except ValueError:
-            print(f"Warning: Invalid number '{line}' will be skipped.")
+    # Input/output arguments
+    parser.add_argument("-t", "--train_input", type=str, required=True, help="Path to the input text file")
+    parser.add_argument("-v", "--val_input", type=str, help="Path to validation input file. If not provided, train_input will be split using percentage_train")
+    parser.add_argument("--train_output", type=str, default="train.bin", help="Path to save the training output file")
+    parser.add_argument("--val_output", type=str, default="val.bin", help="Path to save the validation output file")
+    parser.add_argument("-p", "--percentage_train", type=float, default=0.9, help="Percentage of data to use for training (between 0 and 1) when val_input is not provided")
 
-    # Create a complete range of tokens from min_token to max_token
-    all_tokens = list(range(max_token, -1, -1))
+    # Tokenizer selection and configuration
+    parser.add_argument("--method", type=str,
+                       choices=["sentencepiece", "tiktoken", "huggingface", "char", "char_bpe", "custom", "byte", "custom_char_byte_fallback", "json_byte_fallback", "python_programming", "sinewave", "whisper_mel_csv"],
+                       default="tiktoken", help="Tokenization method")
 
-    # Create stoi and itos dictionaries for the entire range
-    stoi = {str(num): i for i, num in enumerate(all_tokens)}
-    itos = {i: str(num) for i, num in enumerate(all_tokens)}
+    # HuggingFace tokenizer arguments
+    parser.add_argument("--hf_tokenizer_name", type=str, default=None,
+                        help="HuggingFace tokenizer: a Hub repo id (e.g. 'gpt2', "
+                             "'google/gemma-3-270m', 'meta-llama/Llama-3.2-1B') or a "
+                             "local directory previously written by save_pretrained. "
+                             "Hub repos are downloaded and cached automatically.")
+    parser.add_argument("--hf_trust_remote_code", action="store_true",
+                        help="Trust remote code when loading a HuggingFace tokenizer "
+                             "(needed for some custom tokenizer classes shipped in repos)")
+    parser.add_argument("--hf_use_fast", action=argparse.BooleanOptionalAction, default=True,
+                        help="Use the fast (Rust-based) HuggingFace tokenizer variant if available")
+    parser.add_argument("--hf_revision", type=str, default=None,
+                        help="Pin the HuggingFace repo to a specific commit SHA, branch, or tag "
+                             "for reproducibility (forwarded to from_pretrained as `revision=`)")
+    parser.add_argument("--hf_subfolder", type=str, default=None,
+                        help="Subfolder inside the HuggingFace repo that holds the tokenizer files "
+                             "(forwarded to from_pretrained as `subfolder=`)")
+    parser.add_argument("--hf_cache_dir", type=str, default=None,
+                        help="Override the HuggingFace download cache directory "
+                             "(forwarded to from_pretrained as `cache_dir=`). Default honors "
+                             "HF_HOME / HF_HUB_CACHE / ~/.cache/huggingface/hub.")
+    parser.add_argument("--hf_token", type=str, default=None,
+                        help="HuggingFace auth token for gated repos (e.g. Gemma, Llama). "
+                             "Alternatively run `huggingface-cli login` once, or set the "
+                             "HF_TOKEN environment variable. You must also accept the model's "
+                             "license at https://huggingface.co/<repo> while logged in.")
 
-    # Convert tokens to their indices
-    indexed_tokens = [stoi[str(token)] for token in tokens]
+    # Sine wave tokenizer arguments
+    parser.add_argument("--sine_period", type=float, default=1.0,
+                        help="Period multiplier applied to the sine wave (in radians)")
+    parser.add_argument("--sine_points_per_period", type=int, default=64,
+                        help="Number of discrete points sampled per sine wave period")
+    parser.add_argument("--sine_num_periods", type=int, default=10,
+                        help="Total number of periods to generate")
+    parser.add_argument("--sine_amplitude", type=float, default=50.0,
+                        help="Amplitude of the generated sine wave prior to clamping")
 
-    return indexed_tokens, stoi, itos, encountered_tokens
+    # Whisper-style mel spectrogram tokenizer arguments
+    parser.add_argument("--mel_sample_rate", type=int, default=16000,
+                        help="Target sample rate for mel spectrogram computation")
+    parser.add_argument("--mel_n_fft", type=int, default=400,
+                        help="FFT size for mel spectrogram computation")
+    parser.add_argument("--mel_hop_length", type=int, default=160,
+                        help="Hop length between frames for mel spectrogram computation")
+    parser.add_argument("--mel_win_length", type=int, default=400,
+                        help="Window length for mel spectrogram computation")
+    parser.add_argument("--mel_n_mels", type=int, default=80,
+                        help="Number of mel filterbank channels")
+    parser.add_argument("--mel_f_min", type=float, default=0.0,
+                        help="Minimum frequency for mel filterbank")
+    parser.add_argument("--mel_f_max", type=float, default=8000.0,
+                        help="Maximum frequency for mel filterbank")
+    parser.add_argument("--mel_center", action=argparse.BooleanOptionalAction, default=True,
+                        help="Center frames during STFT computation")
+    parser.add_argument("--mel_power", type=float, default=2.0,
+                        help="Exponent for the magnitude spectrogram")
+    parser.add_argument("--mel_normalize", action=argparse.BooleanOptionalAction, default=True,
+                        help="Apply Whisper-style log-mel normalization")
+    parser.add_argument("--mel_csv_float_format", type=str, default="%.6f",
+                        help="Float format string used when writing mel CSV files")
 
-def tokenize_custom_tokens_and_replace(data, tokens):
-    """Tokenize data using custom tokens and replace found tokens with underscores."""
-    stoi = {token: i for i, token in enumerate(tokens)}
-    encoded_data = []
-    remaining_data = []
-    i = 0
-    covered_chars = 0
-    while i < len(data):
-        matched = False
-        for token in tokens:
-            if data.startswith(token, i):
-                encoded_data.append(stoi[token])
-                remaining_data.append("_" * len(token))
-                i += len(token)
-                covered_chars += len(token)
-                matched = True
-                break
-        if not matched:
-            remaining_data.append(data[i])
-            i += 1  # Move to the next character if no token matches
-    coverage = covered_chars / len(data)
-    remaining_text = ''.join(remaining_data)
-    return encoded_data, coverage, stoi, {i: token for i, token in enumerate(tokens)}, remaining_text
+    # SentencePiece arguments
+    parser.add_argument("--vocab_size", type=int, default=500, help="Vocabulary size for SentencePiece model")
+    parser.add_argument("--spm_model_file", type=str, default=None, help="Path to the pre-trained SentencePiece model file")
+    parser.add_argument("--spm_vocab_file", type=str, default=None, help="Path to the SentencePiece vocabulary file")
+    parser.add_argument("--skip_tokenization", action="store_true", help="Skip creation of .bin files")
 
-def tokenize_custom_tokens(data, tokens):
-    """Tokenize data using custom tokens."""
-    stoi = {token: i for i, token in enumerate(tokens)}
-    encoded_data = []
-    i = 0
-    covered_chars = 0
-    while i < len(data):
-        matched = False
-        for token in tokens:
-            if data.startswith(token, i):
-                encoded_data.append(stoi[token])
-                i += len(token)
-                covered_chars += len(token)
-                matched = True
-                break
-        if not matched:
-            i += 1  # Skip character if no token matches
-    coverage = covered_chars / len(data)
-    return encoded_data, coverage, stoi, {i: token for i, token in enumerate(tokens)}
+    # Tiktoken arguments
+    parser.add_argument("-e", "--tiktoken_encoding",
+                       choices=["gpt2", "r50k_base", "p50k_base", "cl100k_base"],
+                       default="gpt2", help="Version of tiktoken encoding to utilize")
+    parser.add_argument("--additional_tokens_file", type=str, default=None,
+                       help="Path to JSON file containing additional special tokens for tiktoken (format: {'token': id})")
 
-def tokenize_lines_from_file(file_path):
-    """Tokenize each line from the file as a unique token, sort and ensure uniqueness."""
-    with open(file_path, 'r') as f:
-        tokens = {line.strip() for line in f if line.strip()}
-    tokens = sorted(tokens)
-    return tokens
+    # Char tokenizer arguments
+    parser.add_argument("--reuse_chars", action="store_true", help="Reuse character list from meta.pkl")
+    parser.add_argument("--char_bpe_vocab_path", type=str, default=None,
+                        help="Path to a char_bpe meta.pkl to reuse its vocabulary/merges")
 
-def train_sentencepiece_model(input_files, model_prefix, vocab_size):
-    """Train a SentencePiece model directly with a single file or using concatenated input files."""
-    num_threads = os.cpu_count()
-    input_arg = ""
+    # Custom tokenizer arguments
+    parser.add_argument("--tokens_file", type=str, default=None, help="Path to the file containing newline-separated tokens for tokenization")
+    parser.add_argument("--custom_chars_file", type=str, default=None, help="Path to the file containing custom characters for the tokenizer")
+    parser.add_argument("--json_tokens_file", type=str, default=None, help="Path to JSON file containing tokens for json_byte_fallback tokenizer")
 
-    # If input_files is a list of multiple files, concatenate them into a temporary file
-    if isinstance(input_files, list):
-        with tempfile.NamedTemporaryFile(delete=False, mode="w") as tmpfile:
-            for input_file in input_files:
-                with open(input_file, "r") as infile:
-                    tmpfile.write(infile.read())
-            # Use the name of the temporary file as the input argument for training
-            input_arg = tmpfile.name
-    else:
-        # If input_files is not a list, use it directly as the input argument
-        input_arg = input_files
+    # Additional options
+    parser.add_argument("-T", "--track_token_counts", action="store_true", help="Track how often each token appears and store in meta.pkl")
+    parser.add_argument("-s", "--output_tokenization_subdir", action="store_true",
+                        help="Write meta.pkl/train.bin/val.bin into a subdirectory named after the selected tokenization method")
+    parser.add_argument("-S", "--output_subdir_suffix", type=str, default="",
+                        help="Optional suffix to append to the tokenization subdirectory name (e.g. sp_1000_suffix)")
 
-    # Other options (https://github.com/google/sentencepiece/blob/master/doc/options.md)
-    # self_test_sample_size=1,
-    # input_format="text",
-    # shuffle_input_sentence = false
-    # split_digits=False, # this often helps with arithmetic
-    # allow_whitespace_only_pieces=True,
-    # normalization_rule_name="nmt_nfkc_cf" lower cases as well
+    return parser.parse_args()
 
-    # Train the SentencePiece model
-    spm.SentencePieceTrainer.train(
-        num_threads=num_threads,
-        user_defined_symbols="\n, ",
-        input=input_arg,
-        model_prefix=model_prefix,
-        split_digits=True,
-        vocab_size=vocab_size,
-        model_type="bpe",
-    )
-    print("SentencePiece model training complete.")
+def save_tokens(ids, output_file, dtype):
+    """Save tokenized data to a binary file with progress bar."""
+    total = len(ids)
+    batch_size = 1024 * 1024  # 1 million tokens per batch
+    with open(output_file, 'wb') as f_out:
+        for i in tqdm(range(0, total, batch_size), desc=f"Saving {output_file}"):
+            batch = ids[i:i+batch_size]
+            np.array(batch, dtype=dtype).tofile(f_out)
 
-    # If a temporary file was used, remove it after training
-    if isinstance(input_files, list):
-        os.remove(input_arg)
+def save_mel_csv(frames, output_file, float_format):
+    with open(output_file, "w", encoding="utf-8") as f_out:
+        np.savetxt(f_out, frames, delimiter=",", fmt=float_format)
 
-def tokenize_sentencepiece(sp_model, data):
-    """Tokenize data using the SentencePiece model."""
-    return sp_model.encode_as_ids(data)
+def _read_input_data(path):
+    if os.path.isdir(path):
+        collected = []
+        for root, _, files in os.walk(path):
+            for name in sorted(files):
+                file_path = os.path.join(root, name)
+                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                    collected.append(f.read())
+        return "\n".join(collected)
+    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+        return f.read()
 
-def tokenize_tiktoken(enc, data):
-    """Tokenize data using TikToken."""
-    return enc.encode_ordinary(data)
-
-def encode_char_level(data, chars):
-    """Encode data at character level."""
-    stoi = {ch: i for i, ch in enumerate(chars)}
-    return [stoi[ch] for ch in data], stoi, {i: ch for i, ch in enumerate(chars)}
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Tokenize text data using different methods."
-    )
-
-    parser.add_argument(
-        "--tokens_file",
-        type=str,
-        default=None,
-        help="Path to the file containing newline-separated tokens for tokenization",
-    )
-    parser.add_argument(
-        "--method",
-        type=str,
-        choices=["sentencepiece", "tiktoken", "char", "custom", "replace", "lines"],
-        default="tiktoken",
-        help="Tokenization method",
-    )
-
-    # Sentence Piece only arguments
-    parser.add_argument(
-        "--vocab_size",
-        type=int,
-        default=500,
-        help="Vocabulary size for SentencePiece model",
-    )
-    parser.add_argument(
-        "--spm_model_file",
-        type=str,
-        default=None,
-        help="Path to the pre-trained SentencePiece model file",
-    )
-    parser.add_argument(
-        "--spm_vocab_file",
-        type=str,
-        default=None,
-        help="Path to the SentencePiece vocabulary file (not always needed but can be used for additional functionality)",
-    )
-    parser.add_argument(
-        "--skip_tokenization",
-        action="store_true",
-        help="Skip creation of .bin files",
-    )
-
-    # Tiktoken only argument
-    parser.add_argument(
-        "-e",
-        "--tiktoken_encoding",
-        choices=["gpt2", "r50k_base", "p50k_base", "cl100k_base"],
-        default="gpt2",
-        help="version of tiktoken encoding to utilize, which effects performance and vocab size, e.g. cl100k_base is better for coding than gpt2.",
-    )
-
-    # Char only arguments
-    parser.add_argument(
-        "--reuse_chars",
-        action="store_true",
-        help="reuse character list",
-    )
-
-    # Customize output names for bins
-    parser.add_argument(
-        "--train_output",
-        type=str,
-        default="train.bin",
-        help="Output file for tokenized training data",
-    )
-    parser.add_argument(
-        "--val_output",
-        type=str,
-        default="val.bin",
-        help="Output file for tokenized validation data",
-    )
-
-    # Options for using separate training and validation input files
-    parser.add_argument(
-        "-s",
-        "--use_separate_files",
-        action="store_true",
-        help="Use separate files for training and validation input",
-    )
-    parser.add_argument(
-        "-t", "--train_input", type=str, help="Path to the training input text file"
-    )
-    parser.add_argument(
-        "-v", "--val_input", type=str, help="Path to the validation input text file"
-    )
-
-    parser.add_argument(
-        "-p", "--percentage_train", type=float, default=0.9, help="value between 0 and 1.0 for train percentage split"
-    )
-    parser.add_argument(
-        "--numeric_range",
-        action="store_true",
-        help="Use numeric range tokenization method",
-    )
-    parser.add_argument(
-        "--min_token",
-        type=int,
-        default=0,
-        help="Minimum value for numeric tokens",
-    )
-    parser.add_argument(
-        "--max_token",
-        type=int,
-        default=65535,
-        help="Maximum value for numeric tokens",
-    )
-
-    args = parser.parse_args()
-
-    # Initialize train_ids, which are used for binarization
-    train_ids = None
-
-    if args.use_separate_files:
-        if not args.train_input or not args.val_input:
-            raise ValueError(
-                "Both --train_input and --val_input must be provided when using --use_separate_files."
-            )
-        input_files = [args.train_input, args.val_input]
+    args = parse_arguments()
+    output_dir = None
+    if args.output_tokenization_subdir:
+        if args.method == "json_byte_fallback" and args.json_tokens_file:
+            output_dir = os.path.splitext(os.path.basename(args.json_tokens_file))[0]
+        elif args.method == "sentencepiece":
+            output_dir = f"sp_{args.vocab_size}"
+        elif args.method == "huggingface" and args.hf_tokenizer_name:
+            sanitized = args.hf_tokenizer_name.replace("/", "_").replace(os.sep, "_")
+            output_dir = f"hf_{sanitized}"
+        else:
+            output_dir = args.method
+        if args.output_subdir_suffix:
+            output_dir = f"{output_dir}_{args.output_subdir_suffix}"
+    if output_dir:
+        args.meta_output_path = os.path.join(output_dir, "meta.pkl")
+        args.train_output = os.path.join(output_dir, os.path.basename(args.train_output))
+        if args.val_output:
+            args.val_output = os.path.join(output_dir, os.path.basename(args.val_output))
     else:
-        if not args.train_input:
-            raise ValueError(
-                "You must provide --train_input when not using --use_separate_files."
-            )
-        input_files = args.train_input
+        args.meta_output_path = "meta.pkl"
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
 
-    # Read data
-    if args.use_separate_files:
-        with open(args.train_input, "r") as f:
-            train_data = f.read()
-        with open(args.val_input, "r") as f:
-            val_data = f.read()
+    # Load training/validation data depending on tokenizer method
+    if args.method in {"sinewave", "whisper_mel_csv"}:
+        train_data = None
+        val_data = None
     else:
-        with open(args.train_input, "r") as f:
-            data = f.read()
-        n = len(data)
-        if args.percentage_train == 1.0:
-            train_data = data
-            val_data = None
+        train_data = _read_input_data(args.train_input)
+
+        if args.val_input:
+            val_data = _read_input_data(args.val_input)
         else:
-            train_data = data[: int(n * args.percentage_train)]
-            val_data = data[int(n * args.percentage_train) :]
+            n = len(train_data)
+            train_data, val_data = train_data[:int(n * args.percentage_train)], train_data[int(n * args.percentage_train):]
+            if args.percentage_train == 1.0:
+                val_data = None
 
-
-    if args.numeric_range:
-        # Perform numeric range tokenization
-        train_ids, stoi, itos, train_encountered = tokenize_numeric_range(train_data, args.min_token, args.max_token)
-        if val_data is not None:
-            val_ids, _, _, val_encountered = tokenize_numeric_range(val_data, args.min_token, args.max_token)
-            encountered_tokens = train_encountered.union(val_encountered)
-        else:
-            encountered_tokens = train_encountered
-
-        vocab_size = len(stoi)
-        print(f"Vocab size: {vocab_size}")
-        print(f"Number of unique tokens encountered in data: {len(encountered_tokens)}")
-
-        # Create meta information
-        meta = {
-            "vocab_size": vocab_size,
-            "tokenizer": "numeric_range",
-            "min_token": args.min_token,
-            "max_token": args.max_token,
-            "stoi": stoi,
-            "itos": itos,
-            "encountered_tokens": sorted(encountered_tokens, reverse=True)
-        }
-
-        # Save meta information
-        with open("meta.pkl", "wb") as f:
-            pickle.dump(meta, f)
-
-    elif args.method == "sentencepiece":
-        if args.spm_model_file and args.spm_vocab_file:
-            # Load pre-trained SentencePiece model
-            sp = spm.SentencePieceProcessor()
-            sp.load(args.spm_model_file)
-        else:
-            # Train SentencePiece
-            spm_model_prefix = "trained_spm_model"
-            train_sentencepiece_model(input_files, spm_model_prefix, args.vocab_size)
-            sp = spm.SentencePieceProcessor()
-            sp.load(f"{spm_model_prefix}.model")
-            if args.skip_tokenization:
-                print("SentencePiece model training complete. Skipping tokenization and .bin file creation.")
-                return
-
-        # Perform Tokenization with SentencePiece
-        train_ids = tokenize_sentencepiece(sp, train_data)
-        if val_data != None:
-            val_ids = tokenize_sentencepiece(sp, val_data)
-
-        # Create stoi (string-to-index) and itos (index-to-string) mappings
-        stoi = {sp.id_to_piece(id): id for id in range(sp.GetPieceSize())}
-        itos = {id: sp.id_to_piece(id) for id in range(sp.GetPieceSize())}
-
-        # Manually add newline character to vocab
-        if "\n" not in stoi:
-            stoi["\n"] = sp.PieceToId("\n")
-
-        # Save metadata including stoi and itos in a pickle file
-        meta = {
-                "vocab_size": sp.GetPieceSize(),
-                "tokenizer": "sentencepiece",
-                "stoi": stoi,
-                "itos": itos,
-                }
-        with open(os.path.join(os.path.dirname(__file__), "meta.pkl"), "wb") as f:
-            pickle.dump(meta, f)
-
+    # Initialize tokenizer based on method
+    if args.method == "sentencepiece":
+        tokenizer = SentencePieceTokenizer(args, input_files=args.train_input)
     elif args.method == "tiktoken":
-        # Use TikToken
-        enc = tiktoken.get_encoding(args.tiktoken_encoding)
-        train_ids = tokenize_tiktoken(enc, train_data)
-        if val_data != None:
-            val_ids = tokenize_tiktoken(enc, val_data)
-
-        vocab_size = enc.n_vocab
-        print("vocab size", vocab_size)
-
-        # Create meta information
-        meta = {
-                "vocab_size": vocab_size,
-                "tokenizer": "tiktoken",
-                "tiktoken_encoding" : args.tiktoken_encoding,
-                }
-
-        # Save meta information
-        with open("meta.pkl", "wb") as f:
-            pickle.dump(meta, f)
-
-
-    elif args.method == "replace":
-        if args.tokens_file is None:
-            raise ValueError("Tokens file must be provided for custom tokenization method.")
-        with open(args.tokens_file, "r") as f:
-            tokens = [line.strip() for line in f.readlines() if line.strip()]
-            tokens = [token.replace("\\n", "\n").replace("\\t", "\t") for token in tokens]
-        train_ids, train_coverage, stoi, itos, remaining_train = tokenize_custom_tokens_and_replace(train_data, tokens)
-        print(f"Training data coverage by tokens: {train_coverage*100:.2f}%")
-        if val_data != None:
-            val_ids, val_coverage, _, _, remaining_val = tokenize_custom_tokens_and_replace(val_data, tokens)
-            print(f"Validation data coverage by tokens: {val_coverage*100:.2f}%")
-
-        # Write the remaining data (with tokens replaced by underscores) to remaining.txt
-        with open("remaining.txt", "w") as f:
-            f.write(remaining_train + "\n" + remaining_val)
-
-        meta = {"vocab_size": len(tokens), "stoi": stoi, "itos": itos}
-        with open("meta.pkl", "wb") as f:
-            pickle.dump(meta, f)
-
+        tokenizer = TiktokenTokenizer(args)
+    elif args.method == "huggingface":
+        tokenizer = HuggingFaceTokenizer(args)
     elif args.method == "custom":
-        if args.tokens_file is None:
-            raise ValueError("Tokens file must be provided for custom tokenization method.")
-        with open(args.tokens_file, "r") as f:
-            tokens = [line.strip() for line in f.readlines() if line.strip()]
-            tokens = [token.replace("\\n", "\n").replace("\\t", "\t").replace("' '", " ") for token in tokens]
-
-        train_ids, train_coverage, stoi, itos = tokenize_custom_tokens(train_data, tokens)
-        print(f"Training data coverage by tokens: {train_coverage*100:.2f}%")
-        if val_data != None:
-            val_ids, val_coverage, _, _ = tokenize_custom_tokens(val_data, tokens)
-            print(f"Validation data coverage by tokens: {val_coverage*100:.2f}%")
-
-        # Save metadata including stoi and itos in a pickle file
-        meta = {"vocab_size": len(tokens), "stoi": stoi, "itos": itos}
-        with open("meta.pkl", "wb") as f:
-            pickle.dump(meta, f)
-
+        tokenizer = CustomTokenizer(args)
+    elif args.method == "byte":
+        tokenizer = ByteTokenizer(args)
     elif args.method == "char":
-        if args.reuse_chars:
-            chars = get_key_from_meta('chars')
-            train_ids, stoi, itos = encode_char_level(train_data, chars)
-            if val_data != None:
-                val_ids, _, _ = encode_char_level(val_data, chars)
+        tokenizer = CharTokenizer(args, train_data, val_data)
+    elif args.method == "char_bpe":
+        tokenizer = CharBPETokenizerWithByteFallback(args, train_data, val_data)
+    elif args.method == "custom_char_byte_fallback":
+        tokenizer = CustomCharTokenizerWithByteFallback(args)
+    elif args.method == "json_byte_fallback":
+        tokenizer = JsonByteTokenizerWithByteFallback(args)
+    elif args.method == "python_programming":
+        tokenizer = PythonProgrammingTokenizer(args)
+    elif args.method == "sinewave":
+        tokenizer = SineWaveTokenizer(args)
+    elif args.method == "whisper_mel_csv":
+        tokenizer = WhisperMelCsvTokenizer(args)
+    else:
+        raise ValueError(f"Unknown tokenization method: {args.method}")
+
+    # Tokenize data
+    if args.method == "whisper_mel_csv":
+        train_ids = tokenizer.tokenize(args.train_input)
+    else:
+        train_ids = tokenizer.tokenize(train_data)
+    if args.method in ("tiktoken", "huggingface"):
+        print(f"[{args.method}] Total train tokens: {tokenizer.last_token_count:,}")
+    if args.method == "whisper_mel_csv" and args.val_input is None:
+        split_point = int(len(train_ids) * args.percentage_train)
+        val_ids = train_ids[split_point:]
+        train_ids = train_ids[:split_point]
+    elif args.method == "sinewave" and args.val_input is None:
+        split_point = int(len(train_ids) * args.percentage_train)
+        val_ids = train_ids[split_point:]
+        train_ids = train_ids[:split_point]
+    elif val_data is not None:
+        if args.method == "whisper_mel_csv":
+            val_ids = tokenizer.tokenize(args.val_input)
         else:
-            # Print the total length of the dataset in characters
-            total_len = len(train_data) + len(val_data)
-            print(f"Length of dataset in characters: {total_len:,}")
-            # Character-level tokenization
-            chars = sorted(
-                list(set(train_data + val_data))
-            )  # Get unique characters in train data
-            vocab_size = len(chars)
-            print("All unique characters:", "".join(chars))
-            print(f"Vocab size: {vocab_size}")
+            val_ids = tokenizer.tokenize(val_data)
+        if args.method in ("tiktoken", "huggingface"):
+            print(f"[{args.method}] Total val tokens: {tokenizer.last_token_count:,}")
+    else:
+        val_ids = None
 
-            train_ids, stoi, itos = encode_char_level(train_data, chars)
-            if val_data != None:
-                val_ids, _, _ = encode_char_level(val_data, chars)
+    # Determine dtype based on vocabulary size from meta.pkl
+    if args.method == "whisper_mel_csv":
+        dtype = None
+    elif args.method == "sinewave":
+        dtype = np.uint16
+    else:
+        with open(args.meta_output_path, "rb") as f:
+            meta = pickle.load(f)
+        vocab_size = meta["vocab_size"]
+        dtype = np.uint32 if vocab_size > 65535 else np.uint16
 
-            # Save the meta information
-            meta = {"vocab_size": vocab_size, "itos": itos, "stoi": stoi, "chars": chars}
-            with open(os.path.join(os.path.dirname(__file__), "meta.pkl"), "wb") as f:
-                pickle.dump(meta, f)
+    # Ensure output directories exist if paths include folders
+    for output_path in [args.train_output, args.val_output, args.meta_output_path]:
+        if output_path:
+            out_dir = os.path.dirname(output_path)
+            if out_dir and not os.path.exists(out_dir):
+                os.makedirs(out_dir, exist_ok=True)
 
-        if args.skip_tokenization:
-            print("Char method skipping tokenization and .bin file creation.")
-            return
+    # Save tokenized data
+    if args.method == "whisper_mel_csv":
+        save_mel_csv(train_ids, args.train_output, args.mel_csv_float_format)
+        if val_ids is not None:
+            save_mel_csv(val_ids, args.val_output, args.mel_csv_float_format)
+    else:
+        save_tokens(train_ids, args.train_output, dtype)
+        if val_ids is not None:
+            save_tokens(val_ids, args.val_output, dtype)
 
-    elif args.method == "lines":
-        if args.tokens_file is None:
-            raise ValueError("Tokens file must be provided for line tokenization method.")
-        tokens = tokenize_lines_from_file(args.tokens_file)
-        print(f"Unique sorted tokens from lines: {tokens}")
-
-        # Create mappings
-        stoi = {token: i for i, token in enumerate(tokens)}
-        itos = {i: token for i, token in enumerate(tokens)}
-
-        # Tokenize train and validation data
-        train_ids = [stoi[line.strip()] for line in train_data.splitlines() if line.strip()]
-        if val_data is not None:
-            val_ids = [stoi[line.strip()] for line in val_data.splitlines() if line.strip()]
-
-        # Save metadata including stoi and itos in a pickle file
-        meta = {"vocab_size": len(tokens), "stoi": stoi, "itos": itos}
+    if args.method == "sinewave":
+        meta = {
+            "tokenizer": "sinewave",
+            "vocab_size": 256,
+            "sine_period": args.sine_period,
+            "sine_points_per_period": args.sine_points_per_period,
+            "sine_num_periods": args.sine_num_periods,
+            "sine_amplitude": args.sine_amplitude,
+        }
+        with open(args.meta_output_path, "wb") as f:
+            pickle.dump(meta, f)
+    elif args.method == "whisper_mel_csv":
+        meta = {
+            "tokenizer": "whisper_mel_csv",
+            "sample_rate": args.mel_sample_rate,
+            "n_fft": args.mel_n_fft,
+            "hop_length": args.mel_hop_length,
+            "win_length": args.mel_win_length,
+            "n_mels": args.mel_n_mels,
+            "f_min": args.mel_f_min,
+            "f_max": args.mel_f_max,
+            "center": args.mel_center,
+            "power": args.mel_power,
+            "normalize": args.mel_normalize,
+        }
         with open("meta.pkl", "wb") as f:
             pickle.dump(meta, f)
 
-    # Print token counts and export to bin files
-    if train_ids is None:
-        sys.exit(f"train_ids none, exiting with error")
-
-    print(f"train has {len(train_ids):,} tokens")
-    if val_data is not None:
-        print(f"val has {len(val_ids):,} tokens")
-    if (args.tiktoken_encoding == "cl100k_base" and args.method == "tiktoken") or (args.numeric_range and args.max_token > 65535):
-        dtype = np.uint32
-    else:
-        dtype = np.uint16
-
-    np.array(train_ids, dtype=dtype).tofile(args.train_output)
-    if val_data is not None:
-        np.array(val_ids, dtype=dtype).tofile(args.val_output)
+    # Save additional metadata for tiktoken if needed
+    if args.method == "tiktoken" and args.additional_tokens_file:
+        with open(args.additional_tokens_file, 'r') as f:
+            additional_tokens = json.load(f)
+        with open(args.meta_output_path, "rb") as f:
+            meta = pickle.load(f)
+        meta.update({
+            "has_additional_tokens": True,
+            "special_tokens": additional_tokens,
+            "tokenizer": "tiktoken",
+            "tiktoken_encoding": args.tiktoken_encoding
+        })
+        with open(args.meta_output_path, "wb") as f:
+            pickle.dump(meta, f)
 
 if __name__ == "__main__":
     main()
-

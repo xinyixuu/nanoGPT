@@ -1,0 +1,29 @@
+# qk_norm.yaml
+---
+# parameter_groups: define sets of overrides to apply on top of base params
+parameter_groups:
+  - use_rotary_embeddings: [true]
+    use_abs_pos_embeddings: [true]
+  - use_rotary_embeddings: [false]
+    use_abs_pos_embeddings: [true]
+  - use_rotary_embeddings: [true]
+    use_abs_pos_embeddings: [false]
+
+# base hyperparameters
+max_iters: [5000]
+n_layer: [6]
+n_head: [6]
+n_embd: [384]
+block_size: [256]
+device: ["cuda"]
+dtype: ["float16"]
+dataset: ["shakespeare_char"]
+
+use_qk_norm: [true, false]
+use_qk_norm_scale: [true, false]
+
+softmax_variant_attn:
+  - softmax
+  - strongermax
+
+compile: [true]

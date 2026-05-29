@@ -2,9 +2,9 @@
   {
     "max_iters": ["100"],
     "n_layer": ["3"],
-    "n_head": ["6"],
-    "n_kv_group": ["6"],
-    "n_embd": ["384"],
+    "n_head": ["2"],
+    "n_kv_group": ["2"],
+    "n_embd": ["32"],
     "block_size":["16","32"],
     "shared_mlp_size": ["3"],
     "shared_mlp_sym": [true],
