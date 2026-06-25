@@ -11,6 +11,7 @@ import sys
 import time
 from collections import deque
 from datetime import datetime, timedelta
+from typing import Any
 
 from rich.console import Group
 from rich.console import Console
@@ -27,7 +28,13 @@ from train_variations.loss_variants import build_loss_function
 from train_variations.distillation_loss_variants import build_distillation_loss
 
 from utils.gpu_monitoring import get_gpu_memory_info, get_process_gpu_memory_bytes
+from utils.progress_bar import format_progress_metrics
 from torch.cuda import reset_peak_memory_stats, max_memory_allocated, max_memory_reserved
+
+try:
+    from zeus.monitor import ZeusMonitor
+except ImportError:
+    ZeusMonitor = None
 
 from utils.model_info import (
     print_summary,
@@ -103,6 +110,14 @@ class Trainer:
         self.peak_torch_allocated = 0.0
         self.peak_torch_reserved = 0.0
         self.peak_process_gpu_usage = 0.0
+        self.zeus_monitor = None
+        self.zeus_enabled = False
+        self.zeus_total_energy_j = 0.0
+        self.zeus_total_time_s = 0.0
+        self.zeus_train_step_energy_j = 0.0
+        self.zeus_train_energy_j_total = 0.0
+        self.zeus_best_train_step_energy_j = 0.0
+        self.zeus_last_step_energy_j = 0.0
         self.total_training_time_ms: float = 0.0   # total run-time from start of training
         self.time_remaining_ms: float= 0.0
         self.total_time_est_ms: float= 0.0
@@ -260,7 +275,30 @@ class Trainer:
 
         self.device_type = 'cuda' if 'cuda' in self.args.device else 'cpu'
         if self.device_type == 'cuda':
+            if not self.ddp:
+                torch.cuda.set_device(self.device)
             reset_peak_memory_stats(self.device)
+
+        if self.args.zeus_log:
+            if self.device_type != 'cuda':
+                raise ValueError("Zeus energy logging requires a CUDA device.")
+            if ZeusMonitor is None:
+                raise ImportError(
+                    "Zeus is not installed. Install it with `pip install zeus` "
+                    "or rerun with `--no-zeus_log`."
+                )
+            if self.ddp:
+                gpu_indices = [self.ddp_local_rank]
+            else:
+                gpu_indices = [torch.device(self.device).index or torch.cuda.current_device()]
+            self.zeus_monitor = ZeusMonitor(
+                gpu_indices=gpu_indices,
+                cpu_indices=[],
+                approx_instant_energy=self.args.zeus_approx_instant_energy,
+                log_file=self.args.zeus_log_file,
+                sync_execution_with="torch",
+            )
+            self.zeus_enabled = True
 
         self.ptdtype = {"bfloat16" : torch.bfloat16, "float16" : torch.float16, "float32" : torch.float32}[self.args.dtype]
         self.ctx = nullcontext() if self.device_type == 'cpu' else torch.amp.autocast(device_type=self.device_type, dtype=self.ptdtype)
@@ -528,9 +566,23 @@ class Trainer:
 
         if optimizer_key == "muon":
             named = list(self.model.named_parameters())
-            exclude = ("embed", "wte", "wpe", "lm_head")
-            hidden = [p for n, p in named if p.ndim >= 2 and all(e not in n for e in exclude)]
-            other = [p for n, p in named if not (p.ndim >= 2 and all(e not in n for e in exclude))]
+            exclude = tuple(self.args.muon_exclude_substrings)
+            force_include = tuple(self.args.muon_force_include_substrings)
+            muon_min_ndim = self.args.muon_min_ndim
+
+            def _use_muon_for_param(name, param):
+                if self.args.muon_include_all_weights:
+                    return True
+                if force_include and any(token in name for token in force_include):
+                    return True
+                if param.ndim < muon_min_ndim:
+                    return False
+                if exclude and any(token in name for token in exclude):
+                    return False
+                return True
+
+            hidden = [p for n, p in named if _use_muon_for_param(n, p)]
+            other = [p for n, p in named if not _use_muon_for_param(n, p)]
             param_groups = [
                 {"params": other, "use_muon": False},
                 {"params": hidden, "use_muon": True},
@@ -719,6 +771,16 @@ class Trainer:
             print(f"Error running dataset benchmarks: {e}")
 
     def load_data(self):
+        def _dataset_bin_dtype(dataset_name):
+            meta_path = os.path.join('data', dataset_name, 'meta.pkl')
+            if not os.path.exists(meta_path):
+                sys.exit(f"Error: Meta file not found at {meta_path}")
+            with open(meta_path, 'rb') as f:
+                meta = pickle.load(f)
+            vocab_size = meta.get('vocab_size', None)
+            if vocab_size is None:
+                sys.exit(f"Error: 'vocab_size' key not found in {meta_path}")
+            return (np.uint32 if int(vocab_size) > np.iinfo(np.uint16).max else np.uint16), int(vocab_size)
 
         if self.args.training_mode == 'multicontext':
             # Expecting --multicontext_datasets to be provided.
@@ -727,17 +789,11 @@ class Trainer:
             self.train_data_dict = {}
             self.val_data_dict = {}
             for dataset in self.args.multicontext_datasets:
-                meta_path = os.path.join('data', dataset, 'meta.pkl')
-                if not os.path.exists(meta_path):
-                    sys.exit(f"Error: Meta file not found at {meta_path}")
-                with open(meta_path, 'rb') as f:
-                    meta = pickle.load(f)
-                    vocab_size = meta.get('vocab_size', None)
-                    print(vocab_size, dataset)
-                    self.vocab_sizes[dataset] = meta['vocab_size']
-                # Here we use np.uint16 for most datasets:
-                self.train_data_dict[dataset] = np.memmap(os.path.join('data', dataset, 'train.bin'), dtype=np.uint16, mode='r')
-                self.val_data_dict[dataset]   = np.memmap(os.path.join('data', dataset, 'val.bin'), dtype=np.uint16, mode='r')
+                dtype, vocab_size = _dataset_bin_dtype(dataset)
+                print(vocab_size, dataset)
+                self.vocab_sizes[dataset] = vocab_size
+                self.train_data_dict[dataset] = np.memmap(os.path.join('data', dataset, 'train.bin'), dtype=dtype, mode='r')
+                self.val_data_dict[dataset] = np.memmap(os.path.join('data', dataset, 'val.bin'), dtype=dtype, mode='r')
 
             # Also store total token counts per dataset.
             self.dataset_size_tokens = {d: len(self.train_data_dict[d]) for d in self.args.multicontext_datasets}
@@ -758,18 +814,10 @@ class Trainer:
             for dataset in self.args.dataset_list:
                 train_data = None
                 val_data = None
-                meta_path = os.path.join('data', dataset, 'meta.pkl')
-                if not os.path.exists(meta_path):
-                    sys.exit(f"Error: Meta file not found at {meta_path}")
-
-                with open(meta_path, 'rb') as f:
-                    meta = pickle.load(f)
-                    vocab_size = meta.get('vocab_size', None)
-                    if vocab_size:
-                        self.vocab_sizes.append(vocab_size)
+                dtype, vocab_size = _dataset_bin_dtype(dataset)
+                self.vocab_sizes.append(vocab_size)
 
                 # Load train and val data for each dataset
-                dtype = np.uint16 if vocab_size != 100277 else np.uint32
                 train_data = np.memmap(os.path.join('data', dataset, 'train.bin'), dtype=dtype, mode='r')
                 val_data = np.memmap(os.path.join('data', dataset, 'val.bin'), dtype=dtype, mode='r')
 
@@ -786,17 +834,11 @@ class Trainer:
             else:
                 self.model_args['vocab_size'] = max(self.vocab_sizes)
         else:
-
             if self.model_args['vocab_size'] is None:
                 sys.exit("Error: no vocab size specified")
-            elif self.model_args['vocab_size'] == 100277:
-                # cl100k_base, vocab size 100277, requires np.uint32
-                self.train_data = np.memmap(os.path.join('data', self.args.dataset, 'train.bin'), dtype=np.uint32, mode='r')
-                self.val_data = np.memmap(os.path.join('data', self.args.dataset, 'val.bin'), dtype=np.uint32, mode='r')
-            else:
-                # all other tokenations so far require only np.uint16
-                self.train_data = np.memmap(os.path.join('data', self.args.dataset, 'train.bin'), dtype=np.uint16, mode='r')
-                self.val_data = np.memmap(os.path.join('data', self.args.dataset, 'val.bin'), dtype=np.uint16, mode='r')
+            dtype = np.uint32 if int(self.model_args['vocab_size']) > np.iinfo(np.uint16).max else np.uint16
+            self.train_data = np.memmap(os.path.join('data', self.args.dataset, 'train.bin'), dtype=dtype, mode='r')
+            self.val_data = np.memmap(os.path.join('data', self.args.dataset, 'val.bin'), dtype=dtype, mode='r')
             # Store total token count for the single dataset.
             self.dataset_size_tokens = len(self.train_data)
 
@@ -1366,6 +1408,15 @@ class Trainer:
                 f"{target_dataset}/bit_loss_penalty_tokens", penalty_term, tokens_trained
             )
 
+    def _safe_better_than_chance(self, vocab_size: float, loss_value: float) -> float:
+        """Return vocab_size / exp(loss) without raising overflow for huge losses."""
+        if not math.isfinite(loss_value):
+            return 0.0
+        # math.exp overflows around 709 on float64; beyond that the ratio is effectively 0.
+        if loss_value >= 709.0:
+            return 0.0
+        return vocab_size / math.exp(loss_value)
+
     def log_metrics(self, losses, running_mfu, epoch, tokens_trained, target_dataset, val_better_than_chance):
         compute_rankme = self.args.log_rankme or self.args.log_areq
 
@@ -1464,6 +1515,7 @@ class Trainer:
                 self.writer.add_scalar(f"{target_dataset}/gns_iters", self.gns, self.iter_num)
                 self.writer.add_scalar(f"{target_dataset}/gns_tokens", self.gns, tokens_trained)
 
+            self._log_zeus_tensorboard(target_dataset, tokens_trained)
             self._log_bit_metrics(target_dataset, tokens_trained)
 
 
@@ -1564,6 +1616,7 @@ class Trainer:
                 self.writer.add_scalar(f"{target_dataset}/gns_iters", self.gns, self.iter_num)
                 self.writer.add_scalar(f"{target_dataset}/gns_tokens", self.gns, tokens_trained)
 
+            self._log_zeus_tensorboard(target_dataset, tokens_trained)
             self._log_bit_metrics(target_dataset, tokens_trained)
 
     def write_to_csv(self, *args, prefix=""):
@@ -1601,7 +1654,49 @@ class Trainer:
             if self.args.gns_type is not None:
                 args.append(self.gns)
             args.append(self.iter_latency_avg)
+            if self.zeus_enabled:
+                args.append(self.zeus_train_energy_j_total)
+                args.append(self.zeus_last_step_energy_j)
             writer.writerow(args)
+
+    def _write_zeus_summary(self):
+        if not self.zeus_enabled or not self.master_process:
+            return
+        total_tokens = self.tokens_trained if self.tokens_trained else self.best_tokens
+        summary = {
+            "dataset": self.args.dataset,
+            "iter_num": self.iter_num,
+            "best_iter": self.best_iter,
+            "best_tokens": self.best_tokens,
+            "num_params": int(self.model.num_param),
+            "peak_torch_allocated_mb": self.peak_torch_allocated / (1024 ** 2),
+            "peak_torch_reserved_mb": self.peak_torch_reserved / (1024 ** 2),
+            "peak_process_gpu_mb": self.peak_process_gpu_usage / (1024 ** 2),
+            "iter_latency_avg_ms": self.iter_latency_avg,
+            "zeus_total_energy_j": self.zeus_total_energy_j,
+            "zeus_total_time_s": self.zeus_total_time_s,
+            "zeus_avg_power_w": (
+                self.zeus_total_energy_j / self.zeus_total_time_s
+                if self.zeus_total_time_s > 0
+                else 0.0
+            ),
+            "zeus_train_step_energy_j": self.zeus_train_step_energy_j,
+            "zeus_train_energy_j_total": self.zeus_train_energy_j_total,
+            "zeus_best_train_step_energy_j": self.zeus_best_train_step_energy_j,
+            "zeus_energy_per_token_j": (
+                self.zeus_total_energy_j / total_tokens
+                if total_tokens > 0
+                else 0.0
+            ),
+            "zeus_energy_train_per_token_j": (
+                self.zeus_train_energy_j_total / total_tokens
+                if total_tokens > 0
+                else 0.0
+            ),
+        }
+        summary_path = os.path.join(self.args.out_dir, "zeus_summary.json")
+        with open(summary_path, "w", encoding="utf-8") as summary_file:
+            json.dump(summary, summary_file, indent=2, sort_keys=True)
 
 
     def log_gamma_beta(self, gamma, beta, layer_num, head_num=None):
@@ -1669,6 +1764,31 @@ class Trainer:
             return value.item()
         return float(value)
 
+    def _log_zeus_tensorboard(self, target_dataset: str, tokens_trained: float) -> None:
+        if not self.zeus_enabled or not self.args.tensorboard_log:
+            return
+        self.writer.add_scalar(
+            f"{target_dataset}/zeus_train_step_energy_j",
+            self.zeus_train_step_energy_j,
+            self.iter_num,
+        )
+        self.writer.add_scalar(
+            f"{target_dataset}/zeus_last_step_energy_j",
+            self.zeus_last_step_energy_j,
+            self.iter_num,
+        )
+        self.writer.add_scalar(
+            f"{target_dataset}/zeus_train_energy_j_total",
+            self.zeus_train_energy_j_total,
+            self.iter_num,
+        )
+        if tokens_trained > 0:
+            self.writer.add_scalar(
+                f"{target_dataset}/zeus_energy_train_per_token_j",
+                self.zeus_train_energy_j_total / tokens_trained,
+                self.iter_num,
+            )
+
     def underscore_abbr(self, dataset_name):
         """ Transforms long dataset name to abbreviation
         e.g.
@@ -1694,6 +1814,29 @@ class Trainer:
                 'config': vars(self.args),
                 }
         torch.save(checkpoint, os.path.join(self.args.out_dir, filename))
+
+
+    def get_progress_metrics(self) -> dict[str, Any]:
+        """Return raw values backing all Rich progress-bar task fields."""
+        return {
+            "best_iter": self.best_iter,
+            "best_val_loss": self.best_val_loss,
+            "best_tokens": self.best_tokens,
+            "eta": self.formatted_completion_eta,
+            "time_remaining_ms": self.time_remaining_ms,
+            "total_time_est_ms": self.total_time_est_ms,
+            "iter_latency_avg": self.iter_latency_avg,
+            "peak_torch_allocated": self.peak_torch_allocated,
+            "latest_top1_prob": self.latest_top1_prob,
+            "latest_top1_correct": self.latest_top1_correct,
+            "latest_target_rank": self.latest_target_rank,
+            "latest_target_prob": self.latest_target_prob,
+            "latest_target_left_prob": self.latest_target_left_prob,
+            "latest_rank_95": self.latest_rank_95,
+            "latest_left_prob_95": self.latest_left_prob_95,
+            "latest_ln_f_cosine": self.latest_ln_f_cosine,
+            "latest_ln_f_cosine_95": self.latest_ln_f_cosine_95,
+        }
 
     def run_validation_step(self, running_mfu, current_epoch, current_dataset, num_steps_with_worse_loss, live=None):
         losses = self.estimate_loss()
@@ -1733,7 +1876,7 @@ class Trainer:
         self.vram_allocated = get_gpu_memory_info(info_type='used') if self.args.device != "cpu" else 0
         if self.args.dataset_list is not None:
             for dataset, dataset_losses in losses['datasets'].items():
-                better_than_chance = self.model_args['vocab_size'] / math.exp(dataset_losses['val'].item())
+                better_than_chance = self._safe_better_than_chance(self.model_args['vocab_size'], dataset_losses['val'].item())
                 log_message=f"step {self.iter_num}: "
                 log_message+=f"{dataset:<20s}"
                 log_message+=f", {self.model.num_param}"
@@ -1762,10 +1905,10 @@ class Trainer:
                 log_message+=f", lr {self.lr:.4f}"
                 log_message+=f", tokens_trained {self.tokens_trained:.2e}"
                 self.console.print(log_message)
-                better_than_chance = self.vocab_sizes[dataset] / math.exp(dataset_losses['val'].item())
+                better_than_chance = self._safe_better_than_chance(self.vocab_sizes[dataset], dataset_losses['val'].item())
                 self.log_metrics(dataset_losses, running_mfu, current_epoch, self.tokens_trained, dataset, better_than_chance)
         else:
-            better_than_chance = self.model_args['vocab_size'] / math.exp(losses['val'].item())
+            better_than_chance = self._safe_better_than_chance(self.model_args['vocab_size'], losses['val'].item())
             log_message=f"step {self.iter_num}:"
             log_message+=f", {self.model.num_param}"
             log_message+=f", train loss {losses['train']:.4f}"
@@ -1798,11 +1941,13 @@ class Trainer:
                 self.best_val_loss = losses['val']
                 self.best_iter = self.iter_num
                 self.best_tokens = self.tokens_trained
+                if self.zeus_enabled:
+                    self.zeus_best_train_step_energy_j = self.zeus_last_step_energy_j
                 peak_torch_allocated_mb = self.peak_torch_allocated / (1024 ** 2)
                 peak_torch_reserved_mb = self.peak_torch_reserved / (1024 ** 2)
                 peak_process_gpu_mb = self.peak_process_gpu_usage / (1024 ** 2)
                 with open(os.path.join(self.args.out_dir, 'best_val_loss_and_iter.txt'), "w") as best_loss_file:
-                    chance_ratio = self.model_args['vocab_size']/math.exp(self.best_val_loss.item())
+                    chance_ratio = self._safe_better_than_chance(self.model_args['vocab_size'], self.best_val_loss.item())
                     metrics = [
                             f"{self.best_val_loss.item()}",
                             f"{self.iter_num}",
@@ -1814,6 +1959,7 @@ class Trainer:
                             f"{peak_torch_reserved_mb:.1f}",
                             f"{peak_process_gpu_mb:.1f}",
                             f"{self.iter_latency_avg:.1f}",
+                            f"{self.zeus_best_train_step_energy_j:.3f}" if self.zeus_enabled else "",
                             f"{self.latest_top1_prob:.6f}",
                             f"{self.latest_top1_correct:.6f}",
                             f"{self.latest_target_rank:.2f}",
@@ -1872,7 +2018,7 @@ class Trainer:
         log_message+= f", {self.model.num_param}"
         if self.args.multicontext_datasets:
             for i, mc_dataset in enumerate(self.args.multicontext_datasets):
-                self.mc_btc_train[mc_dataset] = self.vocab_sizes[mc_dataset] / math.exp(training_losses[i].item())
+                self.mc_btc_train[mc_dataset] = self._safe_better_than_chance(self.vocab_sizes[mc_dataset], training_losses[i].item())
                 log_message+= f", {self.underscore_abbr(mc_dataset)}"
                 if self.args.log_btc_train:
                     log_message+= f" btc {self.mc_btc_train[mc_dataset]:.4f}"
@@ -1880,7 +2026,7 @@ class Trainer:
                 log_message+= f" loss {training_losses[i].item():.4f}"
             better_than_chance = None
         else:
-            better_than_chance = self.model_args['vocab_size'] / math.exp(lossf)
+            better_than_chance = self._safe_better_than_chance(self.model_args['vocab_size'], lossf)
             log_message+= f", loss {lossf:.4f}"
             if self.args.log_btc_train:
                 log_message+=f", btc_train {better_than_chance:.2e}"
@@ -1975,27 +2121,11 @@ class Trainer:
             task_id = progress.add_task(
                     "[green]Training...",
                     total=((self.args.max_iters - self.iter_num) + self.evaluations_remaining * self.args.eval_iters),
-                    eta=self.formatted_completion_eta,
-                    total_hour=f"{int(self.total_time_est_ms // 3_600_000)}",
-                    total_min=f"{int((self.total_time_est_ms // 60_000) % 60):02d}",
-                    hour=f"{int((self.time_remaining_ms // (1000*3600)) % 24):02d}",
-                    min=f"{int((self.time_remaining_ms // 60000) % 60):02d}",
-                    best_val_loss=f"{self.best_val_loss:.3f}",
-                    best_iter=f"{self.best_iter}",
-                    best_tokens=f"{self.best_tokens}",
-                    iter_latency=f"{self.iter_latency_avg:.1f}",
-                    peak_gpu_mb=f"{self.peak_torch_allocated / (1024 ** 2):.1f}",
-                    t1p=f"{self.latest_top1_prob:.6f}",
-                    t1c=f"{self.latest_top1_correct:.6f}",
-                    tr=f"{self.latest_target_rank:.2f}",
-                    tp=f"{self.latest_target_prob:.6f}",
-                    tlp=f"{self.latest_target_left_prob:.6f}",
-                    r95=f"{self.latest_rank_95:.2f}",
-                    p95=f"{self.latest_left_prob_95:.6f}",
-                    lnf_cos=f"{self.latest_ln_f_cosine:.6f}",
-                    lnf_cos95=f"{self.latest_ln_f_cosine_95:.6f}",
+                    **format_progress_metrics(self.get_progress_metrics()),
                     )
 
+            if self.zeus_enabled:
+                self.zeus_monitor.begin_window("entire_training")
             while True:
                 if self.scheduler is not None:
                     self.lr = self.get_lr(self.iter_num)
@@ -2017,6 +2147,8 @@ class Trainer:
                 if self.args.eval_only:
                     break
 
+                if self.zeus_enabled:
+                    self.zeus_monitor.begin_window("train_step")
 
                 for micro_step in range(self.args.gradient_accumulation_steps):
                     if self.ddp:
@@ -2142,6 +2274,12 @@ class Trainer:
                 t0 = t1
                 self.total_training_time_ms = (t1 - t_start) * 1000.0
 
+                if self.zeus_enabled:
+                    zeus_step_measurement = self.zeus_monitor.end_window("train_step")
+                    self.zeus_last_step_energy_j = zeus_step_measurement.total_energy
+                    self.zeus_train_step_energy_j = self.zeus_last_step_energy_j
+                    self.zeus_train_energy_j_total += self.zeus_last_step_energy_j
+
                 # Estimate ETA
                 eta_update: ETAUpdate = self.eta.update(
                         iter_num=self.iter_num,
@@ -2179,25 +2317,7 @@ class Trainer:
                 progress.update(
                         task_id,
                         advance=progress_advance,
-                        eta=self.formatted_completion_eta,
-                        total_hour=f"{int(self.total_time_est_ms // 3_600_000)}",
-                        total_min=f"{int((self.total_time_est_ms // 60_000) % 60):02d}",
-                        hour=f"{int((self.time_remaining_ms // 3_600_000) % 24):02d}",
-                        min=f"{int((self.time_remaining_ms // 60_000) % 60):02d}",
-                        best_val_loss=f"{self.best_val_loss:.3f}",
-                        best_iter=f"{self.best_iter}",
-                        best_tokens=f"{self.best_tokens}",
-                        iter_latency=f"{self.iter_latency_avg:.1f}",
-                        peak_gpu_mb=f"{self.peak_torch_allocated / (1024 ** 2):.1f}",
-                        t1p=f"{self.latest_top1_prob:.6f}",
-                        t1c=f"{self.latest_top1_correct:.6f}",
-                        tr=f"{self.latest_target_rank:.2f}",
-                        tp=f"{self.latest_target_prob:.6f}",
-                        tlp=f"{self.latest_target_left_prob:.6f}",
-                        r95=f"{self.latest_rank_95:.2f}",
-                        p95=f"{self.latest_left_prob_95:.6f}",
-                        lnf_cos=f"{self.latest_ln_f_cosine:.6f}",
-                        lnf_cos95=f"{self.latest_ln_f_cosine_95:.6f}",
+                        **format_progress_metrics(self.get_progress_metrics()),
                         )
                 live.update(Group(progress.get_renderable(), cli_text))
 
@@ -2218,6 +2338,21 @@ class Trainer:
 
             if self.args.plot_statistics:
                 plot_statistics(self.args, self.stats, graph_y_labels)
+
+            if self.zeus_enabled:
+                zeus_total_measurement = self.zeus_monitor.end_window("entire_training")
+                self.zeus_total_energy_j = zeus_total_measurement.total_energy
+                self.zeus_total_time_s = zeus_total_measurement.time
+                if self.args.tensorboard_log:
+                    avg_power_w = (
+                        self.zeus_total_energy_j / self.zeus_total_time_s
+                        if self.zeus_total_time_s > 0
+                        else 0.0
+                    )
+                    self.writer.add_scalar("zeus/total_energy_j", self.zeus_total_energy_j, self.iter_num)
+                    self.writer.add_scalar("zeus/total_time_s", self.zeus_total_time_s, self.iter_num)
+                    self.writer.add_scalar("zeus/avg_power_w", avg_power_w, self.iter_num)
+                self._write_zeus_summary()
 
             if self.args.tensorboard_log:
                 self.writer.flush()

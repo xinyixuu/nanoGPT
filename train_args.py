@@ -289,10 +289,37 @@ def parse_args():
         ),
     )
     model_group.add_argument(
-        '--norm_channel_variant',
+        '--numerical_loss_huber_delta',
+        default=0.5,
+        type=float,
+        help="Delta parameter for numerical multicontext Huber loss.",
+    )
+    model_group.add_argument(
+        '--numerical_loss_use_cosine',
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="Enable cosine similarity term in numerical multicontext regression loss.",
+    )
+    model_group.add_argument(
+        '--numerical_loss_cosine_coeff',
+        default=0.5,
+        type=float,
+        help="Coefficient for cosine loss term when --numerical_loss_use_cosine is enabled.",
+    )
+    model_group.add_argument(
+        "--norm_channel_variant",
         type=str,
         default=None,
-        choices=['krmsnorm', 'prmsnorm', 'rmsnorm', 'layernorm', 'hyperspherenorm', 'dact', 'identity'],
+        choices=[
+            "krmsnorm",
+            "prmsnorm",
+            "rmsnorm",
+            "layernorm",
+            "hyperspherenorm",
+            "dact",
+            "cappedhyperspherenorm",
+            "identity",
+        ],
         help="Optional post-mapping normalization applied to numerical embedding channels.",
     )
     model_group.add_argument('--norm_channel_radius', type=float, default=None)
@@ -388,6 +415,18 @@ def parse_args():
     # --------  MUON --------------------------------------------------
     training_group.add_argument("--muon_momentum", type=float, default=0.95,
                                 help="Momentum for the Muon optimizer.")
+    training_group.add_argument("--muon_ns_steps", type=int, default=5,
+                                help="Newton-Schulz iteration steps for Muon orthogonalization.")
+    training_group.add_argument("--muon_nesterov", type=bool, default=True, action=argparse.BooleanOptionalAction,
+                                help="Use Nesterov momentum in Muon update.")
+    training_group.add_argument("--muon_include_all_weights", type=bool, default=False, action=argparse.BooleanOptionalAction,
+                                help="If enabled, route all parameters to Muon (instead of the default hidden-layer-only routing).")
+    training_group.add_argument("--muon_min_ndim", type=int, default=2,
+                                help="Minimum tensor ndim eligible for Muon routing (default preserves current behavior).")
+    training_group.add_argument("--muon_exclude_substrings", type=str, nargs="*", default=["embed", "wte", "wpe", "lm_head"],
+                                help="Parameter-name substrings excluded from Muon routing unless force-included.")
+    training_group.add_argument("--muon_force_include_substrings", type=str, nargs="*", default=[],
+                                help="Parameter-name substrings force-included into Muon routing, even if excluded.")
     # --------  ADAMW --------------------------------------------------
     training_group.add_argument("--adamw_betas", type=float, nargs=2, default=[0.9, 0.999], help="Betas for AdamW optimizer.")
     training_group.add_argument("--adamw_eps", type=float, default=1e-8, help="Epsilon for AdamW optimizer.")
@@ -749,6 +788,7 @@ def parse_args():
             "hyperspherenorm",
             "dact",
             "identity",
+            "cappedhyperspherenorm",
             ]
 
     model_group.add_argument("--norm_variant_attn", type=str, default="rmsnorm", choices=norm_variations)
@@ -758,6 +798,7 @@ def parse_args():
     ### WTE and Abs Pos Embedding Post Norms (optional, and default None)
     model_group.add_argument("--norm_variant_wte", type=str, default=None, choices=norm_variations)
     model_group.add_argument("--norm_variant_abs", type=str, default=None, choices=norm_variations)
+    model_group.add_argument("--norm_variant_lm_head", type=str, default=None, choices=norm_variations)
 
     model_group.add_argument("--norm_wte_radius", type=float, default=None)
     model_group.add_argument("--norm_wte_scale", type=float, default=None)
@@ -768,6 +809,11 @@ def parse_args():
     model_group.add_argument("--norm_abs_scale", type=float, default=None)
     model_group.add_argument("--norm_abs_gain", type=bool, default=None, action=argparse.BooleanOptionalAction)
     model_group.add_argument("--norm_abs_radius_learning", type=bool, default=None, action=argparse.BooleanOptionalAction)
+
+    model_group.add_argument("--norm_lm_head_radius", type=float, default=None)
+    model_group.add_argument("--norm_lm_head_scale", type=float, default=None)
+    model_group.add_argument("--norm_lm_head_gain", type=bool, default=None, action=argparse.BooleanOptionalAction)
+    model_group.add_argument("--norm_lm_head_radius_learning", type=bool, default=None, action=argparse.BooleanOptionalAction)
 
     ## Layernorm
     model_group.add_argument('--bias', default=False, action=argparse.BooleanOptionalAction, help="only used for layernorm variation option")
@@ -1146,6 +1192,26 @@ def parse_args():
     model_group.add_argument("--rope_variant", type=str, default="rope", choices=["rope", "soap"])
     model_group.add_argument("--rope_length", type=int, default=None, help="Defaults to all embeddings (if set to None), else must be even.")
     model_group.add_argument('--use_abs_pos_embeddings', default=True, action=argparse.BooleanOptionalAction)
+    model_group.add_argument(
+        "--absolute_pos_embedding_variant",
+        type=str,
+        default="learned",
+        choices=["learned", "cyclic"],
+        help="Absolute position embedding style: standard learned table or cyclic multi-table sum.",
+    )
+    model_group.add_argument(
+        "--cyclic_abs_pos_cycle_lengths",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Cycle lengths for cyclic absolute embeddings (e.g. --cyclic_abs_pos_cycle_lengths 2 3 5).",
+    )
+    model_group.add_argument(
+        "--cyclic_abs_pos_randomize_starts",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="If enabled, each cyclic embedding list starts from a random offset during training.",
+    )
     model_group.add_argument('--use_fire_embeddings', default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument('--shared_fire_embeddings', default=False, action=argparse.BooleanOptionalAction)
 
@@ -1157,6 +1223,36 @@ def parse_args():
         type=float,
         default=0.0,
         help="Scale for L2-normalized Gaussian noise added to token embeddings after lookup.",
+    )
+    model_group.add_argument(
+        "--embedding_gaussian_noise_start_iter",
+        type=int,
+        default=0,
+        help="Iteration where embedding Gaussian-noise scheduling begins.",
+    )
+    model_group.add_argument(
+        "--embedding_gaussian_noise_end_iter",
+        type=int,
+        default=None,
+        help="Iteration where embedding Gaussian-noise scheduling reaches its end magnitude.",
+    )
+    model_group.add_argument(
+        "--embedding_gaussian_noise_start_std",
+        type=float,
+        default=None,
+        help="Noise magnitude at --embedding_gaussian_noise_start_iter (defaults to --embedding_gaussian_noise_std).",
+    )
+    model_group.add_argument(
+        "--embedding_gaussian_noise_end_std",
+        type=float,
+        default=None,
+        help="Noise magnitude at --embedding_gaussian_noise_end_iter (defaults to --embedding_gaussian_noise_std).",
+    )
+    model_group.add_argument(
+        "--embedding_gaussian_noise_in_eval",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="Allow embedding Gaussian-noise injection during model.eval() (disabled by default).",
     )
 
     ## FIRE Options (Functional Interpolation for Relative Positional Encoding)
@@ -1188,8 +1284,8 @@ def parse_args():
         "squareplus",
         "softshrink",
         "gelumax",
-        "exppolymax",
         "pfla_softmax",
+        "ste_argmax_softmax",
         ]
 
     ## Selection of softmax variation for attention and output layers
@@ -1345,7 +1441,7 @@ def parse_args():
     training_group.add_argument('--gradient_accumulation_steps', default=1, type=int)
 
     # System args
-    training_group.add_argument('--device', default='cuda', type=str)
+    training_group.add_argument('--device', default='cuda:0', type=str)
     training_group.add_argument("--dtype", type=str, default="float16", choices=["bfloat16", "float16", "float32"], help="torch data type for inference, e.g. 'int8'")
     training_group.add_argument('--compile', default=False, action=argparse.BooleanOptionalAction)
 
@@ -1365,6 +1461,9 @@ def parse_args():
     logging_group.add_argument('--csv_log', default=True, action=argparse.BooleanOptionalAction)
     logging_group.add_argument('--csv_dir', default='csv_logs', type=str)
     logging_group.add_argument('--csv_name', default='output', type=str, help="Output csv basename. Note, the .csv will be automatically appended.")
+    logging_group.add_argument('--zeus_log', default=False, action=argparse.BooleanOptionalAction, help='Enable Zeus GPU energy logging during training')
+    logging_group.add_argument('--zeus_log_file', type=str, default=None, help='Optional Zeus monitor log file path')
+    logging_group.add_argument('--zeus_approx_instant_energy', default=True, action=argparse.BooleanOptionalAction, help='Use Zeus instant-power fallback for short measurement windows')
 
     # Tensorboard args
     logging_group.add_argument('--tensorboard_log', default=True, action=argparse.BooleanOptionalAction)

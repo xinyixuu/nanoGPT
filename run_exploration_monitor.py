@@ -191,6 +191,7 @@ class MonitorApp(App):
             "peak_torch_reserved_mb",
             "peak_process_gpu_mb",
             "iter_latency_avg",
+            "zeus_best_train_step_energy_j",
             "avg_top1_prob",
             "avg_top1_correct",
             "avg_target_rank",
@@ -202,6 +203,13 @@ class MonitorApp(App):
             "ln_f_cosine_95",
             "rankme",
             "areq",
+            "zeus_total_energy_j",
+            "zeus_total_time_s",
+            "zeus_avg_power_w",
+            "zeus_train_step_energy_j",
+            "zeus_energy_per_token_j",
+            "run_total_time_s",
+            "run_completed_at",
         ] + self.param_keys
         self.all_columns = base_cols.copy()
         self.columns = base_cols.copy()
@@ -209,6 +217,11 @@ class MonitorApp(App):
         if self.config_file.exists():
             cfg = json.loads(self.config_file.read_text())
             self.all_columns = cfg.get("all_columns", self.all_columns)
+            # Preserve saved ordering, but append any newly introduced columns
+            # (e.g., newly added metrics) so they become visible automatically.
+            for column in base_cols:
+                if column not in self.all_columns:
+                    self.all_columns.append(column)
             self.hidden_cols = set(cfg.get("hidden_cols", []))
             self.columns = [c for c in self.all_columns if c not in self.hidden_cols]
             self.sort_stack = [tuple(p) for p in cfg.get("sort_stack", [])]
@@ -289,27 +302,7 @@ class MonitorApp(App):
 
     def get_cell(self, entry: Dict, col_name: str):
         """Retrieve the value for a given column in an entry."""
-        if col_name in (
-            "best_val_loss",
-            "best_val_iter",
-            "best_val_tokens",
-            "num_params",
-            "peak_torch_allocated_mb",
-            "peak_torch_reserved_mb",
-            "peak_process_gpu_mb",
-            "iter_latency_avg",
-            "avg_top1_prob",
-            "avg_top1_correct",
-            "avg_target_rank",
-            "avg_target_left_prob",
-            "avg_target_prob",
-            "target_rank_95",
-            "left_prob_95",
-            "avg_ln_f_cosine",
-            "ln_f_cosine_95",
-            "rankme",
-            "areq",
-        ):
+        if col_name in entry:
             return entry.get(col_name)
         return entry.get("config", {}).get(col_name)
 

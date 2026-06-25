@@ -1,7 +1,8 @@
 import json
 import subprocess
+import time
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from itertools import product
 import argparse
 import os
@@ -16,6 +17,7 @@ from rich.table import Table
 LOG_DIR = Path("exploration_logs")
 LOG_DIR.mkdir(exist_ok=True)
 METRICS_FILENAME = "best_val_loss_and_iter.txt"
+ZEUS_SUMMARY_FILENAME = "zeus_summary.json"
 METRIC_KEYS = [
     "best_val_loss",
     "best_val_iter",
@@ -27,6 +29,7 @@ METRIC_KEYS = [
     "peak_torch_reserved_mb",
     "peak_process_gpu_mb",
     "iter_latency_avg",
+    "zeus_best_train_step_energy_j",
     "avg_top1_prob",
     "avg_top1_correct",
     "avg_target_rank",
@@ -38,6 +41,13 @@ METRIC_KEYS = [
     "ln_f_cosine_95",
     "rankme",
     "areq",
+    "zeus_total_energy_j",
+    "zeus_total_time_s",
+    "zeus_avg_power_w",
+    "zeus_train_step_energy_j",
+    "zeus_energy_per_token_j",
+    "run_total_time_s",
+    "run_completed_at",
 ]
 
 
@@ -552,6 +562,30 @@ def read_metrics(out_dir: str) -> dict:
     line = path.read_text().strip()
     parts = [p.strip() for p in line.split(',')]
 
+    base_metric_keys = [
+        "best_val_loss",
+        "best_val_iter",
+        "best_val_tokens",
+        "num_params",
+        "better_than_chance",
+        "btc_per_param",
+        "peak_torch_allocated_mb",
+        "peak_torch_reserved_mb",
+        "peak_process_gpu_mb",
+        "iter_latency_avg",
+        "zeus_best_train_step_energy_j",
+        "avg_top1_prob",
+        "avg_top1_correct",
+        "avg_target_rank",
+        "avg_target_left_prob",
+        "avg_target_prob",
+        "target_rank_95",
+        "left_prob_95",
+        "avg_ln_f_cosine",
+        "ln_f_cosine_95",
+        "rankme",
+        "areq",
+    ]
     casts = [
         float,
         int,
@@ -574,9 +608,38 @@ def read_metrics(out_dir: str) -> dict:
         float,
         float,
         float,
+        float,
     ]
 
-    return {k: typ(v) for k, typ, v in zip(METRIC_KEYS, casts, parts)}
+    if len(base_metric_keys) != len(casts):
+        raise ValueError(
+            f"Metric schema mismatch: {len(base_metric_keys)} keys vs {len(casts)} casts."
+        )
+    if len(parts) < len(base_metric_keys):
+        raise ValueError(
+            f"Expected at least {len(base_metric_keys)} metrics in {path}, got {len(parts)}."
+        )
+
+    metrics: dict[str, float] = {}
+    for key, typ, value in zip(base_metric_keys, casts, parts):
+        metrics[key] = float("nan") if value == "" else typ(value)
+
+    zeus_summary_path = Path(out_dir) / ZEUS_SUMMARY_FILENAME
+    if zeus_summary_path.exists():
+        summary = json.loads(zeus_summary_path.read_text())
+        metrics["zeus_total_energy_j"] = float(summary.get("zeus_total_energy_j", float("nan")))
+        metrics["zeus_total_time_s"] = float(summary.get("zeus_total_time_s", float("nan")))
+        metrics["zeus_avg_power_w"] = float(summary.get("zeus_avg_power_w", float("nan")))
+        metrics["zeus_train_step_energy_j"] = float(summary.get("zeus_train_step_energy_j", float("nan")))
+        metrics["zeus_energy_per_token_j"] = float(summary.get("zeus_energy_per_token_j", float("nan")))
+    else:
+        metrics["zeus_total_energy_j"] = float("nan")
+        metrics["zeus_total_time_s"] = float("nan")
+        metrics["zeus_avg_power_w"] = float("nan")
+        metrics["zeus_train_step_energy_j"] = float("nan")
+        metrics["zeus_energy_per_token_j"] = float("nan")
+
+    return {k: metrics.get(k, float("nan")) for k in METRIC_KEYS}
 
 
 def completed_runs(log_file: Path) -> set[str]:
@@ -592,11 +655,24 @@ def completed_runs(log_file: Path) -> set[str]:
     return runs
 
 
-def append_log(log_file: Path, name: str, combo: dict, metrics: dict) -> None:
+def append_log(
+    log_file: Path,
+    name: str,
+    combo: dict,
+    metrics: dict,
+    run_total_time_s: float,
+    run_completed_at: str,
+) -> None:
     """
     Append a YAML entry with run details and metrics.
     """
-    entry = {'formatted_name': name, 'config': combo, **metrics}
+    entry = {
+        'formatted_name': name,
+        'config': combo,
+        **metrics,
+        'run_total_time_s': run_total_time_s,
+        'run_completed_at': run_completed_at,
+    }
     with log_file.open('a') as f:
         yaml.safe_dump(entry, f, explicit_start=True)
 
@@ -678,18 +754,28 @@ def run_experiment(
     # Build and run
     cmd = build_command(combo)
     print(f"Running: {' '.join(cmd)}")
+    run_started_at = time.perf_counter()
     try:
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError:
         print(f"[red]Process exited with error for run:[/] {run_name}")
-
+    run_total_time_s = time.perf_counter() - run_started_at
+    run_completed_at = datetime.now(timezone.utc).isoformat()
+    
     # Read metrics (use existing or nan on failure)
     try:
         metrics = read_metrics(str(combo['out_dir']))
     except Exception:
         metrics = {k: float("nan") for k in METRIC_KEYS}
 
-    append_log(log_file, run_name, combo, metrics)
+    append_log(
+        log_file,
+        run_name,
+        combo,
+        metrics,
+        run_total_time_s=run_total_time_s,
+        run_completed_at=run_completed_at,
+    )
 
 
 def main():
@@ -703,7 +789,7 @@ def main():
         all_combos.extend(list(generate_combinations(cfg)))
 
     total = len(all_combos)
-    start_time = datetime.now()
+    start_time_monotonic = time.perf_counter()
     progress_log = LOG_DIR / f"{base}_progress.log"
     for idx, (combo, common_keys) in enumerate(all_combos, 1):
         configs_left = total - idx + 1
@@ -716,13 +802,12 @@ def main():
             print(f"[green]{message}[/]")
             append_progress(progress_log, message)
         else:
-            now = datetime.now()
-            elapsed = (now - start_time).total_seconds()
+            elapsed = time.perf_counter() - start_time_monotonic
             avg = elapsed / (idx - 1)
             eta_seconds = int(avg * configs_left)
             eta = timedelta(seconds=eta_seconds)
-            finish_time = now + timedelta(seconds=eta_seconds)
-            finish_formatted = finish_time.strftime("%Y-%m-%d %H:%M:%S")
+            finish_time = datetime.now(timezone.utc) + timedelta(seconds=eta_seconds)
+            finish_formatted = finish_time.strftime("%Y-%m-%d %H:%M:%S UTC")
             message = (
                 "Starting config "
                 f"{idx}/{total} ({configs_left} configs left). "

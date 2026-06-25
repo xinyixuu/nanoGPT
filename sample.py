@@ -1,5 +1,6 @@
 # sample.py
 import argparse
+import csv
 import importlib.util
 import json
 import math
@@ -28,6 +29,7 @@ from rich.text import Text
 from torch.nn import functional as F
 
 from model import GPT, GPTConfig
+from sample_variations.numerical_multicontext import decode_numerical_series, write_plotly_report
 from utils.model_info import print_summary, print_module_structure, print_model_blocks
 from variations.model_variations import model_variation_dictionary
 
@@ -116,6 +118,39 @@ def parse_args():
     parser.add_argument('--multicontext_start', type=str, nargs='+', default=None,
                         help="List of start strings, one for each context, if using --multicontext. "
                         "Must match the number/order of --multicontext_datasets.")
+    parser.add_argument('--multicontext_start_files', type=str, nargs='+', default=None,
+                        help="Optional list of .bin files (one per multicontext dataset) used as start token sequences.")
+    parser.add_argument('--multicontext_start_file_dtype', type=str, default='uint16', choices=['uint16', 'uint32'],
+                        help="Element dtype for --multicontext_start_files.")
+    parser.add_argument('--multicontext_start_file_max_tokens', type=int, default=None,
+                        help="If set, keep only the last N tokens from each --multicontext_start_files input.")
+    parser.add_argument('--multicontext_csv_input', type=str, default=None,
+                        help="Optional CSV prompt for multicontext sampling. Columns are matched to --multicontext_datasets by metadata/name/order.")
+    parser.add_argument('--multicontext_csv_has_header', default=True, action=argparse.BooleanOptionalAction,
+                        help="Whether --multicontext_csv_input has a header row. Disable with --no-multicontext_csv_has_header.")
+    parser.add_argument('--multicontext_csv_output_dir', type=str, default=None,
+                        help="Directory for timestamped CSV outputs generated from --multicontext_csv_input. Defaults to --out_dir/csv_samples.")
+    parser.add_argument('--multicontext_csv_output_file', type=str, default=None,
+                        help="Optional explicit CSV output path. Only valid with --num_samples 1.")
+    parser.add_argument('--multicontext_csv_output_include_prompt', default=True, action=argparse.BooleanOptionalAction,
+                        help="Include prompt rows in generated multicontext CSV output. Disable to write only continuation rows.")
+    parser.add_argument(
+        '--numerical_multicontext_plotly',
+        action=argparse.BooleanOptionalAction,
+        help="Generate a single Plotly HTML report with one graph per multicontext channel.",
+    )
+    parser.add_argument(
+        '--numerical_multicontext_plotly_file',
+        type=str,
+        default='numerical_multicontext_samples.html',
+        help="Output HTML path for --numerical_multicontext_plotly.",
+    )
+    parser.add_argument(
+        '--numerical_multicontext_plotly_include_prompt',
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Include prompt values in Plotly traces. Disable to plot only generated continuation.",
+    )
 
     parser.add_argument("--eval_only", action=argparse.BooleanOptionalAction, help="Enable evaluation only mode to calculate and print validation loss")
     parser.add_argument("--eval_iters", type=int, default=250, help="iterations for evaluation")
@@ -216,8 +251,8 @@ def colorize_text(tokens, data_for_color, decode, colorize_mode='minmax'):
         # Normalize the chosen values (probabilities or logits) to [0..1]
         norm_values = (values - values.min()) / (values.max() - values.min() + 1e-6)
 
-    for i, token_id in enumerate(tokens):
-        token_str = decode([token_id])
+    segments = _token_segments(tokens, decode)
+    for i, token_str in enumerate(segments):
         color_val = norm_values[i].item()  # 0..1
         r = int((1 - color_val) * 255)
         g = int(color_val * 255)
@@ -227,6 +262,27 @@ def colorize_text(tokens, data_for_color, decode, colorize_mode='minmax'):
 
 def _escape_ws(text: str) -> str:
     return text.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+
+
+def _token_segments(tokens: List[int], decode: Callable) -> List[str]:
+    """Return per-token text segments via incremental prefix decoding.
+
+    Some tokenizers (notably HuggingFace byte-level BPE) apply cleanup or
+    joining logic that makes ``decode([single_id])`` differ from the
+    corresponding slice of ``decode(full_sequence)``.  Incremental prefix
+    decoding avoids this: the text contributed by token *i* is defined as
+    ``decode(tokens[:i+1])[len(decode(tokens[:i])):]``, which exactly
+    partitions ``decode(tokens)`` into per-token segments.
+    """
+    if not tokens:
+        return []
+    segments: List[str] = []
+    prev = decode([])  # baseline: empty sequence → ""
+    for i in range(len(tokens)):
+        cur = decode(list(tokens[: i + 1]))
+        segments.append(cur[len(prev):])
+        prev = cur
+    return segments
 
 
 def _topk_table(
@@ -442,10 +498,9 @@ def _colorize_rank(
     """
     text = Text()
     max_rank = max(k or 0, 2)      # guarantees divisor ≥ 1
+    segments = _token_segments(list(token_ids), decode)
 
-    for tid, rnk in zip(token_ids, ranks):
-        token_str = decode([tid])
-
+    for token_str, rnk in zip(segments, ranks):
         if rnk == 1:
             # best-rank token: leave unstyled
             text.append(token_str)
@@ -886,8 +941,15 @@ def load_validation_data(block_size, eval_dataset):
     # Load validation data similar to how train data is handled
     val_path = os.path.join('data', eval_dataset, 'val.bin')
     assert os.path.exists(val_path), f"Validation data file {val_path} not found."
-    # Assuming validation data is similar in format to train data
-    val_data = np.memmap(val_path, dtype=np.uint16, mode='r')
+    meta_path = os.path.join('data', eval_dataset, 'meta.pkl')
+    dtype = np.uint16
+    if os.path.exists(meta_path):
+        with open(meta_path, 'rb') as f:
+            meta = pickle.load(f)
+        vocab_size = meta.get('vocab_size')
+        if vocab_size is not None and int(vocab_size) > np.iinfo(np.uint16).max:
+            dtype = np.uint32
+    val_data = np.memmap(val_path, dtype=dtype, mode='r')
     return val_data
 
 def get_batch(data, block_size, device):
@@ -1110,6 +1172,109 @@ def python_programming_encode(text: str, stoi: dict, processor) -> list[int]:
     processor.encode_with_reserved_tokens(text, encode_bytes, emit_reserved)
     return ids
 
+def _read_multicontext_csv_prompt(csv_path: str, has_header: bool) -> tuple[List[str], List[List[str]]]:
+    """Read a complete CSV prompt and return headers plus column-oriented values."""
+    path = Path(csv_path)
+    if not path.exists():
+        raise FileNotFoundError(f"CSV prompt not found: {path}")
+
+    with path.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        try:
+            first = next(reader)
+        except StopIteration as exc:
+            raise ValueError(f"CSV prompt is empty: {path}") from exc
+
+        rows: List[List[str]] = []
+        if has_header:
+            headers = [cell.strip() for cell in first]
+            if any(not header for header in headers):
+                raise ValueError("CSV prompt header cells must be non-empty")
+        else:
+            headers = [f"col_{idx}" for idx in range(len(first))]
+            rows.append([cell.strip() for cell in first])
+
+        for row_num, row in enumerate(reader, start=2):
+            if not row or all(cell.strip() == "" for cell in row):
+                continue
+            if len(row) != len(headers):
+                raise ValueError(f"CSV prompt row {row_num} has {len(row)} columns; expected {len(headers)}")
+            rows.append([cell.strip() for cell in row])
+
+    if not rows:
+        raise ValueError(f"CSV prompt has no data rows: {path}")
+
+    columns = [[row[col_idx] for row in rows] for col_idx in range(len(headers))]
+    return headers, columns
+
+
+def _csv_column_for_dataset(
+    *,
+    dataset_name: str,
+    dataset_index: int,
+    meta: Dict[str, object],
+    headers: Sequence[str],
+    columns: Sequence[Sequence[str]],
+) -> List[str]:
+    aliases = [
+        str(meta.get('source_column', '')),
+        str(meta.get('context_name', '')),
+        Path(dataset_name).name,
+        str(meta.get('column_index', '')),
+        f"col_{meta.get('column_index', dataset_index)}",
+    ]
+    header_to_idx = {header: idx for idx, header in enumerate(headers)}
+    for alias in aliases:
+        if alias in header_to_idx:
+            return list(columns[header_to_idx[alias]])
+    if dataset_index < len(columns):
+        return list(columns[dataset_index])
+    raise ValueError(f"CSV prompt has no column for dataset {dataset_name!r}")
+
+
+def _decoded_csv_values(token_ids: Sequence[int], decode_fn: Callable[[Sequence[int]], str]) -> List[str]:
+    decoded = decode_fn(list(token_ids))
+    if decoded.strip() == "":
+        return []
+    return [piece.strip() for piece in decoded.split(',')]
+
+
+def _write_multicontext_csv_sample(
+    *,
+    output_path: Union[str, Path],
+    dataset_names: Sequence[str],
+    dataset_meta: Dict[str, Dict[str, object]],
+    decode_lookup: Dict[str, Callable[[Sequence[int]], str]],
+    token_state: Dict[str, torch.Tensor],
+    prompt_lengths: Dict[str, int],
+    include_prompt: bool,
+) -> Path:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    headers = [
+        str(dataset_meta[name].get('source_column') or dataset_meta[name].get('context_name') or Path(name).name)
+        for name in dataset_names
+    ]
+    decoded_columns: List[List[str]] = []
+    for name in dataset_names:
+        token_ids = token_state[name][0].detach().cpu().tolist()
+        if not include_prompt:
+            token_ids = token_ids[prompt_lengths.get(name, 0):]
+        decoded_columns.append(_decoded_csv_values(token_ids, decode_lookup[name]))
+
+    lengths = {len(col) for col in decoded_columns}
+    if len(lengths) != 1:
+        raise ValueError(f"Decoded multicontext columns have mismatched lengths: {sorted(lengths)}")
+
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(headers)
+        for row in zip(*decoded_columns):
+            writer.writerow(row)
+    return path
+
+
 def get_tokenizer_functions(meta):
     """Get encode/decode functions based on tokenizer metadata"""
     if 'tokenizer' not in meta:
@@ -1135,6 +1300,58 @@ def get_tokenizer_functions(meta):
         enc = tiktoken.get_encoding(meta['tiktoken_encoding'])
         encode = lambda s: enc.encode(s, allowed_special={""})
         decode = lambda l: enc.decode(l)
+        return encode, decode
+
+    if meta['tokenizer'] == 'huggingface':
+        try:
+            from transformers import AutoTokenizer
+        except ImportError as exc:
+            raise ImportError(
+                "Loading a 'huggingface' tokenizer from meta.pkl requires the "
+                "`transformers` package. Install with `pip install transformers`."
+            ) from exc
+
+        hf_name = meta.get('hf_tokenizer_name')
+        hf_local_path = meta.get('hf_tokenizer_path')
+        trust_remote_code = bool(meta.get('hf_trust_remote_code', False))
+        use_fast = meta.get('hf_use_fast', True)
+        hf_revision = meta.get('hf_resolved_commit') or meta.get('hf_revision')
+        hf_subfolder = meta.get('hf_subfolder')
+
+        # Prefer the local snapshot written at prepare-time so we work offline
+        # and avoid re-authenticating against the Hub for gated repos.
+        load_target = None
+        loading_local = False
+        if hf_local_path and os.path.isdir(hf_local_path):
+            load_target = hf_local_path
+            loading_local = True
+        elif hf_name:
+            load_target = hf_name
+        else:
+            raise ValueError(
+                "meta.pkl is missing 'hf_tokenizer_name' / 'hf_tokenizer_path' "
+                "for huggingface tokenizer."
+            )
+
+        from_pretrained_kwargs = {
+            "trust_remote_code": trust_remote_code,
+            "use_fast": bool(use_fast),
+        }
+        # Revision/subfolder only apply when re-fetching from the Hub.
+        if not loading_local:
+            if hf_revision:
+                from_pretrained_kwargs["revision"] = hf_revision
+            if hf_subfolder:
+                from_pretrained_kwargs["subfolder"] = hf_subfolder
+
+        hf_tok = AutoTokenizer.from_pretrained(load_target, **from_pretrained_kwargs)
+
+        def encode(s):
+            return hf_tok.encode(s, add_special_tokens=False)
+
+        def decode(ids):
+            return hf_tok.decode(list(ids), skip_special_tokens=False)
+
         return encode, decode
 
     if meta['tokenizer'] == 'byte':
@@ -1201,7 +1418,31 @@ def get_tokenizer_functions(meta):
 
         return encode, decode
 
-    if meta['tokenizer'] in {'sinewave', 'sinewave_fp16_bits', 'csv_fp16_bits'}:
+    if meta['tokenizer'] == 'csv_integer_range':
+        int_min = int(meta.get('int_min', 0))
+        int_max = int(meta.get('int_max', int_min + int(meta.get('vocab_size', 1)) - 1))
+
+        def encode(text):
+            text = text.strip()
+            if not text:
+                return []
+            values = []
+            for piece in text.replace(',', ' ').split():
+                raw_value = int(piece)
+                if raw_value < int_min or raw_value > int_max:
+                    raise ValueError(
+                        f"CSV integer value {raw_value} outside [{int_min}, {int_max}] "
+                        f"for column {meta.get('source_column', meta.get('context_name', 'unknown'))}"
+                    )
+                values.append(raw_value - int_min)
+            return values
+
+        def decode(token_ids):
+            return ','.join(str(int(token_id) + int_min) for token_id in token_ids)
+
+        return encode, decode
+
+    if meta['tokenizer'] in {'sinewave', 'sinewave_fp16_bits', 'csv_fp16_bits', 'csv_quantized_int'}:
         def encode(text):
             text = text.strip()
             if not text:
@@ -1348,10 +1589,20 @@ def main():
         with open(args.start[5:], 'r', encoding='utf-8') as f:
             args.start = f.read()
 
-    if args.multicontext and args.multicontext_start is None and args.multicontext_datasets:
+    if (
+        args.multicontext
+        and args.multicontext_start is None
+        and args.multicontext_start_files is None
+        and args.multicontext_csv_input is None
+        and args.multicontext_datasets
+    ):
         args.multicontext_start = [args.start] * len(args.multicontext_datasets)
 
-    start_ids = encode(args.start)
+    if args.multicontext and (args.multicontext_start_files is not None or args.multicontext_csv_input is not None):
+        # Avoid single-context encode path when multicontext starts come from raw token files.
+        start_ids = [0]
+    else:
+        start_ids = encode(args.start)
     if len(start_ids) == 0:
         if meta and meta.get('tokenizer') == 'sinewave':
             print("Start string produced no tokens for sinewave tokenizer; defaulting to '0'.")
@@ -1451,21 +1702,43 @@ def main():
     elif args.multicontext:
         if not args.multicontext_datasets:
             raise ValueError("Must specify --multicontext_datasets when using --multicontext")
-        if args.multicontext_start is None:
-            raise ValueError("Must specify --multicontext_start when using --multicontext")
-        if len(args.multicontext_datasets) != len(args.multicontext_start):
-            raise ValueError(
-                "Number of --multicontext_datasets must match number of --multicontext_start strings."
-            )
+        if args.multicontext_start is None and args.multicontext_start_files is None and args.multicontext_csv_input is None:
+            raise ValueError("Must specify --multicontext_start, --multicontext_start_files, or --multicontext_csv_input when using --multicontext")
 
         dataset_names = list(args.multicontext_datasets)
-        start_strings = list(args.multicontext_start)
+        csv_headers = None
+        csv_columns = None
+        if args.multicontext_csv_input is not None:
+            if args.multicontext_start_files is not None or args.multicontext_start is not None:
+                raise ValueError(
+                    "Use only one of --multicontext_csv_input, --multicontext_start_files, or --multicontext_start."
+                )
+            csv_headers, csv_columns = _read_multicontext_csv_prompt(
+                args.multicontext_csv_input,
+                args.multicontext_csv_has_header,
+            )
+            start_strings = None
+            start_files = None
+        elif args.multicontext_start_files is not None:
+            if len(args.multicontext_datasets) != len(args.multicontext_start_files):
+                raise ValueError(
+                    "Number of --multicontext_datasets must match number of --multicontext_start_files."
+                )
+            start_strings = None
+            start_files = list(args.multicontext_start_files)
+        else:
+            if len(args.multicontext_datasets) != len(args.multicontext_start):
+                raise ValueError(
+                    "Number of --multicontext_datasets must match number of --multicontext_start strings."
+                )
+            start_strings = list(args.multicontext_start)
+            start_files = None
 
         dataset_meta: Dict[str, Dict[str, object]] = {}
         decode_lookup: Dict[str, Callable[[Sequence[int]], str]] = {}
         initial_tokens: Dict[str, torch.Tensor] = {}
 
-        for dataset_name, start_str in zip(dataset_names, start_strings):
+        for i, dataset_name in enumerate(dataset_names):
             meta_path = os.path.join("data", dataset_name, "meta.pkl")
             if not os.path.exists(meta_path):
                 raise FileNotFoundError(f"meta.pkl not found at {meta_path}")
@@ -1473,17 +1746,40 @@ def main():
                 dataset_meta[dataset_name] = pickle.load(f)
 
             encode_i, decode_i = get_tokenizer_functions(dataset_meta[dataset_name])
-            token_ids = encode_i(start_str)
+
+            if csv_columns is not None and csv_headers is not None:
+                csv_values = _csv_column_for_dataset(
+                    dataset_name=dataset_name,
+                    dataset_index=i,
+                    meta=dataset_meta[dataset_name],
+                    headers=csv_headers,
+                    columns=csv_columns,
+                )
+                token_ids = encode_i(",".join(csv_values))
+            elif start_files is not None:
+                start_file = start_files[i]
+                if not os.path.exists(start_file):
+                    raise FileNotFoundError(f"start file not found: {start_file}")
+                dtype = np.uint16 if args.multicontext_start_file_dtype == 'uint16' else np.uint32
+                token_ids = np.fromfile(start_file, dtype=dtype).astype(np.int64).tolist()
+                if args.multicontext_start_file_max_tokens is not None:
+                    if args.multicontext_start_file_max_tokens <= 0:
+                        raise ValueError("--multicontext_start_file_max_tokens must be > 0")
+                    token_ids = token_ids[-args.multicontext_start_file_max_tokens:]
+            else:
+                start_str = start_strings[i]
+                token_ids = encode_i(start_str)
+
             if len(token_ids) == 0:
                 if dataset_meta[dataset_name].get('tokenizer') == 'sinewave':
                     print(
-                        f"Start string for dataset '{dataset_name}' produced no tokens; defaulting to '0'."
+                        f"Start input for dataset '{dataset_name}' produced no tokens; defaulting to '0'."
                     )
                     token_ids = [0]
                 else:
                     raise ValueError(
-                        f"Start string for dataset '{dataset_name}' produced no tokens. "
-                        "Provide a valid prompt or comma-separated values for numerical tokenizers."
+                        f"Start input for dataset '{dataset_name}' produced no tokens. "
+                        "Provide valid --multicontext_start text or non-empty --multicontext_start_files data."
                     )
 
             token_tensor = torch.tensor(token_ids, dtype=torch.long, device=args.device)[None, ...]
@@ -1491,6 +1787,9 @@ def main():
             decode_lookup[dataset_name] = decode_i
 
         block_size = args.block_size if args.block_size else model.config.block_size
+        plotly_samples: List[Dict[str, List[float]]] = []
+        prompt_lengths = {name: initial_tokens[name].size(1) for name in dataset_names}
+
         with torch.no_grad(), ctx:
             for sample_idx in range(args.num_samples):
                 if args.use_lsv and hasattr(args, 'lsv_size'):
@@ -1557,6 +1856,20 @@ def main():
                     decode_fn = decode_lookup[name]
                     output_dict[name] = decode_fn(token_state[name][0].tolist())
 
+                if args.numerical_multicontext_plotly:
+                    if not model.config.numerical_multicontext:
+                        raise ValueError("--numerical_multicontext_plotly requires a numerical multicontext model")
+
+                    sample_numeric_series: Dict[str, List[float]] = {}
+                    for name in dataset_names:
+                        decoded = decode_numerical_series(
+                            token_state[name][0].tolist(),
+                            dataset_meta[name],
+                            model.config.numerical_multicontext_input_format,
+                        )
+                        sample_numeric_series[name] = decoded.tolist()
+                    plotly_samples.append(sample_numeric_series)
+
                 for name, text in output_dict.items():
                     key_color = "bold light_slate_blue"
                     text_color = "bold cyan"
@@ -1567,6 +1880,36 @@ def main():
                     with open(args.sample_file, "w") as file:
                         for name, text in output_dict.items():
                             file.write(f"\n{name}: \n{text}\n")
+
+                if args.multicontext_csv_input is not None:
+                    if args.multicontext_csv_output_file is not None:
+                        if args.num_samples != 1:
+                            raise ValueError("--multicontext_csv_output_file requires --num_samples 1")
+                        csv_output_path = Path(args.multicontext_csv_output_file)
+                    else:
+                        csv_output_dir = Path(args.multicontext_csv_output_dir or Path(args.out_dir) / "csv_samples")
+                        input_stem = Path(args.multicontext_csv_input).stem
+                        csv_output_path = csv_output_dir / f"{input_stem}_sample{sample_idx + 1}_{timestamp}.csv"
+
+                    written_csv = _write_multicontext_csv_sample(
+                        output_path=csv_output_path,
+                        dataset_names=dataset_names,
+                        dataset_meta=dataset_meta,
+                        decode_lookup=decode_lookup,
+                        token_state=token_state,
+                        prompt_lengths=prompt_lengths,
+                        include_prompt=args.multicontext_csv_output_include_prompt,
+                    )
+                    print(f"Saved multicontext CSV sample to: {written_csv}")
+
+        if args.numerical_multicontext_plotly:
+            plot_output = write_plotly_report(
+                output_path=args.numerical_multicontext_plotly_file,
+                sample_series=plotly_samples,
+                prompt_lengths=prompt_lengths,
+                include_prompt=args.numerical_multicontext_plotly_include_prompt,
+            )
+            print(f"Saved numerical multicontext plot to: {plot_output}")
     else:
         sample_with_existing_model(
                 model,
