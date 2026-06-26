@@ -186,7 +186,7 @@ class MonitorApp(App):
             "best_val_loss",
             "best_val_bits_per_byte",
             "best_val_iter",
-            "best_val_tokens",
+            "best_tokens",
             "num_params",
             "peak_torch_allocated_mb",
             "peak_torch_reserved_mb",
@@ -204,6 +204,8 @@ class MonitorApp(App):
             "ln_f_cosine_95",
             "rankme",
             "areq",
+            "distillation_val_loss",
+            "ntp_val_loss",
             "zeus_total_energy_j",
             "zeus_total_time_s",
             "zeus_avg_power_w",
@@ -309,7 +311,7 @@ class MonitorApp(App):
 
     def _resolve_column_index(self, index: int) -> str:
         if index < 1 or index > len(self.columns):
-            raise ValueError(f"Column index {index} out of range")
+            raise ValueError(f"Column index {index} out of range ")
         return self.columns[index - 1]
 
     @staticmethod

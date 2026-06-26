@@ -42,6 +42,8 @@ METRIC_KEYS = [
     "ln_f_cosine_95",
     "rankme",
     "areq",
+    "distillation_val_loss",
+    "ntp_val_loss",
     "zeus_total_energy_j",
     "zeus_total_time_s",
     "zeus_avg_power_w",
@@ -122,6 +124,12 @@ def load_configurations(path: str, fmt: str) -> list[dict]:
 
 
 RUN_NAME_VAR = "${RUN_NAME}"
+DISTILLATION_SOURCE_VAR = "${DISTILLATION_SOURCE}"
+RESERVED_CONFIG_KEYS = {
+    "distillation_source_path",
+    "distillation_source_run_name",
+    "run_name_override",
+}
 
 
 def expand_range(val):
@@ -137,14 +145,21 @@ def expand_range(val):
     return val
 
 
-def _substitute_run_name(obj, run_name: str):
-    """Recursively substitute the run name placeholder inside ``obj``."""
+def _substitute_config_vars(obj, run_name: str, distillation_source_path: str | None = None):
+    """Recursively substitute launcher-only placeholders inside ``obj``."""
     if isinstance(obj, str):
-        return obj.replace(RUN_NAME_VAR, run_name)
+        substituted = obj.replace(RUN_NAME_VAR, run_name)
+        if DISTILLATION_SOURCE_VAR in substituted:
+            if distillation_source_path is None:
+                raise ValueError(
+                    f"{DISTILLATION_SOURCE_VAR} was used but distillation_source_path was not set."
+                )
+            substituted = substituted.replace(DISTILLATION_SOURCE_VAR, distillation_source_path)
+        return substituted
     if isinstance(obj, list):
-        return [_substitute_run_name(o, run_name) for o in obj]
+        return [_substitute_config_vars(o, run_name, distillation_source_path) for o in obj]
     if isinstance(obj, dict):
-        return {k: _substitute_run_name(v, run_name) for k, v in obj.items()}
+        return {k: _substitute_config_vars(v, run_name, distillation_source_path) for k, v in obj.items()}
     return obj
 
 
@@ -540,9 +555,9 @@ def format_run_name(
     for k, v in combo.items():
         if k in exclude_keys:
             continue
-        if k.startswith('_'):
+        if k.startswith('_') or k in RESERVED_CONFIG_KEYS:
             continue
-        if isinstance(v, str) and RUN_NAME_VAR in v:
+        if isinstance(v, str) and (RUN_NAME_VAR in v or DISTILLATION_SOURCE_VAR in v):
             continue
         parts.append(str(v))
 
@@ -587,6 +602,8 @@ def read_metrics(out_dir: str) -> dict:
         "ln_f_cosine_95",
         "rankme",
         "areq",
+        "distillation_val_loss",
+        "ntp_val_loss",
     ]
     casts = [
         float,
@@ -594,6 +611,8 @@ def read_metrics(out_dir: str) -> dict:
         int,
         int,
         int,
+        float,
+        float,
         float,
         float,
         float,
@@ -696,7 +715,7 @@ def build_command(combo: dict) -> list[str]:
     """
     cmd = ['python3', 'train.py']
     for k, v in combo.items():
-        if k.startswith('_'):
+        if k.startswith('_') or k in RESERVED_CONFIG_KEYS:
             continue
         if isinstance(v, bool):
             cmd.append(f"--{'' if v else 'no-'}{k}")
@@ -732,6 +751,8 @@ def run_experiment(
         named_param_keys=named_param_keys,
         expand_named_group_values=args.expand_named_groups_in_names,
     )
+    if combo.get("run_name_override"):
+        run_name = f"{args.prefix}{combo['run_name_override']}"
     log_file = LOG_DIR / f"{base}.yaml"
     if run_name in completed_runs(log_file):
         print(f"[yellow]Skipping already-run:[/] {run_name}")
@@ -745,14 +766,33 @@ def run_experiment(
     # Prepare tensorboard run name
     combo['tensorboard_run_name'] = run_name
 
-    # Substitute special run-name token in string parameters
-    combo = _substitute_run_name(combo, run_name)
+    distillation_source_path = combo.get("distillation_source_path")
+    distillation_source_run_name = combo.get("distillation_source_run_name")
+    if distillation_source_path is None and distillation_source_run_name is not None:
+        if args.use_timestamp:
+            raise ValueError(
+                "distillation_source_run_name cannot be resolved when --use_timestamp "
+                "is enabled; set distillation_source_path explicitly instead."
+            )
+        distillation_source_path = os.path.join(
+            args.output_dir,
+            f"{args.prefix}{distillation_source_run_name}",
+            combo.get("init_from_ckpt", "ckpt.pt"),
+        )
+        combo["distillation_source_path"] = distillation_source_path
+
+    # Substitute launcher-only tokens in string parameters
+    combo = _substitute_config_vars(
+        combo,
+        run_name,
+        distillation_source_path=distillation_source_path,
+    )
 
     # Show parameters
     console = Console()
     table = Table("Parameters", show_header=False)
     for k, v in combo.items():
-        if k.startswith('_'):
+        if k.startswith('_') or k in RESERVED_CONFIG_KEYS:
             continue
         table.add_row(k, str(v))
     console.print(table)
