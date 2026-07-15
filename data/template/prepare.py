@@ -113,6 +113,8 @@ def parse_arguments():
     parser.add_argument("--reuse_chars", action="store_true", help="Reuse character list from meta.pkl")
     parser.add_argument("--char_bpe_vocab_path", type=str, default=None,
                         help="Path to a char_bpe meta.pkl to reuse its vocabulary/merges")
+    parser.add_argument("--char_bpe_incomplete_coverage_uses_bpe", action=argparse.BooleanOptionalAction, default=True,
+                        help="When char_bpe vocab_size cannot fit every observed character plus byte fallback, keep the highest-frequency characters/BPE tokens and rely on byte fallback for the rest (default: true). Use --no-char_bpe_incomplete_coverage_uses_bpe to require complete character coverage.")
 
     # Custom tokenizer arguments
     parser.add_argument("--tokens_file", type=str, default=None, help="Path to the file containing newline-separated tokens for tokenization")
