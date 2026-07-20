@@ -5,7 +5,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from app.vector_math import alias_for_index, evaluate_vector_expression, evaluate_vector_expressions
+from app.vector_math import (
+    alias_for_index,
+    evaluate_vector_expression,
+    evaluate_vector_expressions,
+    vector_dimension_metrics,
+)
 
 
 def test_aliases_are_excel_style() -> None:
@@ -95,3 +100,11 @@ def test_model_functions_can_be_nested() -> None:
     np.testing.assert_allclose(result, aliases["A"])
     assert references == ("A",)
     assert calls == ["norm", "invnorm"]
+
+
+def test_vector_dimension_metrics_participation_ratio() -> None:
+    assert vector_dimension_metrics(np.array([1.0, 0.0, 0.0]))["effective_dimension"] == pytest.approx(1.0)
+    assert vector_dimension_metrics(np.array([1.0, 1.0, 1.0]))["effective_dimension"] == pytest.approx(3.0)
+    skewed = vector_dimension_metrics(np.array([10.0, 1.0, 0.0]))
+    assert skewed["effective_dimension"] == pytest.approx((101.0**2) / 10001.0)
+    assert skewed["dimensions_for_angle"] >= 1

@@ -39,6 +39,7 @@ const state = {
   showLabelAliases: true,
   showLabelIds: true,
   showLabelMagnitudes: false,
+  showLabelParticipation: false,
   showEdgeLabels: false,
   edgeColorMode: 'angle',
   edgeWidth: 1.8,
@@ -370,10 +371,17 @@ function labelMagnitudeText(point) {
     : '';
 }
 
+function labelParticipationText(point) {
+  return state.showLabelParticipation && Number.isFinite(Number(point.effective_dimension))
+    ? `PR ${formatNumber(point.effective_dimension, 2)}`
+    : '';
+}
+
 function labelTextForPoint(point) {
   const magnitudeText = labelMagnitudeText(point);
+  const participationText = labelParticipationText(point);
   if (point.kind === 'resultant') {
-    return [`${point.alias || 'R'}: ${point.label || point.display}`, magnitudeText]
+    return [`${point.alias || 'R'}: ${point.label || point.display}`, magnitudeText, participationText]
       .filter((value) => value.length)
       .join(' · ');
   }
@@ -382,7 +390,7 @@ function labelTextForPoint(point) {
   const tokenId = state.showLabelIds && point.token_id !== null && point.token_id !== undefined
     ? String(point.token_id)
     : '';
-  const body = [tokenText, tokenId, magnitudeText].filter((value) => value.length).join(' · ');
+  const body = [tokenText, tokenId, magnitudeText, participationText].filter((value) => value.length).join(' · ');
   return `${prefix}${body}`.trim();
 }
 
@@ -1751,6 +1759,7 @@ function buildSettingsSnapshot() {
       show_alias_letters: state.showLabelAliases,
       show_label_ids: state.showLabelIds,
       show_label_magnitudes: state.showLabelMagnitudes,
+      show_label_participation: state.showLabelParticipation,
       show_edge_labels: state.showEdgeLabels,
       edge_color_mode: state.edgeColorMode,
       edge_width: state.edgeWidth,
@@ -1959,6 +1968,7 @@ function applySettingsControls(snapshot) {
   state.showLabelAliases = booleanValue(appearance.show_alias_letters, true);
   state.showLabelIds = booleanValue(appearance.show_label_ids, true);
   state.showLabelMagnitudes = booleanValue(appearance.show_label_magnitudes, false);
+  state.showLabelParticipation = booleanValue(appearance.show_label_participation, false);
   state.showEdgeLabels = booleanValue(appearance.show_edge_labels, false) && state.showEdges;
   state.edgeColorMode = appearance.edge_color_mode === 'uniform' ? 'uniform' : 'angle';
   state.edgeWidth = finiteNumber(appearance.edge_width, 1.8, 0.5, 8);
@@ -2031,6 +2041,7 @@ function syncAppearanceControls() {
   $('showLabelAliasesInput').checked = state.showLabelAliases;
   $('showLabelIdsInput').checked = state.showLabelIds;
   $('showLabelMagnitudesInput').checked = state.showLabelMagnitudes;
+  $('showLabelParticipationInput').checked = state.showLabelParticipation;
   $('showEdgeLabelsInput').checked = state.showEdgeLabels;
   $('pointSizeInput').value = String(state.pointSize);
   $('pointSizeLabel').textContent = state.pointSize.toFixed(3);
@@ -2084,6 +2095,10 @@ function setShowLabelIds(value) {
 }
 function setShowLabelMagnitudes(value) {
   state.showLabelMagnitudes = Boolean(value);
+  syncAppearanceControls();
+}
+function setShowLabelParticipation(value) {
+  state.showLabelParticipation = Boolean(value);
   syncAppearanceControls();
 }
 function setShowEdgeLabels(value) {
@@ -2268,6 +2283,7 @@ $('showLabelsInput').addEventListener('change', (event) => setShowLabels(event.t
 $('showLabelAliasesInput').addEventListener('change', (event) => setShowLabelAliases(event.target.checked));
 $('showLabelIdsInput').addEventListener('change', (event) => setShowLabelIds(event.target.checked));
 $('showLabelMagnitudesInput').addEventListener('change', (event) => setShowLabelMagnitudes(event.target.checked));
+$('showLabelParticipationInput').addEventListener('change', (event) => setShowLabelParticipation(event.target.checked));
 $('resetCameraBtn').addEventListener('click', resetCamera);
 $('toggleRotateBtn').addEventListener('click', () => setAutoRotate(!state.autoRotate));
 $('toggleEdgesBtn').addEventListener('click', () => setShowEdges(!state.showEdges));
@@ -2291,6 +2307,7 @@ document.addEventListener('keydown', (event) => {
   else if (event.key.toLowerCase() === 't') setShowLabelAliases(!state.showLabelAliases);
   else if (event.key.toLowerCase() === 'i') setShowLabelIds(!state.showLabelIds);
   else if (event.key.toLowerCase() === 'm') setShowLabelMagnitudes(!state.showLabelMagnitudes);
+  else if (event.key.toLowerCase() === 'p') setShowLabelParticipation(!state.showLabelParticipation);
   else if (event.key === 'Escape') {
     state.pinnedIndex = null;
     renderInspector();

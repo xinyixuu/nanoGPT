@@ -87,6 +87,45 @@ def spherical_linear_interpolation(a: np.ndarray, b: np.ndarray, t: float) -> np
     return direction * magnitude
 
 
+def vector_dimension_metrics(
+    vector: np.ndarray, max_angle_degrees: float = 5.0, eps: float = 1e-12
+) -> dict[str, float | int]:
+    values = np.asarray(vector, dtype=np.float64).reshape(-1)
+    energy = values * values
+    total = float(np.sum(energy))
+    if total <= eps:
+        return {
+            "effective_dimension": 0.0,
+            "dimensions_for_angle": 0,
+            "continuous_dimensions_for_angle": 0.0,
+            "retained_energy": 0.0,
+            "resulting_angle_degrees": 0.0,
+        }
+
+    probabilities = energy / total
+    square_sum = float(np.sum(probabilities * probabilities))
+    effective_dimension = 1.0 / max(square_sum, eps)
+    sorted_probabilities = np.sort(probabilities)[::-1]
+    cumulative = np.cumsum(sorted_probabilities)
+    angle = math.radians(float(max_angle_degrees))
+    required_energy = math.cos(angle) ** 2
+    k = int(np.searchsorted(cumulative, required_energy, side="left")) + 1
+    k = min(max(k, 1), values.size)
+    previous_energy = float(cumulative[k - 2]) if k > 1 else 0.0
+    current_coordinate_energy = float(sorted_probabilities[k - 1])
+    fractional_k = (k - 1) + (required_energy - previous_energy) / max(current_coordinate_energy, eps)
+    fractional_k = max(1.0, min(float(k), float(fractional_k)))
+    retained_energy = float(cumulative[k - 1])
+    resulting_angle = math.degrees(math.acos(math.sqrt(min(1.0, retained_energy))))
+    return {
+        "effective_dimension": float(effective_dimension),
+        "dimensions_for_angle": int(k),
+        "continuous_dimensions_for_angle": float(fractional_k),
+        "retained_energy": retained_energy,
+        "resulting_angle_degrees": float(resulting_angle),
+    }
+
+
 ModelFunction = Callable[[str, list[float | str | np.ndarray]], np.ndarray]
 
 

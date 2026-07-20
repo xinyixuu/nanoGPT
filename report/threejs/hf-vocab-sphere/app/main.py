@@ -47,7 +47,7 @@ from .schemas import (
     TokenSearchResponse,
     TokenWindowResponse,
 )
-from .vector_math import VectorExpressionResult, alias_for_index, evaluate_vector_expressions
+from .vector_math import VectorExpressionResult, alias_for_index, evaluate_vector_expressions, vector_dimension_metrics
 
 BASE_DIR = Path(__file__).resolve().parent
 INDEX_PATH = BASE_DIR / "templates" / "index.html"
@@ -266,6 +266,7 @@ def _projection_rows(
                 "kind": "token",
                 "alias": alias_for_index(index),
                 "label": row["display"],
+                **vector_dimension_metrics(base_vectors[index]),
                 "expression": None,
                 "referenced_aliases": [],
             }
@@ -287,6 +288,7 @@ def _projection_rows(
                 "special": False,
                 "present_in_tokenizer": False,
                 "magnitude": item.magnitude,
+                **vector_dimension_metrics(item.vector),
                 "rank": None,
                 "cosine_similarity": None,
                 "angle_deg": None,
