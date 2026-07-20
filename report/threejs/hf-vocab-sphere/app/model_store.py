@@ -1102,6 +1102,58 @@ def _apply_inverse_rms_norm(vector: np.ndarray, weight: torch.Tensor) -> np.ndar
     return unweighted * scale
 
 
+def _attention_head_counts(assets: ModelAssets) -> tuple[int, int]:
+    config_path = _try_repo_file(assets.model_name, "config.json", revision=assets.revision, allow_download=True)
+    if config_path is None:
+        return 1, 1
+    with config_path.open("r", encoding="utf-8") as handle:
+        config = json.load(handle)
+    attention_heads = int(config.get("num_attention_heads") or config.get("n_head") or 0)
+    key_value_heads = int(config.get("num_key_value_heads") or attention_heads or 0)
+    return max(attention_heads, 1), max(key_value_heads, 1)
+
+
+def _wov_head_slices(
+    *,
+    v_output_width: int,
+    o_input_width: int,
+    attention_heads: int,
+    key_value_heads: int,
+    head: int,
+) -> tuple[slice, slice, int]:
+    if attention_heads <= 0:
+        attention_heads = 1
+    if key_value_heads <= 0:
+        key_value_heads = attention_heads
+    if o_input_width % attention_heads != 0:
+        # Fall back to treating Wo as one concatenated head space when the config
+        # does not divide the tensor cleanly.
+        attention_heads = 1
+    head_dim = o_input_width // attention_heads
+    if head_dim <= 0:
+        raise ValueError("Wo input width is not usable for head slicing.")
+    if head < 0 or head >= attention_heads:
+        raise ValueError(f"head must be in [0, {attention_heads - 1}], got {head}.")
+
+    if v_output_width == o_input_width:
+        key_value_heads = attention_heads
+    elif v_output_width % key_value_heads != 0:
+        if v_output_width == head_dim:
+            key_value_heads = 1
+        elif v_output_width % head_dim == 0:
+            key_value_heads = v_output_width // head_dim
+        else:
+            raise ValueError("Wv output width cannot be partitioned into Wo-compatible heads.")
+
+    v_head_dim = v_output_width // key_value_heads
+    if v_head_dim != head_dim:
+        raise ValueError("Wv head width and Wo head width do not match.")
+    kv_head = min((head * key_value_heads) // attention_heads, key_value_heads - 1)
+    v_start = kv_head * head_dim
+    o_start = head * head_dim
+    return slice(v_start, v_start + head_dim), slice(o_start, o_start + head_dim), attention_heads
+
+
 def model_vector_function(assets: ModelAssets, name: str, args: list[float | str | np.ndarray]) -> np.ndarray:
     tensors = _all_safetensor_tensors(assets.model_name, revision=assets.revision, allow_download=True)
     if name in {"norm", "invnorm", "inverse_norm"}:
@@ -1131,24 +1183,16 @@ def model_vector_function(assets: ModelAssets, name: str, args: list[float | str
         o = o_weight.numpy().astype(np.float64)
         if v.shape[1] != vector.shape[0] or o.shape[0] != vector.shape[0]:
             raise ValueError("Attention projection widths do not match the selected vector space.")
-        if v.shape[0] != o.shape[1]:
-            raise ValueError("Wv output width and Wo input width do not match.")
-        head_count = 0
-        config_path = _try_repo_file(assets.model_name, "config.json", revision=assets.revision, allow_download=True)
-        if config_path is not None:
-            with config_path.open("r", encoding="utf-8") as handle:
-                config = json.load(handle)
-            head_count = int(
-                config.get("num_key_value_heads") or config.get("num_attention_heads") or config.get("n_head") or 0
-            )
-        if head_count <= 0:
-            head_count = 1
-        # Prefer an even partition; users can still select head 0 for single-head or unknown configs.
-        if v.shape[0] % max(head_count, 1) != 0:
-            head_count = 1
-        head_dim = v.shape[0] // head_count
-        if head < 0 or head >= head_count:
-            raise ValueError(f"head must be in [0, {head_count - 1}], got {head}.")
-        start, end = head * head_dim, (head + 1) * head_dim
-        return (vector @ v[start:end, :].T) @ o[:, start:end].T
+        attention_heads, key_value_heads = _attention_head_counts(assets)
+        v_slice, o_slice, _head_count = _wov_head_slices(
+            v_output_width=v.shape[0],
+            o_input_width=o.shape[1],
+            attention_heads=attention_heads,
+            key_value_heads=key_value_heads,
+            head=head,
+        )
+        # Multiplying by the selected Wo slice is equivalent to padding the
+        # selected Wv-head output with zeros before/after its head slot and then
+        # applying the full Wo matrix, but avoids materializing the padded vector.
+        return (vector @ v[v_slice, :].T) @ o[:, o_slice].T
     raise ValueError(f"Unknown model function {name!r}.")
