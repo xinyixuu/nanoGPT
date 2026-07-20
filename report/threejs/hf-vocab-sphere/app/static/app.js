@@ -38,6 +38,7 @@ const state = {
   showLabels: false,
   showLabelAliases: true,
   showLabelIds: true,
+  showLabelMagnitudes: false,
   showEdgeLabels: false,
   edgeColorMode: 'angle',
   edgeWidth: 1.8,
@@ -363,14 +364,25 @@ function clearEdgeLabels() {
   edgeLabelEntries = [];
 }
 
+function labelMagnitudeText(point) {
+  return state.showLabelMagnitudes && Number.isFinite(Number(point.magnitude))
+    ? `‖v‖ ${formatNumber(point.magnitude, 3)}`
+    : '';
+}
+
 function labelTextForPoint(point) {
-  if (point.kind === 'resultant') return `${point.alias || 'R'}: ${point.label || point.display}`;
+  const magnitudeText = labelMagnitudeText(point);
+  if (point.kind === 'resultant') {
+    return [`${point.alias || 'R'}: ${point.label || point.display}`, magnitudeText]
+      .filter((value) => value.length)
+      .join(' · ');
+  }
   const prefix = state.showLabelAliases && point.alias ? `${point.alias}: ` : '';
   const tokenText = point.display !== null && point.display !== undefined ? String(point.display) : '';
   const tokenId = state.showLabelIds && point.token_id !== null && point.token_id !== undefined
     ? String(point.token_id)
     : '';
-  const body = [tokenText, tokenId].filter((value) => value.length).join(' · ');
+  const body = [tokenText, tokenId, magnitudeText].filter((value) => value.length).join(' · ');
   return `${prefix}${body}`.trim();
 }
 
@@ -1354,7 +1366,8 @@ function renderArithmeticPanel() {
 async function addArithmeticResult() {
   const rows = selectedRows();
   const slerpMode = $('arithmeticModeSelect').value === 'slerp';
-  const fraction = Math.max(0, Math.min(1, Number($('slerpFractionInput').value) || 0));
+  const rawFraction = Number($('slerpFractionInput').value);
+  const fraction = Number.isFinite(rawFraction) ? rawFraction : 0;
   const fromAlias = $('slerpFromSelect').value;
   const toAlias = $('slerpToSelect').value;
   const expression = slerpMode
@@ -1737,6 +1750,7 @@ function buildSettingsSnapshot() {
       show_node_labels: state.showLabels,
       show_alias_letters: state.showLabelAliases,
       show_label_ids: state.showLabelIds,
+      show_label_magnitudes: state.showLabelMagnitudes,
       show_edge_labels: state.showEdgeLabels,
       edge_color_mode: state.edgeColorMode,
       edge_width: state.edgeWidth,
@@ -1848,7 +1862,7 @@ function normalizedWorkspace(snapshot) {
       label: stringValue(editor.label, '', 120),
       slerpFrom: stringValue(editor.slerp_from, 'A', 20),
       slerpTo: stringValue(editor.slerp_to, 'B', 20),
-      slerpFraction: finiteNumber(editor.slerp_fraction, 0.5, 0, 1),
+      slerpFraction: finiteNumber(editor.slerp_fraction, 0.5, -1e9, 1e9),
     },
   };
 }
@@ -1944,6 +1958,7 @@ function applySettingsControls(snapshot) {
   state.showLabels = booleanValue(appearance.show_node_labels, false);
   state.showLabelAliases = booleanValue(appearance.show_alias_letters, true);
   state.showLabelIds = booleanValue(appearance.show_label_ids, true);
+  state.showLabelMagnitudes = booleanValue(appearance.show_label_magnitudes, false);
   state.showEdgeLabels = booleanValue(appearance.show_edge_labels, false) && state.showEdges;
   state.edgeColorMode = appearance.edge_color_mode === 'uniform' ? 'uniform' : 'angle';
   state.edgeWidth = finiteNumber(appearance.edge_width, 1.8, 0.5, 8);
@@ -2015,6 +2030,7 @@ function syncAppearanceControls() {
   $('showLabelsInput').checked = state.showLabels;
   $('showLabelAliasesInput').checked = state.showLabelAliases;
   $('showLabelIdsInput').checked = state.showLabelIds;
+  $('showLabelMagnitudesInput').checked = state.showLabelMagnitudes;
   $('showEdgeLabelsInput').checked = state.showEdgeLabels;
   $('pointSizeInput').value = String(state.pointSize);
   $('pointSizeLabel').textContent = state.pointSize.toFixed(3);
@@ -2064,6 +2080,10 @@ function setShowLabelAliases(value) {
 }
 function setShowLabelIds(value) {
   state.showLabelIds = Boolean(value);
+  syncAppearanceControls();
+}
+function setShowLabelMagnitudes(value) {
+  state.showLabelMagnitudes = Boolean(value);
   syncAppearanceControls();
 }
 function setShowEdgeLabels(value) {
@@ -2247,6 +2267,7 @@ $('showEdgeLabelsInput').addEventListener('change', (event) => setShowEdgeLabels
 $('showLabelsInput').addEventListener('change', (event) => setShowLabels(event.target.checked));
 $('showLabelAliasesInput').addEventListener('change', (event) => setShowLabelAliases(event.target.checked));
 $('showLabelIdsInput').addEventListener('change', (event) => setShowLabelIds(event.target.checked));
+$('showLabelMagnitudesInput').addEventListener('change', (event) => setShowLabelMagnitudes(event.target.checked));
 $('resetCameraBtn').addEventListener('click', resetCamera);
 $('toggleRotateBtn').addEventListener('click', () => setAutoRotate(!state.autoRotate));
 $('toggleEdgesBtn').addEventListener('click', () => setShowEdges(!state.showEdges));
@@ -2269,6 +2290,7 @@ document.addEventListener('keydown', (event) => {
   else if (event.key.toLowerCase() === 'l') setShowLabels(!state.showLabels);
   else if (event.key.toLowerCase() === 't') setShowLabelAliases(!state.showLabelAliases);
   else if (event.key.toLowerCase() === 'i') setShowLabelIds(!state.showLabelIds);
+  else if (event.key.toLowerCase() === 'm') setShowLabelMagnitudes(!state.showLabelMagnitudes);
   else if (event.key === 'Escape') {
     state.pinnedIndex = null;
     renderInspector();
