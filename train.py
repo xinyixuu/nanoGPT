@@ -1231,6 +1231,14 @@ class Trainer:
                 if target_metric_dataset is not None
                 else None
             )
+            # Initialize dictionaries to store metrics per dataset
+            mc_top1_probs = {i: [] for i in range(len(self.args.multicontext_datasets))}
+            mc_top1_corrects = {i: [] for i in range(len(self.args.multicontext_datasets))}
+            mc_target_ranks = {i: [] for i in range(len(self.args.multicontext_datasets))}
+            mc_target_probs = {i: [] for i in range(len(self.args.multicontext_datasets))}
+            mc_target_left_probs = {i: [] for i in range(len(self.args.multicontext_datasets))}
+            mc_left_inclusive_probs = {i: [] for i in range(len(self.args.multicontext_datasets))}
+
             top1_probs, top1_corrects, target_ranks = [], [], []
             target_probs, target_left_probs, left_inclusive_probs = [], [], []
             ln_f_cosines = []
@@ -1269,33 +1277,44 @@ class Trainer:
                     for i in range(len(self.args.multicontext_datasets)):
                         losses[f"{i}"][k] = loss_list[i]
 
-                    if split == 'val' and target_metric_idx is not None:
-                        target_dataset_name = dataset_list[target_metric_idx]
-                        target_logits = logits[target_metric_idx]
-                        Y = y_dict[target_dataset_name]
-                        probs = F.softmax(target_logits, dim=-1)
-                        top1_prob, top1_idx = probs.max(dim=-1)
-                        top1_probs.append(top1_prob)
-                        top1_corrects.append((top1_idx == Y).float())
-                        gold_logits = target_logits.gather(-1, Y.unsqueeze(-1)).squeeze(-1)
-                        ranks = (target_logits > gold_logits.unsqueeze(-1)).sum(dim=-1) + 1
-                        target_ranks.append(ranks.float())
-                        target_prob = probs.gather(-1, Y.unsqueeze(-1)).squeeze(-1).float()
-                        target_probs.append(target_prob)
-                        left_prob = (probs * (probs > target_prob.unsqueeze(-1))).sum(dim=-1).float()
-                        target_left_probs.append(left_prob)
-                        left_inclusive_probs.append(left_prob + target_prob)
-                        if ln_f_out:
-                            lm_head = self.model.transformer[f'lm_head_{target_metric_idx}']
-                            target_vecs = lm_head.weight[Y]
-                            cos = F.cosine_similarity(
-                                ln_f_out[0].float(), target_vecs.float(), dim=-1
-                            )
-                            ln_f_cosines.append(cos)
-                            if compute_rankme:
-                                rankme_vectors.append(
-                                    ln_f_out[0][:, -1, :].float().detach().cpu()
-                                )
+                    if split == 'val':
+                        for i, dataset in enumerate(self.args.multicontext_datasets):
+                            lane_logits = logits[i]
+                            Y = y_dict[dataset]
+                            probs = F.softmax(lane_logits, dim=-1)
+                            top1_prob, top1_idx = probs.max(dim=-1)
+                            mc_top1_probs[i].append(top1_prob)
+                            mc_top1_corrects[i].append((top1_idx == Y).float())
+                            
+                            gold_logits = lane_logits.gather(-1, Y.unsqueeze(-1)).squeeze(-1)
+                            ranks = (lane_logits > gold_logits.unsqueeze(-1)).sum(dim=-1) + 1
+                            mc_target_ranks[i].append(ranks.float())
+                            
+                            target_prob = probs.gather(-1, Y.unsqueeze(-1)).squeeze(-1).float()
+                            mc_target_probs[i].append(target_prob)
+                            
+                            left_prob = (probs * (probs > target_prob.unsqueeze(-1))).sum(dim=-1).float()
+                            mc_target_left_probs[i].append(left_prob)
+                            mc_left_inclusive_probs[i].append(left_prob + target_prob)
+                            
+                            if i == target_metric_idx:
+                                top1_probs.append(top1_prob)
+                                top1_corrects.append((top1_idx == Y).float())
+                                target_ranks.append(ranks.float())
+                                target_probs.append(target_prob)
+                                target_left_probs.append(left_prob)
+                                left_inclusive_probs.append(left_prob + target_prob)
+                                if ln_f_out:
+                                    lm_head = self.model.transformer[f'lm_head_{i}']
+                                    target_vecs = lm_head.weight[Y]
+                                    cos = F.cosine_similarity(
+                                        ln_f_out[0].float(), target_vecs.float(), dim=-1
+                                    )
+                                    ln_f_cosines.append(cos)
+                                    if compute_rankme:
+                                        rankme_vectors.append(
+                                            ln_f_out[0][:, -1, :].float().detach().cpu()
+                                        )
 
                 for i, dataset in enumerate(self.args.multicontext_datasets):
                     means[f"{i}"] = losses[f"{i}"].mean()
@@ -1307,6 +1326,16 @@ class Trainer:
                 for i, dataset in enumerate(self.args.multicontext_datasets):
                     out['datasets'][dataset][split] = means[f"{i}"]
                     out['datasets'][dataset][f"{split}_std"] = std_devs[f"{i}"]
+                    if split == 'val':
+                        out['datasets'][dataset].update({
+                            'top1_prob': torch.cat(mc_top1_probs[i]).mean() if mc_top1_probs[i] else torch.tensor(float('nan')),
+                            'top1_correct': torch.cat(mc_top1_corrects[i]).mean() if mc_top1_corrects[i] else torch.tensor(float('nan')),
+                            'target_rank': torch.cat(mc_target_ranks[i]).mean() if mc_target_ranks[i] else torch.tensor(float('nan')),
+                            'target_left_prob': torch.cat(mc_target_left_probs[i]).mean() if mc_target_left_probs[i] else torch.tensor(float('nan')),
+                            'target_prob': torch.cat(mc_target_probs[i]).mean() if mc_target_probs[i] else torch.tensor(float('nan')),
+                            'target_rank_95': torch.quantile(torch.cat(mc_target_ranks[i]), 0.95) if mc_target_ranks[i] else torch.tensor(float('nan')),
+                            'left_prob_95': torch.quantile(torch.cat(mc_left_inclusive_probs[i]).float(), 0.95) if mc_left_inclusive_probs[i] else torch.tensor(float('nan')),
+                        })
 
                 # general train and val losses, as well as std dev
                 out[split] = mean_avg / len(self.args.multicontext_datasets)
@@ -2189,6 +2218,8 @@ class Trainer:
                 log_message+=f", train_stdev {dataset_losses['train_std']:.4f}"
                 log_message+=f", val loss {dataset_losses['val']:.4f}"
                 log_message+=f", val_stdev {dataset_losses['val_std']:.4f}"
+                if 'top1_correct' in dataset_losses and not math.isnan(dataset_losses['top1_correct']):
+                    log_message+=f", val acc {dataset_losses['top1_correct']:.4f}"
                 if self.args.gns_type is not None:
                     log_message+=f", gns {self.gns:.2f}"
                 log_message+=f", lr {self.lr:.4f}"

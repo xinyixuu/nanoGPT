@@ -37,18 +37,19 @@ def _write_yaml_character(fp: TextIO, record: dict) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Stream Korean text into aligned 23-lane Hangul factor streams.")
+    p = argparse.ArgumentParser(description="Stream Korean text into aligned 23- or 24-lane Hangul factor streams.")
     p.add_argument("input", help="UTF-8 Korean text file")
     p.add_argument("output_dir", help="Directory that will receive lane/input.txt files")
     p.add_argument("--metadata-json", default="metadata.json", help="Streaming JSON sidecar path relative to output_dir; use '' to disable")
     p.add_argument("--metadata-yaml", default="metadata.yaml", help="Streaming YAML sidecar path relative to output_dir; use '' to disable")
     p.add_argument("--buffering", type=int, default=1024 * 1024, help="Per-file output buffer size in bytes")
     p.add_argument("--chunk-size", type=int, default=65536, help="Input characters to process before flushing bounded lane buffers")
+    p.add_argument("--use-pos", "--pos", action="store_true", help="Include part-of-speech (POS) tag lane using kiwipiepy")
     args = p.parse_args()
 
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    tok = HangulFactorizedTokenizer()
+    tok = HangulFactorizedTokenizer(use_pos=args.use_pos)
 
     lane_handles: list[TextIO] = []
     json_fp: TextIO | None = None
@@ -82,22 +83,43 @@ def main() -> None:
                 if not chunk:
                     break
                 chunk_lane_chars = [[] for _ in tok.lane_names]
-                for ch in chunk:
-                    ids = tok.encode_char(ch)
-                    for i, idx in enumerate(ids):
-                        chunk_lane_chars[i].append(tok.token_for(i, idx))
+                if tok.use_pos:
+                    encoded_seq = tok.encode_text(chunk)
+                    for item in encoded_seq:
+                        ch = item["char"]
+                        ids = item["indices"]
+                        for i, idx in enumerate(ids):
+                            chunk_lane_chars[i].append(tok.token_for(i, idx))
 
-                    if json_fp is not None or yaml_fp is not None:
-                        record = tok.metadata_for_char(ch, position)
-                        if json_fp is not None:
-                            if not first_json_record:
-                                json_fp.write(",\n")
-                            json_fp.write("    ")
-                            _json_dump(record, json_fp)
-                            first_json_record = False
-                        if yaml_fp is not None:
-                            _write_yaml_character(yaml_fp, record)
-                    position += 1
+                        if json_fp is not None or yaml_fp is not None:
+                            pos_tag = tok.id_to_value[23][ids[23]] if len(ids) > 23 else "UNK"
+                            record = tok.metadata_for_char(ch, position, pos_tag=pos_tag)
+                            if json_fp is not None:
+                                if not first_json_record:
+                                    json_fp.write(",\n")
+                                json_fp.write("    ")
+                                _json_dump(record, json_fp)
+                                first_json_record = False
+                            if yaml_fp is not None:
+                                _write_yaml_character(yaml_fp, record)
+                        position += 1
+                else:
+                    for ch in chunk:
+                        ids = tok.encode_char(ch)
+                        for i, idx in enumerate(ids):
+                            chunk_lane_chars[i].append(tok.token_for(i, idx))
+
+                        if json_fp is not None or yaml_fp is not None:
+                            record = tok.metadata_for_char(ch, position)
+                            if json_fp is not None:
+                                if not first_json_record:
+                                    json_fp.write(",\n")
+                                json_fp.write("    ")
+                                _json_dump(record, json_fp)
+                                first_json_record = False
+                            if yaml_fp is not None:
+                                _write_yaml_character(yaml_fp, record)
+                        position += 1
 
                 for i, chars in enumerate(chunk_lane_chars):
                     lane_handles[i].write("".join(chars))

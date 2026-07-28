@@ -38,20 +38,29 @@ def main() -> None:
     p.add_argument("prompt", help="Rendered prompt text, e.g. 'English: Hello Korean: '")
     p.add_argument("output_dir", help="Directory for <lane>.bin prompt files")
     p.add_argument("--dataset-root", default="data/korean_mc", help="Dataset root containing lane meta.pkl files")
+    p.add_argument("--use-pos", "--pos", action="store_true", help="Include part-of-speech (POS) tag lane using kiwipiepy")
     args = p.parse_args()
 
-    tok = HangulFactorizedTokenizer()
+    tok = HangulFactorizedTokenizer(use_pos=args.use_pos)
     dataset_root = Path(args.dataset_root)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     lane_text = {name: [] for name in tok.lane_names}
     char_text: list[str] = []
-    for ch in args.prompt:
-        ids = tok.encode_char(ch)
-        for i, idx in enumerate(ids):
-            lane_text[tok.lane_names[i]].append(tok.token_for(i, idx))
-        char_text.append(ch)
+    if tok.use_pos:
+        for item in tok.encode_text(args.prompt):
+            ch = item["char"]
+            ids = item["indices"]
+            for i, idx in enumerate(ids):
+                lane_text[tok.lane_names[i]].append(tok.token_for(i, idx))
+            char_text.append(ch)
+    else:
+        for ch in args.prompt:
+            ids = tok.encode_char(ch)
+            for i, idx in enumerate(ids):
+                lane_text[tok.lane_names[i]].append(tok.token_for(i, idx))
+            char_text.append(ch)
 
     start_files: list[str] = []
     dtypes: set[str] = set()
