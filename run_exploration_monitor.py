@@ -18,6 +18,7 @@ Interactive keybindings:
   E     - export CSV with prompt for custom name
   s     - save current layout
   p     - shows help menu
+  I     - view the associated exploration YAML file
   g     - graphs first two rows
   L     - graph & connect points sharing the 3rd column value
   1–9   - graph & connect points sharing merged columns 3..(2+N)
@@ -47,8 +48,8 @@ from typing import Dict, List, Optional
 import yaml
 import math
 from textual.app import App, ComposeResult
-from textual.containers import Container
-from textual.widgets import DataTable, Footer, Header, Input, Label, Button
+from textual.containers import Container, VerticalScroll
+from textual.widgets import DataTable, Footer, Header, Input, Label, Button, Static
 from textual import events, on, work
 from textual.screen import Screen
 
@@ -85,6 +86,7 @@ HOTKEYS_TEXT = (
     "g: graph first two columns (matplotlib)\n"
     "g: graph first two columns (opens a Plotly window)\n"
     "p: shows help menu\n"
+    "I: view the associated exploration YAML file\n"
     "L: graph & connect points sharing the 3rd column value\n"
     "1–9: graph & connect points sharing merged columns 3..(2+N)\n"
     "q # #: multibarcharts - `q [1-9] [1-9]` - e.g. 'q 3 2' will create bar charts for columns 1 2 and 3, the next two columns (column 4 and column 5) as merged labels\n"
@@ -128,10 +130,46 @@ class FileNameScreen(Screen[str | None]):
         self.dismiss(None)
 
 
+class ExplorationConfigScreen(Screen):
+    """Read-only view of the YAML configuration associated with a run log."""
+
+    BINDINGS = [("escape", "dismiss", "Close")]
+
+    def __init__(self, config_file: Path) -> None:
+        super().__init__()
+        self.config_file = config_file
+
+    def compose(self) -> ComposeResult:
+        yield Label(f"Exploration YAML: {self.config_file}", id="config-title")
+        if self.config_file.exists():
+            contents = self.config_file.read_text()
+        else:
+            contents = "Associated exploration YAML file was not found."
+        with VerticalScroll(id="config-scroll"):
+            yield Static(contents, id="config-contents", markup=False)
+        yield Button("Close", id="close-config")
+
+    def action_dismiss(self) -> None:
+        self.dismiss()
+
+    @on(Button.Pressed, "#close-config")
+    def _close(self) -> None:
+        self.dismiss()
+
+
 class MonitorApp(App):
     CSS = """
     Screen { align: center middle; }
     Container { height: 1fr; }
+    #config-title { width: 90%; height: 1; text-style: bold; }
+    #config-scroll {
+        width: 90%;
+        height: 1fr;
+        border: round $accent;
+        padding: 1;
+    }
+    #config-contents { width: auto; }
+    #close-config { margin-top: 1; }
     DataTable#table {
         height: 1fr;
         width: 1fr;
@@ -143,6 +181,11 @@ class MonitorApp(App):
     def __init__(self, log_file: Path, interval: float, csv_dir: str) -> None:
         super().__init__()
         self.log_file = log_file
+        self.title = log_file.name
+        self.sub_title = str(log_file)
+        self.exploration_config_file = (
+            Path(__file__).resolve().parent / "explorations" / log_file.name
+        )
         self.interval = interval
         # Use JSON config file with same base name as YAML log file
         self.config_file = log_file.parent / f"{log_file.name}_monitor.json"
@@ -886,6 +929,8 @@ class MonitorApp(App):
             self.refresh_table(new_cursor=0)
         elif key == "p":
             self._msg(HOTKEYS_TEXT, timeout=10.0)
+        elif key == "I":
+            self.push_screen(ExplorationConfigScreen(self.exploration_config_file))
         elif key == "g":
             # ── Graph using first two visible columns: col[0] ⇒ Y, col[1] ⇒ X ──
             try:
