@@ -75,22 +75,23 @@ common_group:
   log_rankme: [true]
   log_areq: [true]
 
+
+optimizer: ["muon"]
+weight_decay: [0.0]
+muon_momentum: [0.95]
+muon_ns_steps: [5]
+muon_nesterov: [true]
+muon_min_ndim: [2]
+
 parameter_groups:
   - named_group_static:
       - "qk_norm"
-      - "peri_ln"
       - "rotary"
       - "squared_relu"
       - "relu2max"
       - "infinite"
-      - "mqa"
-    n_head:
-      range:
-        start: 1
-        end: 12
-        step: 1
+      - "hd_100"
     named_group_variations:
-      - "head_dimension"
       - "residual_architecture"
 
   - named_group_static:
@@ -99,12 +100,124 @@ parameter_groups:
       - "rotary"
       - "softmax"
       - "infinite"
-      - "mqa"
-    n_head:
-      range:
-        start: 1
-        end: 12
-        step: 1
+      - "hd_100"
     named_group_variations:
-      - "head_dimension"
       - "residual_architecture"
+
+  - named_group_static:
+      - "qk_norm"
+      - "rotary"
+      - "squared_relu"
+      - "relu2max"
+      - "infinite"
+      - "hd_100"
+    named_group_variations:
+      - "residual_architecture"
+    muon_exclude_substrings:
+      - [" "]
+
+  - named_group_static:
+      - "qk_norm"
+      - "peri_ln"
+      - "rotary"
+      - "softmax"
+      - "infinite"
+      - "hd_100"
+    named_group_variations:
+      - "residual_architecture"
+    muon_exclude_substrings:
+      - [" "]
+
+  - named_group_static:
+      - "qk_norm"
+      - "rotary"
+      - "softmax"
+      - "infinite"
+      - "hd_100"
+    named_group_variations:
+      - "residual_architecture"
+    muon_exclude_substrings:
+      - [" "]
+
+  # CAPPED HS NORM AND HSNORM VARIATONIS
+  - named_group_static:
+      - "qk_norm"
+      - "rotary"
+      - "squared_relu"
+      - "relu2max"
+      - "infinite"
+      - "hd_100"
+    named_group_variations:
+      - "residual_architecture"
+    muon_exclude_substrings:
+      - [" "]
+    norm_variant_output: ["cappedhyperspherenorm", "rmsnorm"]
+
+  - named_group_static:
+      - "qk_norm"
+      - "rotary"
+      - "squared_relu"
+      - "relu2max"
+      - "infinite"
+      - "hd_100"
+    named_group_variations:
+      - "residual_architecture"
+    muon_exclude_substrings:
+      - [" "]
+    norm_variant_output: ["cappedhyperspherenorm", "rmsnorm"]
+    norm_variant_wte: ["rmsnorm", "hyperspherenorm"]
+
+  - named_group_static:
+      - "qk_norm"
+      - "rotary"
+      - "squared_relu"
+      - "relu2max"
+      - "infinite"
+      - "hd_100"
+    named_group_variations:
+      - "residual_architecture"
+    muon_exclude_substrings:
+      - [" "]
+    norm_variant_output: ["cappedhyperspherenorm", "rmsnorm", "hyperspherenorm"]
+    norm_variant_wte: ["rmsnorm", "hyperspherenorm"]
+    norm_variant_attn: ["cappedhyperspherenorm"]
+    use_peri_ln: [true, false]
+
+  # CAPPED HS NORM AND HSNORM VARIATONS WITHOUT THE exclude substrings
+  - named_group_static:
+      - "qk_norm"
+      - "rotary"
+      - "squared_relu"
+      - "relu2max"
+      - "infinite"
+      - "hd_100"
+    named_group_variations:
+      - "residual_architecture"
+    norm_variant_output: ["cappedhyperspherenorm", "rmsnorm"]
+
+  - named_group_static:
+      - "qk_norm"
+      - "rotary"
+      - "squared_relu"
+      - "relu2max"
+      - "infinite"
+      - "hd_100"
+    named_group_variations:
+      - "residual_architecture"
+    norm_variant_output: ["cappedhyperspherenorm", "rmsnorm"]
+    norm_variant_wte: ["rmsnorm", "hyperspherenorm"]
+
+  - named_group_static:
+      - "qk_norm"
+      - "rotary"
+      - "squared_relu"
+      - "relu2max"
+      - "infinite"
+      - "hd_100"
+    named_group_variations:
+      - "residual_architecture"
+    norm_variant_output: ["cappedhyperspherenorm", "rmsnorm", "hyperspherenorm"]
+    norm_variant_wte: ["rmsnorm", "hyperspherenorm"]
+    norm_variant_attn: ["cappedhyperspherenorm"]
+    use_peri_ln: [true, false]
+
