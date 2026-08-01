@@ -25,6 +25,7 @@ Interactive keybindings:
   z # # - Δ-bar chart (trim baseline) – e.g. ‘z 3 2’
   r–y   - barcharts with labels merged (r=1, y=3)
   c     - cycle colour-map for current column (high→low, low→high, off)
+  D     - remove colour-maps from all columns
   C # # - correlation + scatter for columns (1-based indexes, e.g. C 1 2)
   w     - toggle column width to fit largest visible cell
   u     - unsort / remove current column from the sort stack
@@ -90,6 +91,7 @@ HOTKEYS_TEXT = (
     "z # #: Δ-bar chart (trim baseline) – e.g. ‘z 3 2’\n"
     "r–y: barcharts with labels merged (r=1, y=3)\n"
     "c: cycle colour-map for current column (high→low, low→high, off)\n"
+    "D: remove colour-maps from all columns\n"
     "C # #: correlation + scatter (1-based indexes, e.g. C 1 2)\n"
     "w: toggle column width to fit largest visible cell\n"
     "u: unsort / remove current column from the sort stack\n"
@@ -294,14 +296,40 @@ class MonitorApp(App):
         edge_name = self.columns[0] if move_left else self.columns[-1]
         if col_name == edge_name:
             return
+        previous_columns = self.columns.copy()
         updated = [col for col in self.all_columns if col != col_name]
         edge_index = updated.index(edge_name)
         insert_index = edge_index if move_left else edge_index + 1
         updated.insert(insert_index, col_name)
         self.all_columns = updated
         self.columns = [col for col in self.all_columns if col not in self.hidden_cols]
+        self._remap_indexed_column_settings(previous_columns)
         new_cursor = self.columns.index(col_name) if move_cursor else col_index
         self.refresh_table(new_cursor=new_cursor)
+
+    def _remap_indexed_column_settings(self, previous_columns: List[str]) -> None:
+        """Keep colour and sort settings attached to columns after reordering."""
+        colour_by_name = {
+            previous_columns[index]: mode
+            for index, mode in self.colour_columns.items()
+            if 0 <= index < len(previous_columns)
+        }
+        sort_by_name = [
+            (previous_columns[index], ascending)
+            for index, ascending in self.sort_stack
+            if 0 <= index < len(previous_columns)
+        ]
+        new_indices = {name: index for index, name in enumerate(self.columns)}
+        self.colour_columns = {
+            new_indices[name]: mode
+            for name, mode in colour_by_name.items()
+            if name in new_indices
+        }
+        self.sort_stack = [
+            (new_indices[name], ascending)
+            for name, ascending in sort_by_name
+            if name in new_indices
+        ]
 
     def get_cell(self, entry: Dict, col_name: str):
         """Retrieve the value for a given column in an entry."""
@@ -779,6 +807,7 @@ class MonitorApp(App):
             # Move column
             t = c - 1 if key == "h" else c + 1
             if 0 <= t < len(self.columns):
+                previous_columns = self.columns.copy()
                 n1, n2 = self.columns[c], self.columns[t]
                 i1, i2 = self.all_columns.index(n1), self.all_columns.index(n2)
                 self.all_columns[i1], self.all_columns[i2] = (
@@ -788,6 +817,7 @@ class MonitorApp(App):
                 self.columns = [
                     col for col in self.all_columns if col not in self.hidden_cols
                 ]
+                self._remap_indexed_column_settings(previous_columns)
                 self.refresh_table(new_cursor=t)
         elif key in ("k", "j", "v", "m"):
             maxr = len(self.current_entries) - 1
@@ -891,6 +921,13 @@ class MonitorApp(App):
                 self.colour_columns.pop(cur, None)
                 self._msg(f"Colour OFF for {self.columns[cur]}")
             self.refresh_table()
+        elif key == "D":
+            if self.colour_columns:
+                self.colour_columns.clear()
+                self.refresh_table(new_cursor=c)
+                self._msg("All column colours removed")
+            else:
+                self._msg("No active column colours")
         elif key == "w":
             col = self.columns[c]
             if col in self.auto_fit_columns:

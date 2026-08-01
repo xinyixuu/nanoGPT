@@ -130,6 +130,16 @@ RESERVED_CONFIG_KEYS = {
     "distillation_source_run_name",
     "run_name_override",
 }
+DEFAULT_SENTINEL = "default"
+
+
+def _without_default_values(config: dict) -> dict:
+    """Drop parameters whose selected sweep value is the ``default`` sentinel."""
+    return {
+        key: value
+        for key, value in config.items()
+        if value != DEFAULT_SENTINEL
+    }
 
 
 def expand_range(val):
@@ -426,7 +436,8 @@ def _extract_common_group(cfg: dict) -> tuple[dict, set[str]]:
             raise ValueError(
                 "Values in 'common_group' cannot contain nested option structures"
             )
-        common[key] = normalized
+        if normalized != DEFAULT_SENTINEL:
+            common[key] = normalized
 
     return common, set(common)
 
@@ -520,7 +531,7 @@ def generate_combinations(config: dict):
                 for key, value in metadata.items():
                     combo_dict[key] = deepcopy(value)
                 for final in _apply_conditionals(combo_dict, conditionals):
-                    yield final
+                    yield _without_default_values(final)
 
     for combo in recurse(cfg):
         merged = dict(common_values)
@@ -716,6 +727,11 @@ def build_command(combo: dict) -> list[str]:
     cmd = ['python3', 'train.py']
     for k, v in combo.items():
         if k.startswith('_') or k in RESERVED_CONFIG_KEYS:
+            continue
+        # A YAML null means that the Python setting should retain its None
+        # default. Omitting the CLI option is the only type-safe way to convey
+        # that through argparse (rather than passing the string "None").
+        if v is None:
             continue
         if isinstance(v, bool):
             cmd.append(f"--{'' if v else 'no-'}{k}")
