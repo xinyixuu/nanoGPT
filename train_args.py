@@ -23,6 +23,13 @@ def parse_args():
     training_group = parser.add_argument_group('training_group')
     logging_group = parser.add_argument_group('logging_group')
 
+    model_group.add_argument(
+        '--attention_residual_variant', default='standard', choices=['standard', 'full'],
+        help='Residual stream implementation: ordinary addition or full depth-wise attention.',
+    )
+    model_group.add_argument('--attention_residual_eps', default=1e-6, type=float,
+                             help='RMSNorm epsilon used for Full Attention Residual routing keys.')
+
     # MLP Bias Configuration
     model_group.add_argument('--mlp_up_bias', default=None, action=argparse.BooleanOptionalAction, help='Whether to use bias in MLP up projections. If None, uses global bias setting.')
     model_group.add_argument('--mlp_down_bias', default=None, action=argparse.BooleanOptionalAction, help='Whether to use bias in MLP down projections. If None, uses global bias setting.')

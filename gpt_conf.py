@@ -107,6 +107,10 @@ class GPTConfig:
     ln_f_input_mixer_variant: str = "linear"
     ln_f_mixer_top_k: int = 2
 
+    # Depth-wise residual routing. "full" stores every attention/MLP output.
+    attention_residual_variant: str = "standard"
+    attention_residual_eps: float = 1e-6
+
     # Attention Variation Specific
 
     ## Flash Lobo

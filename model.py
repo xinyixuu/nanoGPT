@@ -47,6 +47,7 @@ from initializations.initialization_variations import init_dictionary
 
 from shared_param_utils import SharedParamGroupCreator
 from variations.block_variations import Block
+from variations.attention_residual_variations import FullAttentionResidual
 
 class GPT(nn.Module):
 
@@ -143,6 +144,13 @@ class GPT(nn.Module):
 
         self.transformer['drop'] = nn.Dropout(config.dropout)
         self.transformer['h'] = nn.ModuleList([Block(config, mlp=shared_mlp_array[i], attn=shared_attn_array[i]) for i in range(config.n_layer)])
+        self.attention_residual_variant = config.attention_residual_variant
+        if self.attention_residual_variant == "full":
+            self.attention_residual = FullAttentionResidual(
+                2 * config.n_layer + 1, config.n_embd, config.attention_residual_eps
+            )
+        elif self.attention_residual_variant != "standard":
+            raise ValueError(f"unknown attention_residual_variant: {self.attention_residual_variant}")
         self.transformer['ln_f'] = norm_dictionary[config.norm_variant_output](config)
 
         # Optional post-embedding normalizations
@@ -255,6 +263,19 @@ class GPT(nn.Module):
     def compute_lm_head_logits(self, x, lm_head_module):
         weight = self.apply_lm_head_norm(lm_head_module.weight)
         return F.linear(x, weight, lm_head_module.bias)
+
+    def _forward_full_attention_residual(self, x, iter_num):
+        """Run blocks while retaining each sublayer output as a depth source."""
+        sources = [x]
+        destination = 0
+        for block in self.transformer.h:
+            attn_input = self.attention_residual(sources, destination)
+            sources.append(block.attention_residual_attn(attn_input, iter_num))
+            destination += 1
+            mlp_input = self.attention_residual(sources, destination)
+            sources.append(block.attention_residual_mlp(mlp_input, iter_num))
+            destination += 1
+        return self.attention_residual(sources, destination)
 
     def _init_weights(self, module):
         """
@@ -441,7 +462,11 @@ class GPT(nn.Module):
                 layer_outputs = [x]
 
             layer_idx = 1
-            for block in self.transformer.h:
+            blocks = self.transformer.h
+            if self.attention_residual_variant == "full":
+                x = self._forward_full_attention_residual(x, iter_num)
+                blocks = ()
+            for block in blocks:
                 x = block(x, iter_num)
 
                 # Steering logic
@@ -584,7 +609,11 @@ class GPT(nn.Module):
                 layer_outputs = [x]
 
             layer_idx = 1
-            for block in self.transformer.h:
+            blocks = self.transformer.h
+            if self.attention_residual_variant == "full":
+                x = self._forward_full_attention_residual(x, iter_num)
+                blocks = ()
+            for block in blocks:
                 # Propagate tokens through layers
                 x = block(x, iter_num)
 
