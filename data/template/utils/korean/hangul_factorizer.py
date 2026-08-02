@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Utilities for factorizing modern Korean Hangul syllables into 23 lanes.
+"""Utilities for factorizing modern Korean Hangul syllables into 23 or 24 lanes.
 
 The tokenizer keeps non-decomposable characters losslessly in the companion
 character stream/metadata while Hangul syllables are represented by fixed,
@@ -46,6 +46,18 @@ FINAL_COMPONENTS = {
     "K": ("K", PAD, PAD), "T": ("T", PAD, PAD), "P": ("P", PAD, PAD), "H": ("H", PAD, PAD),
 }
 
+POS_TAGS = [
+    "NNG", "NNP", "NNB", "NR", "NP", 
+    "VV", "VA", "VX", "VCP", "VCN", 
+    "MM", "MAG", "MAJ", "IC", 
+    "JKS", "JKC", "JKG", "JKO", "JKB", "JKV", "JKQ", "JX", "JC", 
+    "EP", "EF", "EC", "ETN", "ETM", 
+    "XPN", "XSN", "XSV", "XSA", "XR", 
+    "SF", "SP", "SS", "SE", "SO", "SW",
+    "SL", "SH", "SN", 
+    "W_URL", "W_EMAIL", "W_HASHTAG", "W_MENTION"
+]
+
 @dataclass(frozen=True)
 class Lane:
     name: str
@@ -79,14 +91,22 @@ LANES: List[Lane] = [
 ]
 LANE_NAMES = [lane.name for lane in LANES]
 
+POS_LANE = Lane("pos", [PAD, "UNK", *POS_TAGS], "Part-of-speech tag from Kiwi.")
+LANES_WITH_POS: List[Lane] = [*LANES, POS_LANE]
+LANE_NAMES_WITH_POS = [lane.name for lane in LANES_WITH_POS]
+
 class HangulFactorizedTokenizer:
     lanes = LANES
     lane_names = LANE_NAMES
 
-    def __init__(self) -> None:
-        self.value_to_id = [{v: i for i, v in enumerate(lane.values)} for lane in LANES]
-        self.id_to_value = [list(lane.values) for lane in LANES]
-        self._encode_cache: Dict[str, tuple[int, ...]] = {}
+    def __init__(self, use_pos: bool = False) -> None:
+        self.use_pos = use_pos
+        self.lanes = LANES_WITH_POS if use_pos else LANES
+        self.lane_names = LANE_NAMES_WITH_POS if use_pos else LANE_NAMES
+        self.value_to_id = [{v: i for i, v in enumerate(lane.values)} for lane in self.lanes]
+        self.id_to_value = [list(lane.values) for lane in self.lanes]
+        self._encode_cache: Dict[Any, tuple[int, ...]] = {}
+        self.kiwi = None
 
     @staticmethod
     def is_hangul_syllable(char: str) -> bool:
@@ -97,9 +117,12 @@ class HangulFactorizedTokenizer:
         s = ord(char) - S_BASE
         return s // N_COUNT, (s % N_COUNT) // T_COUNT, s % T_COUNT
 
-    def _features(self, char: str) -> List[str]:
+    def _features(self, char: str, pos_tag: str = "UNK") -> List[str]:
+        if self.use_pos and pos_tag not in POS_TAGS:
+            pos_tag = "UNK"
         if not self.is_hangul_syllable(char):
-            return [NON_HANGUL] + [PAD] * 22
+            base_features = [NON_HANGUL] + [PAD] * 22
+            return base_features + [pos_tag] if self.use_pos else base_features
         l, v, t = self._decompose(char)
         cho, jung, jong = CHOSEONG[l], JUNGSEONG[v], JONGSEONG[t]
         vb1, vb2 = VOWEL_COMPONENTS[jung]
@@ -107,15 +130,49 @@ class HangulFactorizedTokenizer:
         place = "null" if cho == "NG" else ("velar" if cho in {"G","GG","K"} else "labial" if cho in {"M","B","BB","P"} else "glottal" if cho == "H" else "coronal")
         height = "low" if "A" in jung else "high" if jung in {"O","YO","U","YU","EU","YI","I","WI"} else "mid"
         back = "front" if jung in {"AE","E","YAE","YE","OE","WE","WI","I"} else "back" if jung in {"O","WA","WAE","YO","U","WEO","YU"} else "central"
-        return ["HANGUL", cho, jung, jong, vb1, vb2, str(int(jung in {"WA","WAE","OE","WEO","WE","WI"})), str(int(jung.startswith("Y"))), str(int("I" in (vb1, vb2) or jung in {"AE","E","OE","WE","WI","YI","I"})), jb1, jb2, jb3, str(int(cho in {"GG","DD","BB","SS","JJ"})), str(int(cho in {"CH","K","T","P","H"})), str(int(cho in {"N","R","M","NG"})), place, height, back, str(int(jung in {"O","WA","WAE","OE","YO","U","WEO","WE","WI","YU"})), str(int(t in {2,3,5,6,9,10,11,12,13,14,15,18,20})), str(int(t != 0)), str(t), str(ord(char) % 64)]
+        base_features = ["HANGUL", cho, jung, jong, vb1, vb2, str(int(jung in {"WA","WAE","OE","WEO","WE","WI"})), str(int(jung.startswith("Y"))), str(int("I" in (vb1, vb2) or jung in {"AE","E","OE","WE","WI","YI","I"})), jb1, jb2, jb3, str(int(cho in {"GG","DD","BB","SS","JJ"})), str(int(cho in {"CH","K","T","P","H"})), str(int(cho in {"N","R","M","NG"})), place, height, back, str(int(jung in {"O","WA","WAE","OE","YO","U","WEO","WE","WI","YU"})), str(int(t in {2,3,5,6,9,10,11,12,13,14,15,18,20})), str(int(t != 0)), str(t), str(ord(char) % 64)]
+        return base_features + [pos_tag] if self.use_pos else base_features
 
-    def encode_char(self, char: str) -> List[int]:
-        cached = self._encode_cache.get(char)
+    def encode_char(self, char: str, pos_tag: str = "UNK", return_tags: bool = False) -> List[Any]:
+        if self.use_pos and pos_tag not in POS_TAGS:
+            pos_tag = "UNK"
+        cache_key = (char, pos_tag) if self.use_pos else char
+        cached = self._encode_cache.get(cache_key)
         if cached is None:
-            vals = self._features(char)
+            vals = self._features(char, pos_tag=pos_tag)
             cached = tuple(self.value_to_id[i].get(v, 0) for i, v in enumerate(vals))
-            self._encode_cache[char] = cached
+            self._encode_cache[cache_key] = cached
+        if return_tags:
+            return [self.id_to_value[i][idx] for i, idx in enumerate(cached)]
         return list(cached)
+
+    def encode_text(self, text: str, return_tags: bool = False) -> List[Dict[str, Any]]:
+        """Translates a text string into a sequence of factorized arrays, contextualized with POS if enabled."""
+        char_idx_to_pos = {}
+        if self.use_pos:
+            try:
+                from kiwipiepy import Kiwi
+                if self.kiwi is None:
+                    self.kiwi = Kiwi()
+            except ImportError:
+                self.kiwi = None
+                
+            if self.kiwi is not None:
+                tokens = self.kiwi.tokenize(text)
+                for token in tokens:
+                    for i in range(token.start, token.start + token.len):
+                        char_idx_to_pos[i] = token.tag
+                        
+        encoded_sequence = []
+        for i, char in enumerate(text):
+            pos_tag = char_idx_to_pos.get(i, "UNK")
+            if pos_tag not in POS_TAGS:
+                pos_tag = "UNK"
+                
+            encoded = self.encode_char(char, pos_tag=pos_tag, return_tags=return_tags)
+            encoded_sequence.append({"char": char, "indices": encoded})
+            
+        return encoded_sequence
 
     def decode_indices(self, indices: Sequence[int]) -> str:
         vals = [self.id_to_value[i][idx] if 0 <= idx < len(self.id_to_value[i]) else PAD for i, idx in enumerate(indices[:23])]
@@ -138,12 +195,24 @@ class HangulFactorizedTokenizer:
                 return code
         return self.value_to_id[lane_index].get(token, 0)
 
-    def metadata_for_char(self, char: str, position: int) -> Dict[str, Any]:
-        ids = self.encode_char(char)
-        return {"position": position, "char": char, "codepoint": f"U+{ord(char):04X}", "is_hangul": self.is_hangul_syllable(char), "lanes": {n: {"id": ids[i], "value": self.id_to_value[i][ids[i]]} for i, n in enumerate(LANE_NAMES)}}
+    def metadata_for_char(self, char: str, position: int, pos_tag: str = "UNK") -> Dict[str, Any]:
+        ids = self.encode_char(char, pos_tag=pos_tag)
+        return {"position": position, "char": char, "codepoint": f"U+{ord(char):04X}", "is_hangul": self.is_hangul_syllable(char), "lanes": {n: {"id": ids[i], "value": self.id_to_value[i][ids[i]]} for i, n in enumerate(self.lane_names)}}
 
     def lane_metadata(self) -> List[Dict[str, Any]]:
-        return [{"index": i, "name": lane.name, "description": lane.description, "values": list(lane.values)} for i, lane in enumerate(LANES)]
+        return [{"index": i, "name": lane.name, "description": lane.description, "values": list(lane.values)} for i, lane in enumerate(self.lanes)]
+
+
+class HangulPosFactorizedTokenizer(HangulFactorizedTokenizer):
+    """Hangul factorized tokenizer equipped with the 24th part-of-speech (POS) lane."""
+    lanes = LANES_WITH_POS
+    lane_names = LANE_NAMES_WITH_POS
+
+    def __init__(self, use_pos: bool = True) -> None:
+        super().__init__(use_pos=use_pos)
+
+
+HangulFactorizedPosTokenizer = HangulPosFactorizedTokenizer
 
 
 def dump_json(path: Path, data: Any) -> None:

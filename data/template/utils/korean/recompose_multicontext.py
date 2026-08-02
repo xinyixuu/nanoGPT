@@ -15,10 +15,11 @@ def main() -> None:
     p.add_argument("output", help="Rendered UTF-8 output text")
     p.add_argument("--filename", default="input.txt", help="File name to read from each lane subdirectory")
     p.add_argument("--char-file", default=None, help="Optional original/non-Hangul passthrough character stream")
+    p.add_argument("--use-pos", "--pos", action="store_true", help="Include part-of-speech (POS) tag lane")
     args = p.parse_args()
 
     root = Path(args.lanes_dir)
-    tok = HangulFactorizedTokenizer()
+    tok = HangulFactorizedTokenizer(use_pos=args.use_pos)
     streams = []
     for name in tok.lane_names:
         direct = root / f"{name}.txt"
@@ -30,7 +31,7 @@ def main() -> None:
     n = max(len(s) for s in streams)
     chars = []
     for pos in range(n):
-        ids = [tok.id_from_token_or_label(i, streams[i][pos] if pos < len(streams[i]) else "") for i in range(23)]
+        ids = [tok.id_from_token_or_label(i, streams[i][pos] if pos < len(streams[i]) else "") for i in range(len(tok.lanes))]
         rendered = tok.decode_indices(ids)
         if rendered:
             chars.append(rendered)
