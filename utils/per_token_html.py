@@ -35,6 +35,30 @@ def _write(path, content):
         handle.write(content)
 
 
+def _write_static_slideshow(output_dir, rows):
+    """Write keyboard/button navigation across validation PNG snapshots."""
+    slides = []
+    for dataset in sorted({row["dataset"] for row in rows}):
+        safe_dataset = "".join(c if c.isalnum() or c in "-_" else "_" for c in dataset)
+        for iteration in sorted({row["iteration"] for row in rows if row["dataset"] == dataset}):
+            slides.append({
+                "dataset": dataset,
+                "iteration": iteration,
+                "images": [
+                    f"per_token_static_{safe_dataset}_iter_{iteration:08d}_by_{label}.png"
+                    for label in ("frequency", "validation_loss", "training_loss",
+                                  "vector_magnitude", "minimum_pairwise_angle")
+                ],
+            })
+    html_page = f"""<!doctype html><meta charset='utf-8'><title>Per-token static snapshots</title>
+<h1>Per-token static snapshots</h1><p><a href='per_token_metrics.html'>Report index</a></p>
+<button id='previous'>← Previous</button> <button id='next'>Next →</button> <strong id='position'></strong>
+<div id='images'></div><script>const slides={_json(slides)};let index=0;
+function draw(){{const slide=slides[index];position.textContent=`${{slide.dataset}} — iteration ${{slide.iteration}} (${{index+1}}/${{slides.length}})`;images.replaceChildren();slide.images.forEach(path=>{{const image=document.createElement('img');image.src=path;image.style.cssText='display:block;max-width:100%;margin:1rem auto';images.appendChild(image);}});}}
+function move(delta){{index=(index+delta+slides.length)%slides.length;draw();}}previous.onclick=()=>move(-1);next.onclick=()=>move(1);document.onkeydown=event=>{{if(event.key==='ArrowLeft')move(-1);if(event.key==='ArrowRight')move(1);}};draw();</script>"""
+    _write(os.path.join(output_dir, "per_token_static_slideshow.html"), html_page)
+
+
 def _overview(output_dir, filename, title, rows, metric, descending, dual_axis):
     payload = [[r["dataset"], r["token_id"], r["token_text_escaped"], r[metric],
                 r["training_seen_count"], r["val_loss"], r["train_loss"]] for r in rows]
@@ -109,8 +133,9 @@ def write_per_token_pages(output_dir, rows, summaries, iteration):
     ]
     for filename, title, kind in histories:
         _history(output_dir, filename, title, rows, kind)
-    png_paths = write_static_dashboards(output_dir, latest)
-    filenames = [p[0] for p in pages] + [p[0] for p in histories]
+    png_paths = write_static_dashboards(output_dir, rows)
+    _write_static_slideshow(output_dir, rows)
+    filenames = [p[0] for p in pages] + [p[0] for p in histories] + ["per_token_static_slideshow.html"]
     links = "".join(f"<li><a href='{name}'>{html.escape(name)}</a></li>" for name in filenames)
     png_links = "".join(f"<li><a href='{os.path.basename(path)}'>{html.escape(os.path.basename(path))}</a></li>" for path in png_paths)
     fields = ("dataset", "metric", "populated_tokens", "vocab_size", "mean", "median", "std", "skew", "excess_kurtosis", "min", "max", "p10", "p90", "coefficient_of_variation")

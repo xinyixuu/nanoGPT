@@ -310,9 +310,10 @@ Pass `--log_per_token_metrics` to produce a report after every validation in
 `<out_dir>/per_token_metrics` (or set `--per_token_metrics_dir`). The report is
 kept out of TensorBoard and contains:
 
-TensorBoard remains independently controlled and is disabled by default. Pass
-`--tensorboard_log` to enable it; its optional TensorBoard/TensorFlow packages
-are imported only in that case. Per-token metrics are never sent to it.
+**TensorBoard is enabled by default. Add `--no-tensorboard_log` when running
+per-token reporting if TensorBoard is not required, especially when its optional
+TensorFlow installation is incompatible with the active NumPy version.**
+Per-token metrics themselves are never sent to TensorBoard.
 
 * `per_token_metrics.csv`: one row per vocabulary token and evaluation, with
   its escaped decoded text (for example, `\\n`), sampled train/validation
@@ -341,7 +342,10 @@ are imported only in that case. Per-token metrics are never sent to it.
   equivalent minimum-pairwise-angle overview and history graphs. Five static
   PNG dashboards stack all metrics vertically with a shared token order, sorted
   high-to-low by frequency, validation loss, training loss, vector magnitude,
-  and minimum pairwise angle respectively.
+  and minimum pairwise angle respectively. Static dashboards are retained for
+  every validation snapshot and use consistent per-metric y-axis limits across
+  iterations. Open `per_token_static_slideshow.html` to move through snapshots
+  with Previous/Next buttons or the left/right arrow keys.
 
 Per-token loss is always ordinary next-token cross-entropy, making reports
 comparable even when a custom aggregate training loss is selected. Only tokens

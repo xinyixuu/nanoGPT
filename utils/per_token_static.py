@@ -1,9 +1,11 @@
-"""Static, vertically aligned per-token metric dashboards."""
+"""Matplotlib static, vertically aligned per-token metric dashboards."""
 
 import os
-import math
-import struct
-import zlib
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 METRICS = (
@@ -13,76 +15,65 @@ METRICS = (
     ("vector_magnitude", "Token vector L2 magnitude"),
     ("min_pairwise_angle_deg", "Minimum pairwise angle (degrees)"),
 )
+ORDERINGS = (
+    ("frequency", "training_seen_count"),
+    ("validation_loss", "val_loss"),
+    ("training_loss", "train_loss"),
+    ("vector_magnitude", "vector_magnitude"),
+    ("minimum_pairwise_angle", "min_pairwise_angle_deg"),
+)
+
+
+def _finite_range(rows, metric):
+    values = np.asarray([row[metric] for row in rows], dtype=float)
+    values = values[np.isfinite(values)]
+    if not values.size:
+        return None
+    low, high = float(values.min()), float(values.max())
+    margin = (high - low) * 0.04 if high != low else max(abs(high) * 0.04, 0.04)
+    return low - margin, high + margin
 
 
 def write_static_dashboards(output_dir, rows):
-    """Write one five-panel PNG per dataset and requested high-to-low ordering."""
+    """Regenerate snapshot PNGs with dataset-wide, time-consistent y-axes."""
     paths = []
-    datasets = sorted({row["dataset"] for row in rows})
-    orderings = (
-        ("frequency", "training_seen_count"),
-        ("validation_loss", "val_loss"),
-        ("training_loss", "train_loss"),
-        ("vector_magnitude", "vector_magnitude"),
-        ("minimum_pairwise_angle", "min_pairwise_angle_deg"),
-    )
-    for dataset in datasets:
-        data = [row for row in rows if row["dataset"] == dataset]
-        for label, sort_metric in orderings:
-            ordered = sorted(
-                data,
-                key=lambda row: (
-                    math.isfinite(row[sort_metric]),
-                    row[sort_metric] if math.isfinite(row[sort_metric]) else -math.inf,
-                ),
-                reverse=True,
-            )
-            safe_dataset = "".join(c if c.isalnum() or c in "-_" else "_" for c in dataset)
-            path = os.path.join(output_dir, f"per_token_static_{safe_dataset}_by_{label}.png")
-            _write_dashboard_png(path, ordered)
-            paths.append(path)
+    for dataset in sorted({row["dataset"] for row in rows}):
+        dataset_rows = [row for row in rows if row["dataset"] == dataset]
+        ranges = {metric: _finite_range(dataset_rows, metric) for metric, _ in METRICS}
+        safe_dataset = "".join(c if c.isalnum() or c in "-_" else "_" for c in dataset)
+        for iteration in sorted({row["iteration"] for row in dataset_rows}):
+            snapshot = [row for row in dataset_rows if row["iteration"] == iteration]
+            for order_label, sort_metric in ORDERINGS:
+                ordered = sorted(
+                    snapshot,
+                    key=lambda row: (
+                        np.isfinite(row[sort_metric]),
+                        row[sort_metric] if np.isfinite(row[sort_metric]) else -np.inf,
+                    ),
+                    reverse=True,
+                )
+                fig, axes = plt.subplots(len(METRICS), 1, figsize=(18, 18), sharex=True)
+                x = np.arange(len(ordered))
+                for axis, (metric, metric_label) in zip(axes, METRICS):
+                    axis.scatter(x, [row[metric] for row in ordered], s=7, alpha=0.8)
+                    axis.set_ylabel(metric_label)
+                    axis.grid(alpha=0.25)
+                    if ranges[metric] is not None:
+                        axis.set_ylim(*ranges[metric])
+                axes[-1].set_xlabel(
+                    f"Token rank, sorted high-to-low by {order_label.replace('_', ' ')}"
+                )
+                fig.suptitle(
+                    f"{dataset}, iteration {iteration}: metrics sorted by "
+                    f"{order_label.replace('_', ' ')}"
+                )
+                fig.tight_layout(rect=(0, 0, 1, 0.98))
+                filename = (
+                    f"per_token_static_{safe_dataset}_iter_{iteration:08d}_"
+                    f"by_{order_label}.png"
+                )
+                path = os.path.join(output_dir, filename)
+                fig.savefig(path, dpi=150)
+                plt.close(fig)
+                paths.append(path)
     return paths
-
-
-def _write_dashboard_png(path, rows, width=1400, height=1800):
-    """Render aligned scatter panels using only the Python standard library."""
-    pixels = bytearray([255]) * (width * height * 3)
-    left, right, top, gap = 70, 25, 30, 22
-    panel_height = (height - top * 2 - gap * (len(METRICS) - 1)) // len(METRICS)
-    colors = ((31, 119, 180), (214, 39, 40), (255, 127, 14), (44, 160, 44), (148, 103, 189))
-
-    def point(x, y, color):
-        for dy in (-1, 0, 1):
-            for dx in (-1, 0, 1):
-                px, py = x + dx, y + dy
-                if 0 <= px < width and 0 <= py < height:
-                    offset = (py * width + px) * 3
-                    pixels[offset:offset + 3] = bytes(color)
-
-    for panel, ((metric, _), color) in enumerate(zip(METRICS, colors)):
-        y0 = top + panel * (panel_height + gap)
-        y1 = y0 + panel_height - 1
-        for x in range(left, width - right):
-            for y in (y0, y1):
-                offset = (y * width + x) * 3
-                pixels[offset:offset + 3] = b"\x80\x80\x80"
-        values = [row[metric] for row in rows if math.isfinite(row[metric])]
-        if not values:
-            continue
-        low, high = min(values), max(values)
-        span = high - low or 1.0
-        for rank, row in enumerate(rows):
-            value = row[metric]
-            if not math.isfinite(value):
-                continue
-            x = left + round(rank * (width - left - right - 1) / max(1, len(rows) - 1))
-            y = y1 - 8 - round((value - low) * (panel_height - 17) / span)
-            point(x, y, color)
-
-    raw = b"".join(b"\x00" + pixels[y * width * 3:(y + 1) * width * 3] for y in range(height))
-    def chunk(kind, data):
-        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
-    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-           + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
-    with open(path, "wb") as handle:
-        handle.write(png)

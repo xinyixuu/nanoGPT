@@ -7,10 +7,10 @@ from utils.per_token_metrics import PerTokenMetrics
 from train_args import parse_args
 
 
-def test_tensorboard_is_opt_in_and_independent(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["train.py", "--eval_iterval", "50"])
+def test_tensorboard_default_and_eval_interval(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["train.py", "--eval_interval", "50"])
     args, *_ = parse_args()
-    assert args.tensorboard_log is False
+    assert args.tensorboard_log is True
     assert args.eval_interval == 50
 
 
@@ -69,7 +69,12 @@ def test_per_token_metrics_exports_counts_losses_summaries_and_plot(tmp_path):
         assert "Plotly.newPlot" in graph_html
         assert "per_token_metrics.html" in graph_html
     assert "right logarithmic" in (tmp_path / "per_token_loss_by_iteration.html").read_text(encoding="utf-8")
-    assert len(list(tmp_path.glob("per_token_static_tiny_by_*.png"))) == 5
+    assert len(list(tmp_path.glob("per_token_static_tiny_iter_*_by_*.png"))) == 10
+    slideshow = (tmp_path / "per_token_static_slideshow.html").read_text(encoding="utf-8")
+    assert "per_token_static_slideshow.html" in html
+    assert "per_token_metrics.html" in slideshow
+    assert "ArrowLeft" in slideshow and "ArrowRight" in slideshow
+    assert "Previous" in slideshow and "Next" in slideshow
 
 
 def test_per_token_metrics_migrates_legacy_detail_csv(tmp_path):
