@@ -5,6 +5,8 @@ import json
 import math
 import os
 
+from utils.per_token_static import write_static_dashboards
+
 
 PLOTLY = "<script src='https://cdn.plot.ly/plotly-2.35.2.min.js'></script>"
 
@@ -38,7 +40,7 @@ def _write(path, content):
 
 def _overview(output_dir, filename, title, rows, metric, descending, dual_axis):
     payload = [[r["dataset"], r["token_id"], r["token_text_escaped"], r[metric],
-                r["training_seen_count"]] for r in rows]
+                r["training_seen_count"], r["val_loss"], r["train_loss"]] for r in rows]
     right = "<label><input id='right' type='checkbox'> right logarithmic</label>" if dual_axis else ""
     if metric == "training_seen_count":
         secondary = ("traces.push({x:labels,y:d.map(r=>r[5]),name:'validation loss',mode:'markers',yaxis:'y2'},"
@@ -60,13 +62,16 @@ ds.onchange=draw;left.onchange=draw;{'right.onchange=draw;' if dual_axis else ''
 
 def _history(output_dir, filename, title, rows, kind):
     payload = [[r["dataset"], r["token_id"], r["token_text_escaped"], r["iteration"],
-                r["train_loss"], r["val_loss"], r["training_seen_count"], r["vector_magnitude"]]
+                r["train_loss"], r["val_loss"], r["training_seen_count"], r["vector_magnitude"],
+                r["min_pairwise_angle_deg"]]
                for r in rows]
     has_right = kind == "iteration"
     right = "<label><input id='right' type='checkbox'> right logarithmic</label>" if has_right else ""
-    if kind == "vector":
-        trace_code = "traces.push({x:d.map(r=>r[3]),y:d.map(r=>r[7]),name,mode:'lines+markers'});"
-        x_title, y_title = "training iteration", "L2 vector magnitude"
+    if kind in ("vector", "angle"):
+        value_index = 7 if kind == "vector" else 8
+        trace_code = f"traces.push({{x:d.map(r=>r[3]),y:d.map(r=>r[{value_index}]),name,mode:'lines+markers'}});"
+        x_title = "training iteration"
+        y_title = "L2 vector magnitude" if kind == "vector" else "minimum pairwise angle (degrees)"
     else:
         x_index = 6 if kind == "appearances" else 3
         trace_code = (f"traces.push({{x:d.map(r=>r[{x_index}]),y:d.map(r=>r[5]),name:name+' validation',mode:'lines+markers'}},"
@@ -91,6 +96,7 @@ def write_per_token_pages(output_dir, rows, summaries, iteration):
         ("per_token_training_loss.html", "Sampled training loss", "train_loss", True, True),
         ("per_token_training_occurrences.html", "Training occurrences", "training_seen_count", False, True),
         ("per_token_vector_magnitude.html", "Token vector magnitude", "vector_magnitude", True, False),
+        ("per_token_min_pairwise_angle.html", "Minimum pairwise angle (degrees)", "min_pairwise_angle_deg", True, False),
     ]
     for filename, title, metric, descending, dual in pages:
         _overview(output_dir, filename, f"{title} at iteration {iteration}", latest, metric, descending, dual)
@@ -98,11 +104,14 @@ def write_per_token_pages(output_dir, rows, summaries, iteration):
         ("per_token_loss_by_iteration.html", "Selected-token loss and appearances vs iteration", "iteration"),
         ("per_token_loss_by_appearances.html", "Selected-token loss vs cumulative appearances", "appearances"),
         ("per_token_vector_magnitude_by_iteration.html", "Selected-token vector magnitude vs iteration", "vector"),
+        ("per_token_min_pairwise_angle_by_iteration.html", "Selected-token minimum pairwise angle vs iteration", "angle"),
     ]
     for filename, title, kind in histories:
         _history(output_dir, filename, title, rows, kind)
+    png_paths = write_static_dashboards(output_dir, latest)
     filenames = [p[0] for p in pages] + [p[0] for p in histories]
     links = "".join(f"<li><a href='{name}'>{html.escape(name)}</a></li>" for name in filenames)
+    png_links = "".join(f"<li><a href='{os.path.basename(path)}'>{html.escape(os.path.basename(path))}</a></li>" for path in png_paths)
     fields = ("dataset", "metric", "populated_tokens", "vocab_size", "mean", "median", "std", "skew", "excess_kurtosis", "min", "max", "p10", "p90", "coefficient_of_variation")
     table = "<table border='1'><tr>" + "".join(f"<th>{f}</th>" for f in fields) + "</tr>" + "".join("<tr>" + "".join(f"<td>{s.get(f, '')}</td>" for f in fields) + "</tr>" for s in summaries) + "</table>"
-    _write(os.path.join(output_dir, "per_token_metrics.html"), f"<!doctype html><meta charset='utf-8'><title>Per-token metrics</title><h1>Per-token metrics</h1><h2>Graphs</h2><ul>{links}</ul><h2>Summary statistics</h2>{table}")
+    _write(os.path.join(output_dir, "per_token_metrics.html"), f"<!doctype html><meta charset='utf-8'><title>Per-token metrics</title><h1>Per-token metrics</h1><h2>Interactive graphs</h2><ul>{links}</ul><h2>Static PNG dashboards</h2><ul>{png_links}</ul><h2>Summary statistics</h2>{table}")

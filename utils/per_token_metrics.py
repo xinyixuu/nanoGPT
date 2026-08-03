@@ -10,13 +10,14 @@ import torch
 import torch.nn.functional as F
 
 from utils.per_token_html import write_per_token_pages
+from utils.min_angle_graph_export import compute_min_angle_graph
 
 
 class PerTokenMetrics:
     """Accumulate training-token exposure and export evaluation snapshots."""
 
     DETAIL_FIELDS = (
-        "iteration", "dataset", "token_id", "token_text_escaped", "vector_magnitude", "train_loss", "train_eval_count",
+        "iteration", "dataset", "token_id", "token_text_escaped", "vector_magnitude", "min_pairwise_angle_deg", "train_loss", "train_eval_count",
         "val_loss", "val_eval_count", "training_seen_count",
     )
 
@@ -29,6 +30,7 @@ class PerTokenMetrics:
         }
         self.pending = {}
         self.vector_magnitudes = {}
+        self.min_pairwise_angles = {}
         os.makedirs(output_dir, exist_ok=True)
         self.detail_path = os.path.join(output_dir, "per_token_metrics.csv")
         self.summary_path = os.path.join(output_dir, "per_token_summary.csv")
@@ -44,11 +46,13 @@ class PerTokenMetrics:
         if not raw_rows or tuple(raw_rows[0]) == self.DETAIL_FIELDS:
             return
 
-        token_text_fields = tuple(field for field in self.DETAIL_FIELDS
+        current_without_angle = tuple(field for field in self.DETAIL_FIELDS
+                                      if field != "min_pairwise_angle_deg")
+        token_text_fields = tuple(field for field in current_without_angle
                                   if field != "vector_magnitude")
         legacy_fields = tuple(field for field in token_text_fields
                               if field != "token_text_escaped")
-        if tuple(raw_rows[0]) not in (legacy_fields, token_text_fields):
+        if tuple(raw_rows[0]) not in (legacy_fields, token_text_fields, current_without_angle):
             raise ValueError(
                 f"Unsupported per-token metrics CSV schema in {self.detail_path}: "
                 f"{raw_rows[0]}"
@@ -60,6 +64,8 @@ class PerTokenMetrics:
             # beneath the legacy header. Recover both row shapes.
             if len(values) >= len(self.DETAIL_FIELDS):
                 fields = self.DETAIL_FIELDS
+            elif len(values) >= len(current_without_angle):
+                fields = current_without_angle
             elif len(values) >= len(token_text_fields):
                 fields = token_text_fields
             else:
@@ -72,6 +78,7 @@ class PerTokenMetrics:
                 or self.token_texts.get(dataset, {}).get(token_id, "")
             )
             row.setdefault("vector_magnitude", "nan")
+            row.setdefault("min_pairwise_angle_deg", "nan")
             migrated.append(row)
 
         temporary_path = self.detail_path + ".tmp"
@@ -94,6 +101,14 @@ class PerTokenMetrics:
         self.vector_magnitudes[dataset] = (
             weight.detach().float().norm(dim=-1).cpu().numpy()
         )
+
+    def set_token_geometry(self, dataset, weight, block_size=2048, compute_device="auto"):
+        """Capture vector lengths and each token's closest non-self angle."""
+        graph = compute_min_angle_graph(
+            weight, block_size=block_size, compute_device=compute_device
+        )
+        self.vector_magnitudes[dataset] = graph["norms"].numpy()
+        self.min_pairwise_angles[dataset] = graph["min_angles"].numpy()
 
     def add_evaluation_batch(self, dataset, split, logits, targets):
         """Aggregate ordinary next-token cross entropy, independent of training loss variants."""
@@ -151,6 +166,9 @@ class PerTokenMetrics:
                     "vector_magnitude": float(self.vector_magnitudes.get(
                         dataset, np.full(vocab_size, np.nan)
                     )[token_id]),
+                    "min_pairwise_angle_deg": float(self.min_pairwise_angles.get(
+                        dataset, np.full(vocab_size, np.nan)
+                    )[token_id]),
                     "train_loss": float(split_data["train"][token_id]),
                     "train_eval_count": int(split_data["train_count"][token_id]),
                     "val_loss": float(split_data["val"][token_id]),
@@ -161,6 +179,9 @@ class PerTokenMetrics:
                 ("train_loss", split_data["train"]), ("val_loss", split_data["val"]),
                 ("training_seen_count", self.seen[dataset]),
                 ("vector_magnitude", self.vector_magnitudes.get(
+                    dataset, np.full(vocab_size, np.nan)
+                )),
+                ("min_pairwise_angle_deg", self.min_pairwise_angles.get(
                     dataset, np.full(vocab_size, np.nan)
                 )),
             ):
@@ -195,6 +216,7 @@ class PerTokenMetrics:
                     "token_id": int(row["token_id"]),
                     "token_text_escaped": row.get("token_text_escaped", ""),
                     "vector_magnitude": float(row.get("vector_magnitude", "nan")),
+                    "min_pairwise_angle_deg": float(row.get("min_pairwise_angle_deg", "nan")),
                     "train_loss": float(row["train_loss"]),
                     "train_eval_count": int(row["train_eval_count"]),
                     "val_loss": float(row["val_loss"]),

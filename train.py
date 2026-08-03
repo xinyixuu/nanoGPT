@@ -1555,22 +1555,30 @@ class Trainer:
         if self.per_token_metrics is not None:
             if self.args.training_mode == 'multicontext':
                 for i, dataset in enumerate(self.args.multicontext_datasets):
-                    self.per_token_metrics.set_vector_magnitudes(
-                        dataset, self.raw_model.transformer[f'lm_head_{i}'].weight
+                    self.per_token_metrics.set_token_geometry(
+                        dataset, self.raw_model.transformer[f'lm_head_{i}'].weight,
+                        self.args.export_min_angle_graph_block_size,
+                        self.args.export_min_angle_graph_device,
                     )
             elif self.args.dataset_list and self.args.multidataset_wte:
                 for i, dataset in enumerate(self.args.dataset_list):
-                    self.per_token_metrics.set_vector_magnitudes(
-                        dataset, self.raw_model.transformer[f'lm_head_{i}'].weight
+                    self.per_token_metrics.set_token_geometry(
+                        dataset, self.raw_model.transformer[f'lm_head_{i}'].weight,
+                        self.args.export_min_angle_graph_block_size,
+                        self.args.export_min_angle_graph_device,
                     )
             elif self.args.dataset_list:
                 for dataset in self.args.dataset_list:
-                    self.per_token_metrics.set_vector_magnitudes(
-                        dataset, self.raw_model.lm_head.weight
+                    self.per_token_metrics.set_token_geometry(
+                        dataset, self.raw_model.lm_head.weight,
+                        self.args.export_min_angle_graph_block_size,
+                        self.args.export_min_angle_graph_device,
                     )
             else:
-                self.per_token_metrics.set_vector_magnitudes(
-                    self.args.dataset, self.raw_model.lm_head.weight
+                self.per_token_metrics.set_token_geometry(
+                    self.args.dataset, self.raw_model.lm_head.weight,
+                    self.args.export_min_angle_graph_block_size,
+                    self.args.export_min_angle_graph_device,
                 )
             self.per_token_metrics.export(self.iter_num)
         self.model.train()

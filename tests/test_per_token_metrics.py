@@ -11,7 +11,7 @@ def test_per_token_metrics_exports_counts_losses_summaries_and_plot(tmp_path):
         tmp_path, {"tiny": 3}, {"tiny": {0: "\\n", 1: "a", 2: "\\t"}}
     )
     tracker.count_training_batch("tiny", torch.tensor([[0, 1, 1, 2]]))
-    tracker.set_vector_magnitudes(
+    tracker.set_token_geometry(
         "tiny", torch.tensor([[3.0, 4.0], [0.0, 2.0], [1.0, 0.0]])
     )
     tracker.begin_evaluation()
@@ -33,11 +33,13 @@ def test_per_token_metrics_exports_counts_losses_summaries_and_plot(tmp_path):
     assert math.isclose(float(rows[0]["val_loss"]), 0.0949229, rel_tol=1e-5)
     assert int(rows[1]["val_eval_count"]) == 2
     assert [float(row["vector_magnitude"]) for row in rows[:3]] == [5.0, 2.0, 1.0]
+    assert all(math.isfinite(float(row["min_pairwise_angle_deg"])) for row in rows[:3])
 
     with open(tracker.summary_path, newline="", encoding="utf-8") as handle:
         summaries = list(csv.DictReader(handle))
     assert {row["metric"] for row in summaries} == {
-        "train_loss", "val_loss", "training_seen_count", "vector_magnitude"
+        "train_loss", "val_loss", "training_seen_count", "vector_magnitude",
+        "min_pairwise_angle_deg",
     }
     assert "skew" in summaries[0] and "excess_kurtosis" in summaries[0]
     html = tracker.plot_path.read_text(encoding="utf-8")
@@ -47,9 +49,11 @@ def test_per_token_metrics_exports_counts_losses_summaries_and_plot(tmp_path):
         "per_token_training_loss.html",
         "per_token_training_occurrences.html",
         "per_token_vector_magnitude.html",
+        "per_token_min_pairwise_angle.html",
         "per_token_loss_by_iteration.html",
         "per_token_loss_by_appearances.html",
         "per_token_vector_magnitude_by_iteration.html",
+        "per_token_min_pairwise_angle_by_iteration.html",
     }
     for filename in graph_files:
         assert filename in html
@@ -57,6 +61,7 @@ def test_per_token_metrics_exports_counts_losses_summaries_and_plot(tmp_path):
         assert "Plotly.newPlot" in graph_html
         assert "per_token_metrics.html" in graph_html
     assert "right logarithmic" in (tmp_path / "per_token_loss_by_iteration.html").read_text(encoding="utf-8")
+    assert len(list(tmp_path.glob("per_token_static_tiny_by_*.png"))) == 5
 
 
 def test_per_token_metrics_migrates_legacy_detail_csv(tmp_path):
@@ -76,6 +81,7 @@ def test_per_token_metrics_migrates_legacy_detail_csv(tmp_path):
     assert rows[0]["train_loss"] == "1.5"
     assert rows[0]["training_seen_count"] == "4"
     assert rows[0]["vector_magnitude"] == "nan"
+    assert rows[0]["min_pairwise_angle_deg"] == "nan"
     assert rows[1]["token_text_escaped"] == "\\n"
     assert rows[1]["train_loss"] == "1.25"
     assert rows[1]["training_seen_count"] == "8"

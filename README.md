@@ -312,7 +312,8 @@ kept out of TensorBoard and contains:
 
 * `per_token_metrics.csv`: one row per vocabulary token and evaluation, with
   its escaped decoded text (for example, `\\n`), sampled train/validation
-  cross-entropy, output-token vector L2 magnitude, evaluation sample counts,
+  cross-entropy, output-token vector L2 magnitude, minimum non-self pairwise
+  token-vector angle in degrees, evaluation sample counts,
   and the cumulative number of times that target token was used by training;
 * `per_token_summary.csv`: mean, median, standard deviation, skew, excess
   kurtosis, percentiles, range, coefficient of variation, and vocabulary
@@ -332,7 +333,11 @@ kept out of TensorBoard and contains:
   neither axis can use log scale. Each graph displays an explicit diagnostic
   instead of silently showing a blank plot if Plotly fails to load or render.
   The viewer also includes a vocabulary-wide token-vector magnitude graph and
-  a selected-token vector-magnitude-versus-iteration history graph.
+  a selected-token vector-magnitude-versus-iteration history graph, plus
+  equivalent minimum-pairwise-angle overview and history graphs. Five static
+  PNG dashboards stack all metrics vertically with a shared token order, sorted
+  high-to-low by frequency, validation loss, training loss, vector magnitude,
+  and minimum pairwise angle respectively.
 
 Per-token loss is always ordinary next-token cross-entropy, making reports
 comparable even when a custom aggregate training loss is selected. Only tokens
