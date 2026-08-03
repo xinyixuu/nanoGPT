@@ -99,7 +99,6 @@ import torch.onnx
 import torch.nn.functional as F
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.tensorboard import SummaryWriter
 
 from variations.model_variations import model_variation_dictionary
 
@@ -500,6 +499,11 @@ class Trainer:
 
         # Tensorboard
         if self.args.tensorboard_log:
+            # Import lazily so --no-tensorboard_log works even when an optional
+            # TensorBoard/TensorFlow installation is binary-incompatible with
+            # the active NumPy version.
+            from torch.utils.tensorboard import SummaryWriter
+
             # 1) Give the run a safe default name when the user did not supply one
             if self.args.tensorboard_run_name is None:
                 self.args.tensorboard_run_name = f"{timestamp_prefix}"

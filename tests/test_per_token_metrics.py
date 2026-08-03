@@ -4,6 +4,14 @@ import math
 import torch
 
 from utils.per_token_metrics import PerTokenMetrics
+from train_args import parse_args
+
+
+def test_tensorboard_is_opt_in_and_independent(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["train.py", "--eval_iterval", "50"])
+    args, *_ = parse_args()
+    assert args.tensorboard_log is False
+    assert args.eval_interval == 50
 
 
 def test_per_token_metrics_exports_counts_losses_summaries_and_plot(tmp_path):

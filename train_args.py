@@ -85,7 +85,9 @@ def parse_args():
 
     # I/O args
     training_group.add_argument('--out_dir', default='out', type=str)
-    training_group.add_argument('--eval_interval', default=250, type=int)
+    training_group.add_argument('--eval_interval', '--eval_iterval', dest='eval_interval',
+                                default=250, type=int,
+                                help='Iterations between evaluations (--eval_iterval is a compatibility alias).')
     training_group.add_argument('--log_interval', default=10, type=int)
     training_group.add_argument('--eval_iters', default=200, type=int)
     training_group.add_argument('--eval_only', default=False, action=argparse.BooleanOptionalAction)
@@ -1522,7 +1524,8 @@ def parse_args():
     logging_group.add_argument('--zeus_approx_instant_energy', default=True, action=argparse.BooleanOptionalAction, help='Use Zeus instant-power fallback for short measurement windows')
 
     # Tensorboard args
-    logging_group.add_argument('--tensorboard_log', default=True, action=argparse.BooleanOptionalAction)
+    logging_group.add_argument('--tensorboard_log', default=False, action=argparse.BooleanOptionalAction,
+                               help='Enable optional TensorBoard logging (disabled by default). TensorBoard/TensorFlow packages are imported only when this flag is supplied.')
     logging_group.add_argument('--tensorboard_log_dir', type=str, default='logs')
     logging_group.add_argument('--tensorboard_run_name', type=str, default=None)
     logging_group.add_argument('--tensorboard_graph', default=True, action=argparse.BooleanOptionalAction)

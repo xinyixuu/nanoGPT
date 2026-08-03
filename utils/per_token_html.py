@@ -5,9 +5,6 @@ import json
 import math
 import os
 
-from utils.per_token_static import write_static_dashboards
-
-
 PLOTLY = "<script src='https://cdn.plot.ly/plotly-2.35.2.min.js'></script>"
 
 
@@ -90,6 +87,10 @@ ds.onchange=fill;tokens.onchange=draw;left.onchange=draw;{'right.onchange=draw;'
 
 def write_per_token_pages(output_dir, rows, summaries, iteration):
     """Write an index plus isolated pages with only the data each graph needs."""
+    # Import the static renderer only when the explicitly enabled reporter
+    # reaches an export step, keeping report-only code off the startup path.
+    from utils.per_token_static import write_static_dashboards
+
     latest = _latest(rows)
     pages = [
         ("per_token_validation_loss.html", "Validation loss", "val_loss", True, True),

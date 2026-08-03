@@ -310,6 +310,10 @@ Pass `--log_per_token_metrics` to produce a report after every validation in
 `<out_dir>/per_token_metrics` (or set `--per_token_metrics_dir`). The report is
 kept out of TensorBoard and contains:
 
+TensorBoard remains independently controlled and is disabled by default. Pass
+`--tensorboard_log` to enable it; its optional TensorBoard/TensorFlow packages
+are imported only in that case. Per-token metrics are never sent to it.
+
 * `per_token_metrics.csv`: one row per vocabulary token and evaluation, with
   its escaped decoded text (for example, `\\n`), sampled train/validation
   cross-entropy, output-token vector L2 magnitude, minimum non-self pairwise
