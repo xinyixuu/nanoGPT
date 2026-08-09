@@ -1,0 +1,16 @@
+# 3D digit-token trajectory viewer
+
+This viewer follows the single-file Three.js report style in this directory,
+including OrbitControls, canvas labels, a dark explanatory panel, and keyboard
+controls. Unlike a dimensionality-reduction visualization, every plotted point
+is the model's actual three-component token embedding.
+
+Run `demos/digits_3d_trajectory_demo.sh` from the repository root to generate
+`token_trajectories.json`. Then serve the repository with
+`python3 -m http.server 8000` and visit
+`http://localhost:8000/report/threejs/digits-3d/index.html`.
+
+Orange points are the trained digit tokens. Blue points are the `a`–`d` tokens
+that exist in the vocabulary and model parameters but never occur in either
+dataset split. Use the slider, arrow keys, or Space playback to compare their
+trajectories over checkpoint time.
