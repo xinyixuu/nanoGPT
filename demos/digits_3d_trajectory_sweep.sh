@@ -33,32 +33,11 @@ for embedding_dim in ${EMBEDDING_DIMS}; do
         OUT_DIR="out/digits_3d_sweep/${name}" \
         TRAJECTORY_FILE="${RUNS_DIR}/${name}.json" \
           bash demos/digits_3d_trajectory_demo.sh
+        python3 analysis/update_3d_sweep_manifest.py --runs-dir "${RUNS_DIR}"
       done
     done
   done
 done
-
-python3 - <<'PY'
-import json
-from pathlib import Path
-
-runs_dir = Path("report/threejs/digits-3d/runs")
-entries = []
-for path in sorted(runs_dir.glob("dim-*.json")):
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    projection = payload.get("projection", {})
-    entries.append({
-        "name": path.stem,
-        "file": f"runs/{path.name}",
-        "embedding_dim": projection.get("input_dimensions"),
-        "projection": projection.get("method"),
-        "trained_tokens": len(payload.get("trained_tokens", [])),
-        "held_out_tokens": len(payload.get("unseen_tokens", [])),
-        "fixed_norm": payload.get("fixed_norm"),
-    })
-(runs_dir / "manifest.json").write_text(json.dumps({"runs": entries}, indent=2), encoding="utf-8")
-print(f"Wrote selector manifest for {len(entries)} runs")
-PY
 
 cat <<EOF
 Sweep complete. Serve the repository with:
