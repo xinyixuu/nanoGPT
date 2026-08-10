@@ -10,11 +10,15 @@ Run `demos/digits_3d_trajectory_demo.sh` from the repository root to generate
 `python3 -m http.server 8000` and visit
 `http://localhost:8000/report/threejs/digits-3d/index.html`.
 
-Orange points are the trained digit tokens. Blue points are the `a`–`d` tokens
-that exist in the vocabulary and model parameters but never occur in either
-dataset split. Use the slider, arrow keys, or Space playback to compare their
-trajectories over checkpoint time.
+Orange points are trained digit-like tokens. Blue points are configurable
+letters that exist in the vocabulary and model parameters but never occur in
+either dataset split. Use the slider, arrow keys, or Space playback to compare
+their trajectories over checkpoint time.
 
 By default all points remain on the radius-`sqrt(3)` sphere, so the viewer
 isolates directional motion rather than changes in vector magnitude. Run the
 demo with `WTE_FIXED_NORM=false` to produce the earlier unconstrained view.
+
+The viewer also accepts `?data=<relative-json-path>`. The sweep demo uses this
+to keep every vocabulary-size and fixed-norm variation under `runs/` rather
+than overwriting the default trajectory.

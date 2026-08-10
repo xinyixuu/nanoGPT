@@ -19,7 +19,7 @@
   <div class="copy">The model's embedding width is natively 3—no PCA or projection is applied. Trails show all positions up to the selected checkpoint.</div>
   <div class="row"><strong>Training time</strong><span id="step">loading…</span></div>
   <input id="time" type="range" min="0" max="0" value="0" disabled aria-label="Training checkpoint">
-  <div class="legend"><span class="key" style="--c:#f59e0b">seen 0–9</span><span class="key" style="--c:#38bdf8">unseen a–d</span></div>
+  <div class="legend"><span class="key" style="--c:#f59e0b">trained symbols</span><span class="key" style="--c:#38bdf8">held-out letters</span></div>
   <div id="error"></div>
 </section>
 <div class="hint">Drag to orbit · scroll to zoom · Space to play/pause · ←/→ to step</div>
@@ -38,7 +38,7 @@ function build(){if(data.fixed_norm){const shell=new THREE.Mesh(new THREE.Sphere
 function renderFrame(){frame=Number(slider.value);stepLabel.textContent=`iteration ${data.frames[frame].iteration} · ${frame+1}/${data.frames.length}`;objects.forEach(o=>{const p=data.frames[frame].positions[o.index];o.dot.position.fromArray(p);o.text.position.fromArray(p).add(new THREE.Vector3(0,.1,0));const points=data.frames.slice(0,frame+1).map(f=>new THREE.Vector3().fromArray(f.positions[o.index]));o.trail.geometry.dispose();o.trail.geometry=new THREE.BufferGeometry().setFromPoints(points)})}
 slider.addEventListener('input',renderFrame);document.addEventListener('keydown',e=>{if(e.code==='Space'){e.preventDefault();playing=!playing}if(e.code==='ArrowRight'||e.code==='ArrowLeft'){playing=false;slider.value=Math.max(0,Math.min(+slider.max,frame+(e.code==='ArrowRight'?1:-1)));renderFrame()}});
 function tick(now){const w=canvas.clientWidth,h=canvas.clientHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();if(playing&&now-lastAdvance>180){slider.value=(frame+1)%data.frames.length;renderFrame();lastAdvance=now}controls.update();renderer.render(scene,camera);requestAnimationFrame(tick)}requestAnimationFrame(tick);
-fetch('./token_trajectories.json').then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json()}).then(value=>{data=value;if(!data.frames.length)throw new Error('trajectory has no frames');build()}).catch(error=>{document.querySelector('#error').textContent=`Could not load token_trajectories.json (${error.message}). Run the demo and serve the repository over HTTP.`});
+const dataFile=new URLSearchParams(location.search).get('data')||'token_trajectories.json';fetch(dataFile).then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json()}).then(value=>{data=value;if(!data.frames.length)throw new Error('trajectory has no frames');build()}).catch(error=>{document.querySelector('#error').textContent=`Could not load ${dataFile} (${error.message}). Run the demo and serve the repository over HTTP.`});
 </script>
 </body>
 </html>

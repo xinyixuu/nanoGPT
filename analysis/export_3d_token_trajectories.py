@@ -51,8 +51,8 @@ def export(checkpoint_dir: Path, meta_path: Path, output: Path) -> None:
 
     payload = {
         "tokens": tokens,
-        "trained_tokens": list("0123456789"),
-        "unseen_tokens": list("abcd"),
+        "trained_tokens": meta.get("trained_tokens", list("0123456789")),
+        "unseen_tokens": meta.get("unseen_tokens", list("abcd")),
         "fixed_norm": fixed_norm,
         "frames": frames,
     }
