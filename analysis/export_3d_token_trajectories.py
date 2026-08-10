@@ -28,8 +28,14 @@ def export(checkpoint_dir: Path, meta_path: Path, output: Path) -> None:
 
     frames = []
     seen_iterations = set()
+    fixed_norm = None
     for path in candidates:
         checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+        model_args = checkpoint.get("model_args", {})
+        if fixed_norm is None and model_args.get("wte_fixed_norm", False):
+            fixed_norm = model_args.get("wte_fixed_norm_value")
+            if fixed_norm is None:
+                fixed_norm = (model_args.get("n_embd_wte") or model_args["n_embd"]) ** 0.5
         step = int(checkpoint.get("iter_num", iteration(path)))
         if step in seen_iterations:
             continue
@@ -47,6 +53,7 @@ def export(checkpoint_dir: Path, meta_path: Path, output: Path) -> None:
         "tokens": tokens,
         "trained_tokens": list("0123456789"),
         "unseen_tokens": list("abcd"),
+        "fixed_norm": fixed_norm,
         "frames": frames,
     }
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -14,3 +14,7 @@ Orange points are the trained digit tokens. Blue points are the `a`–`d` tokens
 that exist in the vocabulary and model parameters but never occur in either
 dataset split. Use the slider, arrow keys, or Space playback to compare their
 trajectories over checkpoint time.
+
+By default all points remain on the radius-`sqrt(3)` sphere, so the viewer
+isolates directional motion rather than changes in vector magnitude. Run the
+demo with `WTE_FIXED_NORM=false` to produce the earlier unconstrained view.

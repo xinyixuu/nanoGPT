@@ -657,6 +657,18 @@ def parse_args():
     model_group.add_argument('--n_embd_wte', default=None, type=int, help="If different from n_embd, an adapter table will be automatically created")
     model_group.add_argument('--n_embd_wte_scale_tying', default=True, action=argparse.BooleanOptionalAction, help="Enable weight tying for scale up and scale down matrices, only has effects if n_embd_wte is not 'None'.")
     model_group.add_argument('--wte_weight_tying', default=True, action=argparse.BooleanOptionalAction, help="Enable weight tying for non-factorized wte")
+    model_group.add_argument(
+        '--wte_fixed_norm',
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help='Initialize every token embedding at a fixed L2 norm and reproject it after every optimizer update.',
+    )
+    model_group.add_argument(
+        '--wte_fixed_norm_value',
+        default=None,
+        type=float,
+        help='Fixed token embedding L2 norm (defaults to sqrt(n_embd_wte or n_embd)).',
+    )
     model_group.add_argument('--dropout', default=0.0, type=float)
     model_group.add_argument('--use_pre_ln', default=True,   action=argparse.BooleanOptionalAction, help="apply before any attn or mlp")
     model_group.add_argument('--use_peri_ln', default=False, action=argparse.BooleanOptionalAction, help="apply directly after each attn and mlp")

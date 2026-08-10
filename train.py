@@ -2596,6 +2596,9 @@ class Trainer:
 
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
+                if self.args.wte_fixed_norm:
+                    base_model = getattr(self.raw_model, "_orig_mod", self.raw_model)
+                    base_model.reproject_token_embeddings()
                 if self.scheduler:
                     if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                         self.scheduler.step(losses["val"])

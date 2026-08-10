@@ -9,6 +9,17 @@ SAVE_INTERVAL="${SAVE_INTERVAL:-100}"
 OUT_DIR="${OUT_DIR:-out/digits_3d}"
 DATA_DIR="data/digits_3d"
 VIEW_DIR="report/threejs/digits-3d"
+WTE_FIXED_NORM="${WTE_FIXED_NORM:-true}"
+WTE_FIXED_NORM_VALUE="${WTE_FIXED_NORM_VALUE:-}"
+
+case "${WTE_FIXED_NORM}" in
+  true|1|yes) WTE_NORM_ARGS=(--wte_fixed_norm) ;;
+  false|0|no) WTE_NORM_ARGS=(--no-wte_fixed_norm) ;;
+  *) echo "WTE_FIXED_NORM must be true or false" >&2; exit 2 ;;
+esac
+if [ -n "${WTE_FIXED_NORM_VALUE}" ]; then
+  WTE_NORM_ARGS+=(--wte_fixed_norm_value "${WTE_FIXED_NORM_VALUE}")
+fi
 
 python3 "${DATA_DIR}/prepare.py"
 
@@ -22,6 +33,7 @@ python3 train.py \
   --n_layer 1 \
   --n_head 1 \
   --n_embd 3 \
+  "${WTE_NORM_ARGS[@]}" \
   --dropout 0.0 \
   --max_iters "${MAX_ITERS}" \
   --eval_interval "${SAVE_INTERVAL}" \
