@@ -4,7 +4,7 @@ set -euo pipefail
 
 DEVICE="${DEVICE:-cpu}"
 DTYPE="${DTYPE:-float32}"
-MAX_ITERS="${MAX_ITERS:-2000}"
+MAX_ITERS="${MAX_ITERS:-10000}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-100}"
 OUT_DIR="${OUT_DIR:-out/digits_3d}"
 DATA_DIR="data/digits_3d"

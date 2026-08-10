@@ -16,7 +16,8 @@ To compare unconstrained, square-root-dimension-radius, and unit-radius
 initialization over several vocabulary sizes and widths `3`, `8`, `16`, and
 `64`, run `demos/digits_3d_trajectory_sweep.sh`. Its `EMBEDDING_DIMS`,
 `DIGIT_COUNTS`, and `LETTER_COUNTS` variables accept whitespace-separated
-values.
+values. Sweep runs train for 10,000 iterations by default; override
+`SWEEP_MAX_ITERS` for shorter smoke tests or longer studies.
 
 The data is generated locally and is released under the repository's license;
 there is no external source or additional dataset license.

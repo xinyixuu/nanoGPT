@@ -24,3 +24,7 @@ demo with `WTE_FIXED_NORM=false` to produce the unconstrained view.
 The viewer also accepts `?data=<relative-json-path>`. The sweep demo uses this
 to keep every vocabulary-size and fixed-norm variation under `runs/` rather
 than overwriting the default trajectory.
+
+The default sweep includes native 3D plus PCA-projected 8D, 16D, and 64D runs,
+with 10,000 training iterations per configuration. Set `EMBEDDING_DIMS` or
+`SWEEP_MAX_ITERS` to customize those defaults.
