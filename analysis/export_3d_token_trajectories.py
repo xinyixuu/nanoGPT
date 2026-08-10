@@ -69,9 +69,12 @@ def export(checkpoint_dir: Path, meta_path: Path, output: Path) -> None:
     frame_metrics = []
     seen_iterations = set()
     fixed_norm = None
+    wte_weight_tying = None
     for path in candidates:
         checkpoint = torch.load(path, map_location="cpu", weights_only=False)
         model_args = checkpoint.get("model_args", {})
+        if wte_weight_tying is None:
+            wte_weight_tying = model_args.get("wte_weight_tying", True)
         if fixed_norm is None and model_args.get("wte_fixed_norm", False):
             fixed_norm = model_args.get("wte_fixed_norm_value")
             if fixed_norm is None:
@@ -108,6 +111,7 @@ def export(checkpoint_dir: Path, meta_path: Path, output: Path) -> None:
         "trained_tokens": meta.get("trained_tokens", list("0123456789")),
         "unseen_tokens": meta.get("unseen_tokens", list("abcd")),
         "fixed_norm": fixed_norm,
+        "wte_weight_tying": wte_weight_tying,
         "projection": projection,
         "frames": frames,
     }

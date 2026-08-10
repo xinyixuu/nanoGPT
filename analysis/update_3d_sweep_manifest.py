@@ -19,6 +19,7 @@ def build_manifest(runs_dir: Path) -> dict:
             "trained_tokens": len(payload.get("trained_tokens", [])),
             "held_out_tokens": len(payload.get("unseen_tokens", [])),
             "fixed_norm": payload.get("fixed_norm"),
+            "wte_weight_tying": payload.get("wte_weight_tying", True),
         })
     return {"runs": entries}
 

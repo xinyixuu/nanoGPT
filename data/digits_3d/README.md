@@ -13,17 +13,18 @@ optimizer update project each vector to radius `sqrt(EMBEDDING_DIM)`. Set
 set `WTE_FIXED_NORM_VALUE` to choose another radius.
 
 To compare unconstrained, square-root-dimension-radius, and unit-radius
-initialization over several vocabulary sizes and widths `3`, `8`, `16`, and
-`64`, run `demos/digits_3d_trajectory_sweep.sh`. Its `EMBEDDING_DIMS`,
-`DIGIT_COUNTS`, and `LETTER_COUNTS` variables accept whitespace-separated
-values. Sweep runs train for 10,000 iterations by default; override
-`SWEEP_MAX_ITERS` for shorter smoke tests or longer studies.
+initialization with tied and untied WTE/LM-head weights, run
+`demos/digits_3d_trajectory_sweep.sh`. The default is 3 dimensions, 10 trained
+symbols, and 10 held-out letters. Its `EMBEDDING_DIMS`, `DIGIT_COUNTS`,
+`LETTER_COUNTS`, and `WTE_TYING_MODES` variables accept whitespace-separated
+values, so PCA widths such as `8 16 64` remain selectable. Sweep runs train for
+10,000 iterations by default; override `SWEEP_MAX_ITERS` as needed.
 
 The data is generated locally and is released under the repository's license;
 there is no external source or additional dataset license.
 
 ```bash
-python3 data/digits_3d/prepare.py --num-digits 10 --num-letters 4
+python3 data/digits_3d/prepare.py --num-digits 10 --num-letters 10
 ```
 
 The command creates the standard nanoGPT `train.bin`, `val.bin`, and `meta.pkl`

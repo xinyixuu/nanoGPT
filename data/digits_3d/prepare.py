@@ -17,7 +17,7 @@ def build_dataset(
     train_repeats: int,
     val_repeats: int,
     num_digits: int = 10,
-    num_letters: int = 4,
+    num_letters: int = 10,
 ) -> None:
     if train_repeats < 2 or val_repeats < 2:
         raise ValueError("repeat counts must be at least 2")
@@ -62,7 +62,7 @@ def main() -> None:
     parser.add_argument("--train-repeats", type=int, default=2000)
     parser.add_argument("--val-repeats", type=int, default=200)
     parser.add_argument("--num-digits", type=int, default=10, help="Number of trained symbols (0-9, then punctuation).")
-    parser.add_argument("--num-letters", type=int, default=4, help="Number of held-out alphabetic vocabulary symbols.")
+    parser.add_argument("--num-letters", type=int, default=10, help="Number of held-out alphabetic vocabulary symbols.")
     args = parser.parse_args()
     build_dataset(args.out_dir, args.train_repeats, args.val_repeats, args.num_digits, args.num_letters)
     print(f"Wrote {args.num_digits} trained and {args.num_letters} held-out symbols to {args.out_dir}")

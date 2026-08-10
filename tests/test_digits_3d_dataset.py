@@ -33,3 +33,11 @@ def test_letters_are_in_vocab_but_absent_from_splits(tmp_path):
 def test_symbol_counts_are_validated(tmp_path, num_digits, num_letters, message):
     with pytest.raises(ValueError, match=message):
         build_dataset(tmp_path, 2, 2, num_digits, num_letters)
+
+
+def test_default_vocabulary_has_ten_trained_and_ten_held_out(tmp_path):
+    build_dataset(tmp_path, 2, 2)
+    with (tmp_path / "meta.pkl").open("rb") as handle:
+        meta = pickle.load(handle)
+    assert len(meta["trained_tokens"]) == 10
+    assert len(meta["unseen_tokens"]) == 10

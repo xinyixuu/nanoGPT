@@ -25,9 +25,11 @@ The viewer also accepts `?data=<relative-json-path>`. The sweep demo uses this
 to keep every vocabulary-size and fixed-norm variation under `runs/` rather
 than overwriting the default trajectory.
 
-The default sweep includes native 3D plus PCA-projected 8D, 16D, and 64D runs,
-with 10,000 training iterations per configuration. Set `EMBEDDING_DIMS` or
-`SWEEP_MAX_ITERS` to customize those defaults.
+The default sweep uses 3 dimensions, 10 trained symbols, 10 held-out letters,
+and both tied and untied WTE/LM-head runs, with 10,000 iterations per
+configuration. Set `EMBEDDING_DIMS` (for example, `3 8 16 64`),
+`DIGIT_COUNTS`, `LETTER_COUNTS`, `WTE_TYING_MODES`, or `SWEEP_MAX_ITERS` to
+customize it.
 
 After the first sweep run completes, open `sweep.html` to filter and select the
 generated JSON files without editing URLs. Each trajectory includes checkpoint
