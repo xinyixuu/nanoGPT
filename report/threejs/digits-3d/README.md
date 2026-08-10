@@ -28,3 +28,8 @@ than overwriting the default trajectory.
 The default sweep includes native 3D plus PCA-projected 8D, 16D, and 64D runs,
 with 10,000 training iterations per configuration. Set `EMBEDDING_DIMS` or
 `SWEEP_MAX_ITERS` to customize those defaults.
+
+After a sweep completes, open `sweep.html` to filter and select its generated
+JSON files without editing URLs. Each trajectory now includes checkpoint train
+and validation loss; the viewer plots both above the time slider and marks the
+currently selected checkpoint.

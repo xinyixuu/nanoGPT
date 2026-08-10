@@ -2104,6 +2104,7 @@ class Trainer:
                 'best_iter': self.best_iter,
                 'best_tokens': self.best_tokens,
                 'config': vars(self.args),
+                'metrics': getattr(self, 'latest_checkpoint_metrics', None),
                 }
         torch.save(checkpoint, os.path.join(self.args.out_dir, filename))
 
@@ -2156,6 +2157,10 @@ class Trainer:
 
     def run_validation_step(self, running_mfu, current_epoch, current_dataset, num_steps_with_worse_loss, live=None):
         losses = self.estimate_loss()
+        self.latest_checkpoint_metrics = {
+            'train_loss': self._to_scalar(losses.get('train', float('nan'))),
+            'val_loss': self._to_scalar(losses.get('val', float('nan'))),
+        }
 
         self.latest_top1_prob = losses.get('top1_prob', float('nan'))
         self.latest_top1_correct = losses.get('top1_correct', float('nan'))

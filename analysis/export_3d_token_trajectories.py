@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import pickle
 import re
 from pathlib import Path
@@ -46,6 +47,14 @@ def project_to_3d(frame_vectors: list[torch.Tensor]) -> tuple[list[torch.Tensor]
     }
 
 
+def finite_metric(value):
+    """Return a JSON-safe finite float or None for missing/legacy metrics."""
+    if value is None:
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
 def export(checkpoint_dir: Path, meta_path: Path, output: Path) -> None:
     with meta_path.open("rb") as handle:
         meta = pickle.load(handle)
@@ -57,6 +66,7 @@ def export(checkpoint_dir: Path, meta_path: Path, output: Path) -> None:
 
     frame_iterations = []
     frame_vectors = []
+    frame_metrics = []
     seen_iterations = set()
     fixed_norm = None
     for path in candidates:
@@ -80,12 +90,17 @@ def export(checkpoint_dir: Path, meta_path: Path, output: Path) -> None:
             raise ValueError(f"{path}: embedding dimension changed between checkpoints")
         frame_iterations.append(step)
         frame_vectors.append(vectors)
+        metrics = checkpoint.get("metrics") or {}
+        frame_metrics.append({
+            "train_loss": finite_metric(metrics.get("train_loss")),
+            "val_loss": finite_metric(metrics.get("val_loss")),
+        })
         seen_iterations.add(step)
 
     projected, projection = project_to_3d(frame_vectors)
     frames = [
-        {"iteration": step, "positions": vectors.tolist()}
-        for step, vectors in zip(frame_iterations, projected)
+        {"iteration": step, "positions": vectors.tolist(), "metrics": metrics}
+        for step, vectors, metrics in zip(frame_iterations, projected, frame_metrics)
     ]
 
     payload = {

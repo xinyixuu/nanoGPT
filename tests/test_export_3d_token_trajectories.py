@@ -7,6 +7,7 @@ torch = pytest.importorskip("torch")
 
 MODULE = runpy.run_path(Path(__file__).parents[1] / "analysis/export_3d_token_trajectories.py")
 project_to_3d = MODULE["project_to_3d"]
+finite_metric = MODULE["finite_metric"]
 
 
 def test_native_three_dimensions_are_not_projected():
@@ -35,3 +36,10 @@ def test_global_pca_projects_higher_dimensions(embedding_dim):
     repeated, _ = project_to_3d(frames)
     for actual, expected in zip(repeated, projected):
         assert torch.allclose(actual, expected)
+
+
+def test_checkpoint_metrics_are_json_safe():
+    assert finite_metric(torch.tensor(1.25)) == 1.25
+    assert finite_metric(None) is None
+    assert finite_metric(float("nan")) is None
+    assert finite_metric(float("inf")) is None
