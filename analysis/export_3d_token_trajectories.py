@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export the native 3D token embeddings from a sequence of checkpoints."""
+"""Export token trajectories, projecting higher-dimensional embeddings to 3D."""
 
 import argparse
 import json
@@ -17,6 +17,35 @@ def iteration(path: Path) -> int:
     return int(match.group(1)) if match else -1
 
 
+def project_to_3d(frame_vectors: list[torch.Tensor]) -> tuple[list[torch.Tensor], dict]:
+    """Use one global PCA basis so positions remain comparable across time."""
+    embedding_dim = frame_vectors[0].shape[1]
+    if embedding_dim == 3:
+        return frame_vectors, {"method": "native", "input_dimensions": 3}
+    if embedding_dim < 3:
+        raise ValueError(f"expected at least 3 embedding dimensions, got {embedding_dim}")
+
+    stacked = torch.cat(frame_vectors, dim=0).double()
+    mean = stacked.mean(dim=0, keepdim=True)
+    centered = stacked - mean
+    _, singular_values, vh = torch.linalg.svd(centered, full_matrices=False)
+    components = vh[:3].T
+    # SVD component signs are arbitrary. Fix them for reproducible JSON output.
+    for column in range(components.shape[1]):
+        pivot = components[:, column].abs().argmax()
+        if components[pivot, column] < 0:
+            components[:, column].neg_()
+    projected = [(vectors.double() - mean).matmul(components).float() for vectors in frame_vectors]
+    total_variance = singular_values.square().sum()
+    explained = singular_values[:3].square() / total_variance.clamp_min(torch.finfo(torch.float64).eps)
+    return projected, {
+        "method": "pca",
+        "input_dimensions": embedding_dim,
+        "explained_variance_ratio": explained.tolist(),
+        "fit": "all tokens across all checkpoint frames",
+    }
+
+
 def export(checkpoint_dir: Path, meta_path: Path, output: Path) -> None:
     with meta_path.open("rb") as handle:
         meta = pickle.load(handle)
@@ -26,7 +55,8 @@ def export(checkpoint_dir: Path, meta_path: Path, output: Path) -> None:
     if not candidates:
         raise FileNotFoundError(f"no .pt checkpoints found in {checkpoint_dir}")
 
-    frames = []
+    frame_iterations = []
+    frame_vectors = []
     seen_iterations = set()
     fixed_norm = None
     for path in candidates:
@@ -44,16 +74,26 @@ def export(checkpoint_dir: Path, meta_path: Path, output: Path) -> None:
         if key is None:
             raise KeyError(f"transformer.wte.weight not found in {path}")
         vectors = state[key].detach().float()
-        if vectors.shape != (len(tokens), 3):
-            raise ValueError(f"{path}: expected {(len(tokens), 3)}, got {tuple(vectors.shape)}")
-        frames.append({"iteration": step, "positions": vectors.tolist()})
+        if vectors.ndim != 2 or vectors.shape[0] != len(tokens):
+            raise ValueError(f"{path}: expected {len(tokens)} token vectors, got {tuple(vectors.shape)}")
+        if frame_vectors and vectors.shape[1] != frame_vectors[0].shape[1]:
+            raise ValueError(f"{path}: embedding dimension changed between checkpoints")
+        frame_iterations.append(step)
+        frame_vectors.append(vectors)
         seen_iterations.add(step)
+
+    projected, projection = project_to_3d(frame_vectors)
+    frames = [
+        {"iteration": step, "positions": vectors.tolist()}
+        for step, vectors in zip(frame_iterations, projected)
+    ]
 
     payload = {
         "tokens": tokens,
         "trained_tokens": meta.get("trained_tokens", list("0123456789")),
         "unseen_tokens": meta.get("unseen_tokens", list("abcd")),
         "fixed_norm": fixed_norm,
+        "projection": projection,
         "frames": frames,
     }
     output.parent.mkdir(parents=True, exist_ok=True)

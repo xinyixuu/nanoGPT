@@ -13,6 +13,7 @@ WTE_FIXED_NORM="${WTE_FIXED_NORM:-true}"
 WTE_FIXED_NORM_VALUE="${WTE_FIXED_NORM_VALUE:-}"
 NUM_DIGITS="${NUM_DIGITS:-10}"
 NUM_LETTERS="${NUM_LETTERS:-4}"
+EMBEDDING_DIM="${EMBEDDING_DIM:-3}"
 TRAJECTORY_FILE="${TRAJECTORY_FILE:-${VIEW_DIR}/token_trajectories.json}"
 
 case "${WTE_FIXED_NORM}" in
@@ -35,7 +36,7 @@ python3 train.py \
   --batch_size 64 \
   --n_layer 1 \
   --n_head 1 \
-  --n_embd 3 \
+  --n_embd "${EMBEDDING_DIM}" \
   "${WTE_NORM_ARGS[@]}" \
   --dropout 0.0 \
   --max_iters "${MAX_ITERS}" \
@@ -59,4 +60,5 @@ Done. Serve the repository (fetch does not work from file://), then open:
   python3 -m http.server 8000
   http://localhost:8000/${VIEW_DIR}/index.html?data=${TRAJECTORY_FILE#${VIEW_DIR}/}
 The ${NUM_DIGITS} digit-like symbols are trained; ${NUM_LETTERS} letters are vocabulary-only controls.
+Embedding dimension: ${EMBEDDING_DIM} (dimensions above 3 are globally PCA-projected for viewing).
 EOF

@@ -2,8 +2,9 @@
 
 This viewer follows the single-file Three.js report style in this directory,
 including OrbitControls, canvas labels, a dark explanatory panel, and keyboard
-controls. Unlike a dimensionality-reduction visualization, every plotted point
-is the model's actual three-component token embedding.
+controls. Width-3 runs show native coordinates. Higher-dimensional runs use a
+single PCA basis fitted across every token and checkpoint, rather than fitting
+each frame independently, so motion remains comparable over time.
 
 Run `demos/digits_3d_trajectory_demo.sh` from the repository root to generate
 `token_trajectories.json`. Then serve the repository with
@@ -15,9 +16,10 @@ letters that exist in the vocabulary and model parameters but never occur in
 either dataset split. Use the slider, arrow keys, or Space playback to compare
 their trajectories over checkpoint time.
 
-By default all points remain on the radius-`sqrt(3)` sphere, so the viewer
-isolates directional motion rather than changes in vector magnitude. Run the
-demo with `WTE_FIXED_NORM=false` to produce the earlier unconstrained view.
+By default embeddings remain on the radius-`sqrt(EMBEDDING_DIM)` sphere, so
+motion in model space is directional. A wireframe sphere is shown only for
+native 3D runs because PCA does not preserve individual vector norms. Run the
+demo with `WTE_FIXED_NORM=false` to produce the unconstrained view.
 
 The viewer also accepts `?data=<relative-json-path>`. The sweep demo uses this
 to keep every vocabulary-size and fixed-norm variation under `runs/` rather
