@@ -2601,7 +2601,7 @@ class Trainer:
 
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
-                if self.args.wte_fixed_norm:
+                if self.model_args.get("wte_fixed_norm", False):
                     base_model = getattr(self.raw_model, "_orig_mod", self.raw_model)
                     base_model.reproject_token_embeddings()
                 if self.scheduler:
