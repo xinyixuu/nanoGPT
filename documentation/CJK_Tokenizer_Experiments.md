@@ -125,6 +125,48 @@ losses alone; full metric histories require retraining.
 
 ## Outputs and interpretation
 
+For a detached run with a status file, use the launcher (it invokes `nohup`):
+
+```bash
+# Current machine: reuse prepared char-BPE datasets and retrain with new metrics.
+bash demos/run_cjk_nohup.sh charbpe train
+
+# Fresh machine: provide the three corpus paths and prepare + train byte fallback.
+JA_TEXT=/path/to/ja.txt KO_TEXT=/path/to/ko.txt ZH_CN_TEXT=/path/to/zh_cn.txt \
+bash demos/run_cjk_nohup.sh char_byte_fallback all
+```
+
+The default char-BPE log root is `logs/cjk_ipa_charbpe_target_metrics`.
+The byte-fallback launch uses `logs/cjk_ipa_char_byte_fallback_target_metrics`.
+Monitor a char-BPE run with:
+
+```bash
+tail -f logs/cjk_ipa_charbpe_target_metrics/nohup.log
+cat logs/cjk_ipa_charbpe_target_metrics/status
+cat logs/cjk_ipa_charbpe_target_metrics/pid
+```
+
+`status` is `RUNNING` while active, `0` when the whole selected pipeline succeeds,
+and `1` when it exits with an error. `exit_code` retains the original exit code;
+`started_at` and `finished_at` record UTC timestamps. A successful launcher exit
+only means the job was started: use the status file to check experiment completion.
+Each launch reserves its log root using `.nohup-run`; choose a new log/output root
+for another attempt. Normal termination signals are recorded as failure; SIGKILL
+or a machine shutdown cannot run the exit handler.
+
+The original `ja.txt`, `ko.txt` and `zh_cn.txt` are external inputs and are not in
+GitHub. Copy them separately to the other machine, for example from this machine:
+
+```bash
+scp /home/xinyixu/ja.txt /home/xinyixu/ko.txt /home/xinyixu/zh_cn.txt \
+  YOUR_USER@YOUR_HOST:/absolute/path/to/corpora/
+```
+
+Create the destination directory beforehand, then set the three input variables
+to those paths. Run `all` to regenerate IPA and tokenized datasets on that machine.
+Alternatively, transfer the prepared dataset tree and use `train` with its
+`CJK_DATA_ROOT`; training-only execution does not read the three original files.
+
 Each run writes `full_config.json`, `ckpt.pt`, `best_val_loss_and_iter.txt` and
 `per_token_metrics/`. The report directory includes detailed and summary CSVs,
 six added probability/rank overview/history HTML pages, and eight static PNG
